@@ -1,6 +1,6 @@
 {
   "name": "plaud-mcp-connector",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Full-text transcript search and audio upload on top of the official Plaud MCP. Bundles @plaud-ai/mcp, then adds the two things it cannot do. Independent third-party plugin — not affiliated with or supported by Plaud Inc.",
   "author": {
     "name": "Che Cheng"
