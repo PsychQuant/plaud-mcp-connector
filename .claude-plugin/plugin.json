@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "plaud-mcp-connector",
   "version": "0.3.0",
   "description": "Full-text transcript search and audio upload on top of the official Plaud MCP. Bundles @plaud-ai/mcp, then adds the two things it cannot do. Independent third-party plugin — not affiliated with or supported by Plaud Inc.",
@@ -6,7 +7,8 @@
     "name": "Che Cheng"
   },
   "license": "MIT",
-  "homepage": "https://github.com/PsychQuant/plaud-mcp-connector",
+  "homepage": "https://plaud-mcp-connector.vercel.app",
+  "repository": "https://github.com/PsychQuant/plaud-mcp-connector",
   "keywords": [
     "plaud",
     "mcp",
