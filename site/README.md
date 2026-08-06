@@ -30,6 +30,13 @@ Both deploy targets run the test suite and `scripts/site_check.py` first, and
 cannot reach the internet by accident. Production additionally requires
 `CONFIRM=1`, because publishing is outward-facing and awkward to take back.
 
+Both name `--target` outright. **An unspecified target is not a preview**: for a
+project with no connected Git repository Vercel resolves it to production and
+aliases the public hostname. The first run of `site-preview` published the site
+while reporting itself as a preview, and the test guarding it passed throughout —
+it asserted that `--prod` was absent, which says nothing about where a deploy
+lands. Absence of a flag is not a behaviour.
+
 `vercel deploy` by hand still works and skips every one of those checks. That is
 the hole the Makefile exists to close; use the targets.
 

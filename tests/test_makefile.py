@@ -74,11 +74,28 @@ class TestDeployIsGated(MakefileTestCase):
     def test_prod_runs_the_checker_before_vercel(self):
         self.order(self.dry("site-prod", "CONFIRM=1"), "site_check.py", "vercel deploy")
 
-    def test_prod_deploys_to_production(self):
-        self.assertIn("--prod", self.dry("site-prod", "CONFIRM=1"))
+    def test_prod_names_the_production_target_explicitly(self):
+        """`--prod` is only shorthand for this. Both targets name the environment
+        outright so neither depends on what an unspecified target resolves to."""
+        self.assertIn("--target=production", self.dry("site-prod", "CONFIRM=1"))
 
-    def test_preview_does_not_deploy_to_production(self):
-        self.assertNotIn("--prod", self.dry("site-preview"))
+    def test_preview_names_the_preview_target_explicitly(self):
+        """Absence of `--prod` does not mean preview, and this cost a real one.
+
+        The first version of this target ran a bare `vercel deploy` and this test
+        asserted only that `--prod` was absent. It passed. The deploy went to
+        production anyway — Vercel resolved the unspecified target to production
+        for a project with no connected Git repository — and aliased the public
+        hostname. The test verified the absence of a string; the property that
+        mattered was which environment the deploy lands in, which no absent flag
+        can express. Name the target.
+        """
+        out = self.dry("site-preview")
+        self.assertIn("--target=preview", out)
+        self.assertNotIn("--prod", out)
+
+    def test_prod_and_preview_do_not_share_a_target(self):
+        self.assertNotIn("--target=preview", self.dry("site-prod", "CONFIRM=1"))
 
     def test_domain_is_passed_through_to_the_checker(self):
         """Rule 3 is a property of the deploy target, not of any file, so it can

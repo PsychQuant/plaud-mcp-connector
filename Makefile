@@ -38,11 +38,15 @@ check: test site-check  ## Everything that must pass before a deploy
 # Prerequisite order is deliberate. The confirmation comes first so a refusal is
 # instant rather than arriving after a full test run, and the deploy command is
 # the last thing in the recipe so no gate can be skipped by reordering.
+# --target is named on both. An unspecified target is NOT preview: for a project
+# with no connected Git repository Vercel resolves it to production and aliases
+# the public hostname, which is how the first run of this target published the
+# site while claiming to be a preview.
 site-preview: _require-vercel check  ## Deploy a preview URL (not the public site)
-	cd $(SITE) && vercel deploy
+	cd $(SITE) && vercel deploy --target=preview
 
 site-prod: _confirm-prod _require-vercel check  ## Deploy to production — needs CONFIRM=1
-	cd $(SITE) && vercel deploy --prod
+	cd $(SITE) && vercel deploy --target=production
 
 _confirm-prod:
 	@if [ -z "$(CONFIRM)" ]; then \
