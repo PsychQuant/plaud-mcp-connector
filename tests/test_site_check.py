@@ -413,36 +413,23 @@ class TestContrast(unittest.TestCase):
     def test_three_digit_hex_expands(self):
         self.assertAlmostEqual(21.0, site_check.contrast_ratio("#000", "#fff"), places=1)
 
-    def test_low_contrast_rule_is_flagged(self):
-        css = ":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #e2ded6; --muted: #5f5d57; }"
+    def test_low_contrast_body_text_is_flagged(self):
+        css = ":root { --bg: #fbfaf8; --fg: #111111; --muted: #cfcbc4; }"
         self.assertIn("contrast", ids(site_check.check_contrast(f"<style>{css}</style>")))
 
     def test_adequate_contrast_passes(self):
-        css = ":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #8a8378; --muted: #5f5d57; }"
+        css = ":root { --bg: #fbfaf8; --fg: #111111; --muted: #5f5d57; }"
         self.assertEqual([], site_check.check_contrast(f"<style>{css}</style>"))
 
     def test_dark_scheme_is_checked_too(self):
-        css = (":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #8a8378; --muted: #5f5d57; }"
+        css = (":root { --bg: #fbfaf8; --fg: #111111; --muted: #5f5d57; }"
                "@media (prefers-color-scheme: dark) { :root { --bg: #14140f; --fg: #eeeeee;"
-               " --rule-strong: #2e2d27; --muted: #a09c92; } }")
+               " --muted: #2e2d27; } }")
         found = site_check.check_contrast(f"<style>{css}</style>")
         self.assertIn("contrast", ids(found))
         self.assertTrue(any("dark" in f.message for f in found), [f.message for f in found])
 
 
-class TestTabBorderToken(unittest.TestCase):
-    """A token nothing references is not a fix."""
-
-    def test_tabs_using_the_strong_token_pass(self):
-        css = "<style>.tabs button { border: 1px solid var(--rule-strong); }</style>"
-        self.assertEqual([], site_check.check_tab_border_token(css))
-
-    def test_tabs_falling_back_to_the_weak_rule_are_flagged(self):
-        css = "<style>.tabs button { border: 1px solid var(--rule); }</style>"
-        self.assertIn("contrast", ids(site_check.check_tab_border_token(css)))
-
-    def test_page_without_tabs_passes(self):
-        self.assertEqual([], site_check.check_tab_border_token("<p>no tabs</p>"))
 
 
 # --------------------------------------------------------------------------
@@ -594,3 +581,50 @@ class TestI18nPositioningPerLanguage(unittest.TestCase):
         broken = I18N_OK.replace('"hero.lede": "話された内容を検索"',
                                  '"hero.lede": "/plugin install プラウド"')
         self.assertIn("i18n-positioning", ids(site_check.check_i18n_positioning(broken)))
+
+
+# --------------------------------------------------------------------------
+# Dead selectors (#16 fallout)
+#
+# Removing the install tabs left the CSS and the JS behind. The markup was gone,
+# so `document.querySelector('[role="tablist"]')` returned null and the next line
+# threw — a blank-behaving page whose source still greps clean. Every existing
+# check passed. Structure intact, behaviour broken: the same shape as every other
+# defect in this repo, and greppable checks are exactly what cannot see it.
+# --------------------------------------------------------------------------
+class TestDeadSelectors(unittest.TestCase):
+    def test_selector_with_a_match_passes(self):
+        src = '<div id="lang"></div><script>document.querySelector("#lang")</script>'
+        self.assertEqual([], site_check.check_dead_selectors(src))
+
+    def test_selector_with_no_match_is_flagged(self):
+        src = '<p>nothing</p><script>document.querySelector(\'[role="tablist"]\')</script>'
+        found = site_check.check_dead_selectors(src)
+        self.assertIn("dead-selector", ids(found))
+        self.assertTrue(any("tablist" in f.message for f in found), [f.message for f in found])
+
+    def test_query_selector_all_is_checked_too(self):
+        src = '<p>x</p><script>document.querySelectorAll(\'[role="tab"]\')</script>'
+        self.assertIn("dead-selector", ids(site_check.check_dead_selectors(src)))
+
+    def test_attribute_selector_matching_markup_passes(self):
+        src = '<button role="tab"></button><script>document.querySelectorAll(\'[role="tab"]\')</script>'
+        self.assertEqual([], site_check.check_dead_selectors(src))
+
+    def test_class_selector_is_checked(self):
+        src = '<p>x</p><script>document.querySelector(".tabs")</script>'
+        self.assertIn("dead-selector", ids(site_check.check_dead_selectors(src)))
+
+    def test_class_selector_present_passes(self):
+        src = '<p class="tabs">x</p><script>document.querySelector(".tabs")</script>'
+        self.assertEqual([], site_check.check_dead_selectors(src))
+
+    def test_page_without_script_passes(self):
+        self.assertEqual([], site_check.check_dead_selectors("<p>no script here</p>"))
+
+    def test_selector_shapes_it_cannot_judge_are_left_alone(self):
+        """Only id / class / [attr="value"] are decidable by string matching.
+        A compound or pseudo selector is not, and guessing would produce false
+        alarms that train the reader to ignore this rule."""
+        src = '<p>x</p><script>document.querySelector("div > p:nth-child(2)")</script>'
+        self.assertEqual([], site_check.check_dead_selectors(src))

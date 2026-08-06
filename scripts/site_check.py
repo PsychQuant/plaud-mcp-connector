@@ -279,6 +279,7 @@ def run_checks(site_dir: pathlib.Path, readme_path: pathlib.Path,
     found += check_table_headers(source)
     found += check_aria_tabs(source)
     found += check_contrast(source)
+    found += check_dead_selectors(source)
     found += check_i18n_completeness(source)
     found += check_i18n_positioning(source)
 
@@ -477,14 +478,12 @@ def contrast_ratio(a: str, b: str) -> float:
 
 
 # (custom property, minimum ratio against --bg, what it is)
-# WCAG 1.4.11 governs the boundary of an interactive component. The tab pills
-# are controls and need 3:1; the hairlines around content boxes are decoration
-# around text that carries its own contrast, so they are held to nothing here —
-# darkening every rule on the page to 3:1 would be a design cost paid for a
-# criterion that does not apply. `--rule-strong` exists so the control boundary
-# has its own token that cannot be lightened without failing this check.
+# WCAG 1.4.11 governs the boundary of an interactive component. The install tabs
+# were the page's only control and they are gone (#16 — the install is one
+# sentence now), so `--rule-strong` and the check that it was actually referenced
+# went with them rather than standing guard over nothing. Both come back with the
+# language switcher (#14), which is the next real control.
 CONTRAST_RULES = (
-    ("--rule-strong", 3.0, "the border delineating the tab pills (WCAG 1.4.11)"),
     ("--muted", 4.5, "secondary body text (WCAG 1.4.3)"),
 )
 
@@ -500,23 +499,8 @@ def _palettes(source: str) -> dict[str, dict[str, str]]:
     return out
 
 
-def check_tab_border_token(source: str) -> list[Finding]:
-    """`--rule-strong` only helps if the tab pills actually use it.
-
-    Without this, the contrast check passes on a token nothing references and
-    the control boundary quietly goes back to the low-contrast hairline.
-    """
-    block = re.search(r"\.tabs\s+button\s*\{(.*?)\}", source, re.DOTALL)
-    if block is None:
-        return []
-    if "--rule-strong" not in block.group(1):
-        return [Finding("contrast", "error",
-                        ".tabs button does not use var(--rule-strong) for its border")]
-    return []
-
-
 def check_contrast(source: str) -> list[Finding]:
-    found = list(check_tab_border_token(source))
+    found = []
     for scheme, palette in _palettes(source).items():
         bg = palette.get("--bg")
         if not bg:
@@ -646,6 +630,53 @@ def check_i18n_positioning(source: str) -> list[Finding]:
                                  f"(expected one of: {', '.join(phrases)})"))
     return found
 
+
+
+# ---------------------------------------------------------------------------
+# Dead selectors (#16 fallout)
+#
+# Deleting the install tabs left the CSS and the JS behind, so
+# `document.querySelector('[role="tablist"]')` returned null and the next line
+# threw. Every existing check passed: they grep the source, and the source still
+# contained the string. Structure intact, behaviour broken.
+# ---------------------------------------------------------------------------
+
+# Only these shapes are decidable by string matching. A compound or pseudo
+# selector is not, and guessing would raise false alarms — which is how a rule
+# gets ignored.
+_ID = re.compile(r"^#([A-Za-z][\w-]*)$")
+_CLASS = re.compile(r"^\.([A-Za-z][\w-]*)$")
+_ATTR = re.compile(r'^\[([a-zA-Z-]+)=["\']([^"\']+)["\']\]$')
+
+
+def check_dead_selectors(source: str) -> list[Finding]:
+    """Every selector the page queries must match something the page renders."""
+    scripts = re.findall(r"<script[^>]*>(.*?)</script>", source, re.DOTALL)
+    if not scripts:
+        return []
+    markup = re.sub(r"<script[^>]*>.*?</script>", " ", source, flags=re.DOTALL)
+
+    found = []
+    for js in scripts:
+        # Back-reference the opening quote instead of excluding both kinds: a
+        # selector is routinely `'[role="tab"]'`, and a class that rejects both
+        # quote characters truncates at the first inner one — capturing `[role=`
+        # and quietly checking nothing.
+        for _q, raw in re.findall(r"querySelector(?:All)?\(\s*(['\"])(.*?)\1", js):
+            sel = raw.strip()
+            if m := _ID.match(sel):
+                hit = re.search(rf'id=["\']{re.escape(m.group(1))}["\']', markup)
+            elif m := _CLASS.match(sel):
+                hit = re.search(rf'class=["\'][^"\']*\b{re.escape(m.group(1))}\b', markup)
+            elif m := _ATTR.match(sel):
+                hit = re.search(rf'{re.escape(m.group(1))}=["\']{re.escape(m.group(2))}["\']', markup)
+            else:
+                continue  # not decidable by string matching — say nothing
+            if not hit:
+                found.append(Finding("dead-selector", "error",
+                                     f"the page queries {sel!r} but nothing in the markup "
+                                     f"matches it — this throws at runtime"))
+    return found
 
 if __name__ == "__main__":
     sys.exit(main())

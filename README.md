@@ -36,6 +36,11 @@ That is the gap this fills.
 ```
 /plugin marketplace add PsychQuant/plaud-mcp-connector
 /plugin install plaud-mcp-connector@plaud-mcp-connector
+
+**Then turn on auto-update.** Claude Code ships third-party marketplaces with
+auto-update *disabled*, so an install left alone stays on the version it was
+installed at — including versions with search bugs since fixed. Ask Claude to
+enable it, or: `/plugin` → Marketplaces → plaud-mcp-connector → Enable auto-update.
 ```
 
 The `@plaud-mcp-connector` suffix names the marketplace. It reads oddly because
