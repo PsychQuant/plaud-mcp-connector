@@ -1,0 +1,27 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "plaud-mcp-connector",
+  "description": "Full-text transcript search and audio upload on top of the official Plaud MCP. Independent third-party plugin — not affiliated with or supported by Plaud Inc.",
+  "owner": {
+    "name": "Che Cheng"
+  },
+  "plugins": [
+    {
+      "name": "plaud-mcp-connector",
+      "version": "0.2.0",
+      "description": "Bundles the official Plaud MCP, then adds what it cannot do: full-text search across transcript bodies (the official query matches recording names only, newest 500) and uploading audio into your own library (the official tools are read-only). Independent third-party plugin — not affiliated with or supported by Plaud Inc.",
+      "author": {
+        "name": "Che Cheng"
+      },
+      "source": "./",
+      "category": "productivity",
+      "keywords": [
+        "plaud",
+        "mcp",
+        "transcription",
+        "full-text-search",
+        "voice-notes"
+      ]
+    }
+  ]
+}
