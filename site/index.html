@@ -12,6 +12,10 @@
      A page about someone else's product that borrows their look reads as theirs. */
   :root {
     --bg: #fbfaf8;  --fg: #1a1a17;  --muted: #5f5d57;  --rule: #e2ded6;
+    /* --rule-strong is the boundary of an interactive control, which WCAG
+       1.4.11 holds to 3:1. --rule stays a hairline: it only ever outlines
+       content boxes whose text carries its own contrast. */
+    --rule-strong: #847d72;
     --card: #ffffff; --accent: #1f6f5c; --accent-soft: #e8f2ee;
     --warn-bg: #fdf6e7; --warn-rule: #e8d5a8;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -19,6 +23,7 @@
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #14140f; --fg: #ece9e1; --muted: #a09c92; --rule: #2e2d27;
+      --rule-strong: #726d5d;
       --card: #1c1b16; --accent: #6cc0a5; --accent-soft: #172b25;
       --warn-bg: #241f12; --warn-rule: #4a3f22;
     }
@@ -54,8 +59,10 @@
   /* ---- gap table ---- */
   table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: .93rem; }
   th, td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
-  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
-  td:first-child { font-weight: 600; white-space: nowrap; }
+  thead th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  /* Row labels are <th scope="row">, not bold <td>: the header relationship has
+     to be in the markup, not only in the weight. */
+  th[scope="row"] { font-weight: 600; white-space: nowrap; color: var(--fg); }
   .tablewrap { overflow-x: auto; }
 
   /* ---- prompt examples ---- */
@@ -77,7 +84,7 @@
   .tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1.25rem 0 .75rem; }
   .tabs button {
     font: inherit; font-size: .86rem; cursor: pointer; color: var(--muted);
-    background: transparent; border: 1px solid var(--rule); border-radius: 100px;
+    background: transparent; border: 1px solid var(--rule-strong); border-radius: 100px;
     padding: .35rem .85rem;
   }
   .tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); border-color: var(--fg); }
@@ -117,32 +124,33 @@
 
 <h2>The gap this fills</h2>
 <p>
-  Plaud shipped an official MCP server on 6 August 2026. It is good, and this
+  Plaud announced its official MCP server on 6 August 2026; the package itself
+  (<code>@plaud-ai/mcp</code>) has been on npm since April. It is good, and this
   plugin runs it unmodified — this is not a replacement, it contains it. But its
   surface is deliberately narrow.
 </p>
 
 <div class="tablewrap">
 <table>
-  <thead><tr><th></th><th>Official Plaud MCP</th><th>With this plugin</th></tr></thead>
+  <thead><tr><th></th><th scope="col">Official Plaud MCP</th><th scope="col">With this plugin</th></tr></thead>
   <tbody>
     <tr>
-      <td>Search</td>
-      <td>Matches <strong>recording names only</strong>, across the newest 500 recordings</td>
+      <th scope="row">Search</th>
+      <td>Matches <strong>recording names only</strong>. In testing the results stopped at roughly the newest 500 recordings — observed, not documented by Plaud, so it may change without notice</td>
       <td>Full text of every transcript you have indexed</td>
     </tr>
     <tr>
-      <td>Subtitles</td>
+      <th scope="row">Subtitles</th>
       <td>None — transcript text, no timed cues</td>
       <td><code>.srt</code> export for video and lecture captions</td>
     </tr>
     <tr>
-      <td>Upload</td>
+      <th scope="row">Upload</th>
       <td>None — all seven tools are read-only</td>
       <td>Puts a local audio file into your own library</td>
     </tr>
     <tr>
-      <td>Mishearings</td>
+      <th scope="row">Mishearings</th>
       <td>What the ASR produced, as-is</td>
       <td>Optional proofreading pass, stored beside the original</td>
     </tr>
@@ -151,8 +159,9 @@
 </div>
 
 <h2>What you actually type</h2>
+<p>Illustrative — the shape of the exchange, not transcripts of a recorded session.</p>
 
-<div class="prompt">
+<div class="prompt" lang="zh-Hant">
   <p class="you">哪次會議談到預算拆兩期？</p>
   <p class="out">── 產品週會 2026-08-01
    id rec_8f21 · 2026-08-01 · 2 hits
@@ -247,12 +256,12 @@ automation against the Plaud web app and works on macOS only.</p>
     </p>
     <p>
       Problems with this plugin belong in
-      <a href="https://github.com/PsychQuant/plaud-mcp-connector/issues">its issue tracker</a>,
+      <a href="https://github.com/PsychQuant/plaud-mcp-connector/issues">the plaud-mcp-connector issue tracker</a>,
       not with Plaud support. For Plaud's own integration see
       <a href="https://docs.plaud.ai/plaud-mcp-cli/mcp">docs.plaud.ai</a>.
     </p>
     <p>
-      <a href="https://github.com/PsychQuant/plaud-mcp-connector">Source</a> ·
+      <a href="https://github.com/PsychQuant/plaud-mcp-connector">Source on GitHub</a> ·
       MIT licensed
     </p>
   </div>
@@ -266,10 +275,31 @@ automation against the Plaud web app and works on macOS only.</p>
     tabs.forEach((t) => {
       const selected = t.id === id;
       t.setAttribute('aria-selected', String(selected));
+      // Roving tabindex: only the selected tab is in the Tab order, so Tab
+      // moves past the whole group rather than through every option.
+      t.tabIndex = selected ? 0 : -1;
       document.getElementById(t.getAttribute('aria-controls')).hidden = !selected;
     });
   };
   tabs.forEach((t) => t.addEventListener('click', () => show(t.id)));
+
+  // role="tab" tells assistive tech that arrow keys move between the tabs.
+  // Announcing that contract and then not honouring it is worse than never
+  // claiming the role: it is a promise made only to the users who rely on it.
+  const KEYS = { ArrowLeft: -1, ArrowRight: 1 };
+  document.querySelector('[role="tablist"]').addEventListener('keydown', (e) => {
+    const from = tabs.indexOf(document.activeElement);
+    if (from === -1) return;
+    let to;
+    if (e.key in KEYS) to = (from + KEYS[e.key] + tabs.length) % tabs.length;
+    else if (e.key === 'Home') to = 0;
+    else if (e.key === 'End') to = tabs.length - 1;
+    else return;
+    e.preventDefault();
+    show(tabs[to].id);
+    tabs[to].focus();
+  });
+
   show('t-cc');   // collapse to the first tab only once JS is available
 </script>
 

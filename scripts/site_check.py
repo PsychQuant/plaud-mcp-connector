@@ -261,6 +261,10 @@ def run_checks(site_dir: pathlib.Path, readme_path: pathlib.Path,
     found += check_independence_notice(source)
     found += check_official_docs_link(source)
     found += check_external_subresources(source)
+    found += check_language_tagging(source)
+    found += check_table_headers(source)
+    found += check_aria_tabs(source)
+    found += check_contrast(source)
 
     verdict, reason = classify_domain(domain)
     if verdict == "block":
@@ -293,6 +297,220 @@ def main() -> int:
     print(f"site checks pass{' (with warnings above)' if warns else ''}")
     return 0
 
+
+
+# ---------------------------------------------------------------------------
+# Accessibility properties a machine can decide. Added after an independent
+# review found all four of these on the page after it was already public.
+# ---------------------------------------------------------------------------
+
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+VOID = frozenset({"area", "base", "br", "col", "embed", "hr", "img", "input",
+                  "link", "meta", "source", "track", "wbr"})
+
+
+class _LangScanner(HTMLParser):
+    """Tracks the nearest `lang` in scope while walking the document."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.problems: list[str] = []
+        self._stack: list[tuple[str, str | None]] = []
+        self._skip = 0
+
+    def _lang(self) -> str:
+        for _, lang in reversed(self._stack):
+            if lang:
+                return lang
+        return ""
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        if tag in ("script", "style"):
+            self._skip += 1
+        if tag in VOID:
+            return
+        a = {k.lower(): (v or "") for k, v in attrs}
+        self._stack.append((tag, a.get("lang")))
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+        # Pop back to the matching open tag. Unbalanced markup must not leave a
+        # stale lang in scope for the rest of the document.
+        for i in range(len(self._stack) - 1, -1, -1):
+            if self._stack[i][0] == tag:
+                del self._stack[i:]
+                return
+
+    def handle_data(self, data: str) -> None:
+        if self._skip or not CJK.search(data):
+            return
+        lang = self._lang()
+        if not lang or lang.lower().startswith("en"):
+            self.problems.append(
+                f"{data.strip()[:30]!r} is CJK text under lang={lang or 'unset'!r}"
+            )
+
+
+def check_language_tagging(source: str) -> list[Finding]:
+    """WCAG 3.1.2. A passage in another language needs its own `lang`.
+
+    Without it a screen reader keeps applying English pronunciation rules to Han
+    characters and produces noise — on this page that would silently break the
+    one example demonstrating that you can search in your own language.
+    """
+    scanner = _LangScanner()
+    scanner.feed(source)
+    return [Finding("language-tagging", "error", f"missing lang: {p}") for p in scanner.problems]
+
+
+class _TableScanner(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tables: list[dict] = []
+        self._cell: dict | None = None
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "table":
+            self.tables.append({"has_head": False, "rows": [], "section": None})
+        elif not self.tables:
+            return
+        elif tag in ("thead", "tbody"):
+            self.tables[-1]["section"] = tag
+            if tag == "thead":
+                self.tables[-1]["has_head"] = True
+        elif tag == "tr":
+            self.tables[-1]["rows"].append({"section": self.tables[-1]["section"], "cells": []})
+        elif tag in ("th", "td") and self.tables[-1]["rows"]:
+            self._cell = {"tag": tag, "scope": a.get("scope", ""), "text": ""}
+            self.tables[-1]["rows"][-1]["cells"].append(self._cell)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("th", "td"):
+            self._cell = None
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell["text"] += data
+
+
+def check_table_headers(source: str) -> list[Finding]:
+    """WCAG 1.3.1 (Level A): the header/data relationship must be programmatic.
+
+    A row label that is a bold `<td>` looks like a header and announces as data,
+    so cell-by-cell navigation loses the row context entirely.
+    """
+    scanner = _TableScanner()
+    scanner.feed(source)
+    found = []
+    for n, table in enumerate(scanner.tables, 1):
+        for row in table["rows"]:
+            for cell in row["cells"]:
+                # An empty corner cell carries no header meaning and needs no scope.
+                if cell["tag"] == "th" and cell["text"].strip() and not cell["scope"]:
+                    found.append(Finding("table-headers", "error",
+                                         f"table {n}: <th>{cell['text'].strip()[:20]}</th> has no scope"))
+            if table["has_head"] and row["section"] == "tbody" and row["cells"]:
+                first = row["cells"][0]
+                if first["tag"] == "td":
+                    found.append(Finding("table-headers", "error",
+                                         f"table {n}: row label {first['text'].strip()[:20]!r} is a "
+                                         f"<td>; a labelled row needs <th scope=\"row\">"))
+    return found
+
+
+def check_aria_tabs(source: str) -> list[Finding]:
+    """role=tab announces a keyboard contract: arrow keys move between tabs and
+    only the selected tab is in the Tab order. Claiming the role without
+    honouring it is worse than not claiming it — it tells the user arrow keys
+    work, and then they do not."""
+    if 'role="tab"' not in source and "role='tab'" not in source:
+        return []
+    found = []
+    if "keydown" not in source:
+        found.append(Finding("aria-tabs", "error",
+                             "role=tab is used but no keydown handler exists — arrow keys do nothing"))
+    if "tabindex" not in source.lower():
+        found.append(Finding("aria-tabs", "error",
+                             "role=tab is used without roving tabindex — every tab stays in the Tab order"))
+    return found
+
+
+def _luminance(hex_colour: str) -> float:
+    h = hex_colour.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    channels = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255
+        channels.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = channels
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a: str, b: str) -> float:
+    """WCAG 2.x relative-contrast ratio. Symmetric, 1.0 to 21.0."""
+    la, lb = _luminance(a), _luminance(b)
+    lo, hi = sorted((la, lb))
+    return (hi + 0.05) / (lo + 0.05)
+
+
+# (custom property, minimum ratio against --bg, what it is)
+# WCAG 1.4.11 governs the boundary of an interactive component. The tab pills
+# are controls and need 3:1; the hairlines around content boxes are decoration
+# around text that carries its own contrast, so they are held to nothing here —
+# darkening every rule on the page to 3:1 would be a design cost paid for a
+# criterion that does not apply. `--rule-strong` exists so the control boundary
+# has its own token that cannot be lightened without failing this check.
+CONTRAST_RULES = (
+    ("--rule-strong", 3.0, "the border delineating the tab pills (WCAG 1.4.11)"),
+    ("--muted", 4.5, "secondary body text (WCAG 1.4.3)"),
+)
+
+
+def _palettes(source: str) -> dict[str, dict[str, str]]:
+    """Pull the light and dark custom-property sets out of the stylesheet."""
+    out: dict[str, dict[str, str]] = {}
+    dark = re.search(r"prefers-color-scheme:\s*dark.*?:root\s*\{(.*?)\}", source, re.DOTALL)
+    first = re.search(r":root\s*\{(.*?)\}", source, re.DOTALL)
+    for name, match in (("light", first), ("dark", dark)):
+        if match:
+            out[name] = dict(re.findall(r"(--[a-z-]+)\s*:\s*(#[0-9a-fA-F]{3,6})", match.group(1)))
+    return out
+
+
+def check_tab_border_token(source: str) -> list[Finding]:
+    """`--rule-strong` only helps if the tab pills actually use it.
+
+    Without this, the contrast check passes on a token nothing references and
+    the control boundary quietly goes back to the low-contrast hairline.
+    """
+    block = re.search(r"\.tabs\s+button\s*\{(.*?)\}", source, re.DOTALL)
+    if block is None:
+        return []
+    if "--rule-strong" not in block.group(1):
+        return [Finding("contrast", "error",
+                        ".tabs button does not use var(--rule-strong) for its border")]
+    return []
+
+
+def check_contrast(source: str) -> list[Finding]:
+    found = list(check_tab_border_token(source))
+    for scheme, palette in _palettes(source).items():
+        bg = palette.get("--bg")
+        if not bg:
+            continue
+        for prop, minimum, what in CONTRAST_RULES:
+            value = palette.get(prop)
+            if not value:
+                continue
+            ratio = contrast_ratio(value, bg)
+            if ratio < minimum:
+                found.append(Finding("contrast", "error",
+                                     f"{scheme}: {prop} {value} on --bg {bg} is {ratio:.2f}:1, "
+                                     f"below {minimum}:1 for {what}"))
+    return found
 
 if __name__ == "__main__":
     sys.exit(main())

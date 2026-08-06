@@ -318,3 +318,128 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------
+# Accessibility properties that a machine can actually decide.
+# Added after an independent review found all four on the live page.
+# --------------------------------------------------------------------------
+class TestLanguageTagging(unittest.TestCase):
+    """WCAG 3.1.2: a passage in another language needs its own lang, or a screen
+    reader pronounces Han characters with English rules and produces noise."""
+
+    def test_english_page_passes(self):
+        self.assertEqual([], site_check.check_language_tagging('<html lang="en"><p>hello</p></html>'))
+
+    def test_untagged_chinese_is_flagged(self):
+        src = '<html lang="en"><p>哪次會議談到預算</p></html>'
+        self.assertIn("language-tagging", ids(site_check.check_language_tagging(src)))
+
+    def test_tagged_chinese_passes(self):
+        src = '<html lang="en"><p lang="zh-Hant">哪次會議談到預算</p></html>'
+        self.assertEqual([], site_check.check_language_tagging(src))
+
+    def test_lang_inherits_from_an_ancestor(self):
+        src = '<html lang="en"><div lang="zh-Hant"><p>哪次會議</p></div></html>'
+        self.assertEqual([], site_check.check_language_tagging(src))
+
+    def test_lang_scope_ends_with_the_element(self):
+        """A naive stack that never pops would treat the trailing English as zh."""
+        src = '<html lang="en"><div lang="zh-Hant"><p>會議</p></div><p>後面的中文</p></html>'
+        self.assertIn("language-tagging", ids(site_check.check_language_tagging(src)))
+
+    def test_japanese_kana_also_counts(self):
+        self.assertIn("language-tagging",
+                      ids(site_check.check_language_tagging('<html lang="en"><p>ひらがな</p></html>')))
+
+
+class TestTableHeaders(unittest.TestCase):
+    """WCAG 1.3.1 (Level A): the header/data relationship must be programmatic,
+    not just bold text."""
+
+    def test_scoped_table_passes(self):
+        src = ('<table><thead><tr><th></th><th scope="col">A</th></tr></thead>'
+               '<tbody><tr><th scope="row">Search</th><td>x</td></tr></tbody></table>')
+        self.assertEqual([], site_check.check_table_headers(src))
+
+    def test_row_label_as_td_is_flagged(self):
+        src = ('<table><thead><tr><th scope="col">A</th></tr></thead>'
+               '<tbody><tr><td>Search</td><td>x</td></tr></tbody></table>')
+        self.assertIn("table-headers", ids(site_check.check_table_headers(src)))
+
+    def test_th_without_scope_is_flagged(self):
+        src = '<table><tr><th>A</th><td>x</td></tr></table>'
+        self.assertIn("table-headers", ids(site_check.check_table_headers(src)))
+
+    def test_page_without_tables_passes(self):
+        self.assertEqual([], site_check.check_table_headers("<p>no tables here</p>"))
+
+
+class TestAriaTabs(unittest.TestCase):
+    """role=tab announces a keyboard contract. Claiming it without honouring it
+    is worse than not claiming it: it tells the user arrow keys work."""
+
+    def test_no_tabs_passes(self):
+        self.assertEqual([], site_check.check_aria_tabs("<p>x</p>"))
+
+    def test_tabs_without_keydown_are_flagged(self):
+        src = '<div role="tablist"><button role="tab"></button></div><script>a.onclick=1</script>'
+        self.assertIn("aria-tabs", ids(site_check.check_aria_tabs(src)))
+
+    def test_tabs_with_keydown_and_roving_tabindex_pass(self):
+        src = ('<div role="tablist"><button role="tab" tabindex="0"></button></div>'
+               '<script>t.addEventListener("keydown", f); t.tabIndex = -1</script>')
+        self.assertEqual([], site_check.check_aria_tabs(src))
+
+    def test_keydown_without_roving_tabindex_is_still_flagged(self):
+        src = '<div role="tablist"><button role="tab"></button></div><script>x.addEventListener("keydown",f)</script>'
+        self.assertIn("aria-tabs", ids(site_check.check_aria_tabs(src)))
+
+
+class TestContrast(unittest.TestCase):
+    """WCAG 1.4.11: a border that is the only thing delineating an interactive
+    control needs 3:1 against its background."""
+
+    def test_ratio_of_black_on_white_is_21(self):
+        self.assertAlmostEqual(21.0, site_check.contrast_ratio("#000000", "#ffffff"), places=1)
+
+    def test_ratio_is_symmetric(self):
+        self.assertAlmostEqual(site_check.contrast_ratio("#1f6f5c", "#fbfaf8"),
+                               site_check.contrast_ratio("#fbfaf8", "#1f6f5c"), places=6)
+
+    def test_identical_colours_are_one(self):
+        self.assertAlmostEqual(1.0, site_check.contrast_ratio("#abcdef", "#abcdef"), places=6)
+
+    def test_three_digit_hex_expands(self):
+        self.assertAlmostEqual(21.0, site_check.contrast_ratio("#000", "#fff"), places=1)
+
+    def test_low_contrast_rule_is_flagged(self):
+        css = ":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #e2ded6; --muted: #5f5d57; }"
+        self.assertIn("contrast", ids(site_check.check_contrast(f"<style>{css}</style>")))
+
+    def test_adequate_contrast_passes(self):
+        css = ":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #8a8378; --muted: #5f5d57; }"
+        self.assertEqual([], site_check.check_contrast(f"<style>{css}</style>"))
+
+    def test_dark_scheme_is_checked_too(self):
+        css = (":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #8a8378; --muted: #5f5d57; }"
+               "@media (prefers-color-scheme: dark) { :root { --bg: #14140f; --fg: #eeeeee;"
+               " --rule-strong: #2e2d27; --muted: #a09c92; } }")
+        found = site_check.check_contrast(f"<style>{css}</style>")
+        self.assertIn("contrast", ids(found))
+        self.assertTrue(any("dark" in f.message for f in found), [f.message for f in found])
+
+
+class TestTabBorderToken(unittest.TestCase):
+    """A token nothing references is not a fix."""
+
+    def test_tabs_using_the_strong_token_pass(self):
+        css = "<style>.tabs button { border: 1px solid var(--rule-strong); }</style>"
+        self.assertEqual([], site_check.check_tab_border_token(css))
+
+    def test_tabs_falling_back_to_the_weak_rule_are_flagged(self):
+        css = "<style>.tabs button { border: 1px solid var(--rule); }</style>"
+        self.assertIn("contrast", ids(site_check.check_tab_border_token(css)))
+
+    def test_page_without_tabs_passes(self):
+        self.assertEqual([], site_check.check_tab_border_token("<p>no tabs</p>"))
