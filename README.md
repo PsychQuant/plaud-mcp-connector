@@ -83,6 +83,17 @@ which recording mentions Kubernetes migration
 search my transcripts for "action item"
 ```
 
+### `plaud-srt` — subtitles from a recording
+
+Converts a cached transcript to `.srt`. Neither the official MCP nor the official
+CLI produces timed subtitles — they return transcript text only. Runs on the local
+cache: no API call, no auth.
+
+```
+把上週的產品週會轉成字幕
+make subtitles from the Kubernetes migration meeting
+```
+
 ### `plaud-upload` — put a file into your library
 
 Converts video to audio, checks the 500 MB / 5 h limits, and drives Safari to
