@@ -513,3 +513,84 @@ class TestAcceptedDomainCli(unittest.TestCase):
     def test_blocked_domain_is_not_rescued_by_accepting_it(self):
         p = self._run("--domain", "plaud-mcp.com", "--accept-domain", "plaud-mcp.com")
         self.assertEqual(1, p.returncode)
+
+
+# --------------------------------------------------------------------------
+# Multi-language gate (#14)
+#
+# The positioning rules are per-language properties, not page properties. Without
+# these checks, adding languages would mean only the English version is ever
+# verified — the independence notice could be missing in Japanese and every gate
+# would still be green.
+# --------------------------------------------------------------------------
+I18N_OK = '''
+<html lang="en">
+<p data-i18n="hero.lede">x</p><p data-i18n="foot.independent">y</p>
+<select id="lang"><option value="en">English</option><option value="ja">日本語</option></select>
+<script>
+const I18N = {
+  en: {"hero.lede": "Search what was said", "foot.independent": "not affiliated with Plaud Inc."},
+  ja: {"hero.lede": "話された内容を検索", "foot.independent": "Plaud Inc. とは提携していません"}
+};
+</script>
+</html>'''
+
+
+class TestI18nCompleteness(unittest.TestCase):
+    def test_page_without_i18n_is_a_no_op(self):
+        """The single-language page must keep passing unchanged."""
+        self.assertEqual([], site_check.check_i18n_completeness("<p>plain page</p>"))
+
+    def test_complete_translation_set_passes(self):
+        self.assertEqual([], site_check.check_i18n_completeness(I18N_OK))
+
+    def test_key_missing_from_one_language_is_flagged(self):
+        """A half-translated page is the failure this exists to prevent."""
+        broken = I18N_OK.replace('"hero.lede": "話された内容を検索", ', "")
+        found = site_check.check_i18n_completeness(broken)
+        self.assertIn("i18n-completeness", ids(found))
+        self.assertTrue(any("ja" in f.message and "hero.lede" in f.message for f in found),
+                        [f.message for f in found])
+
+    def test_key_used_in_markup_but_absent_everywhere_is_flagged(self):
+        broken = I18N_OK.replace('<p data-i18n="hero.lede">x</p>',
+                                 '<p data-i18n="hero.lede">x</p><p data-i18n="ghost.key">z</p>')
+        self.assertIn("i18n-completeness", ids(site_check.check_i18n_completeness(broken)))
+
+    def test_dictionary_key_no_markup_uses_is_flagged(self):
+        """Drift the other way: a translated string nothing renders is dead weight
+        that hides the fact the markup lost its hook."""
+        broken = I18N_OK.replace('"hero.lede": "Search what was said"',
+                                 '"hero.lede": "Search what was said", "orphan.key": "nobody renders me"')
+        self.assertIn("i18n-completeness", ids(site_check.check_i18n_completeness(broken)))
+
+    def test_switcher_must_offer_exactly_the_translated_languages(self):
+        """A language in the dictionary with no way to pick it is unreachable;
+        an option with no dictionary renders an empty page."""
+        broken = I18N_OK.replace('<option value="ja">日本語</option>', "")
+        self.assertIn("i18n-completeness", ids(site_check.check_i18n_completeness(broken)))
+
+
+class TestI18nPositioningPerLanguage(unittest.TestCase):
+    """Rules 2 and 4 are per-language properties. English passing says nothing
+    about Japanese."""
+
+    def test_independence_notice_present_in_every_language_passes(self):
+        self.assertEqual([], site_check.check_i18n_positioning(I18N_OK))
+
+    def test_language_without_independence_notice_is_flagged(self):
+        broken = I18N_OK.replace('"foot.independent": "Plaud Inc. とは提携していません"',
+                                 '"foot.independent": "Plaud のプラグイン"')
+        found = site_check.check_i18n_positioning(broken)
+        self.assertIn("i18n-positioning", ids(found))
+        self.assertTrue(any("ja" in f.message for f in found), [f.message for f in found])
+
+    def test_page_without_i18n_is_a_no_op(self):
+        self.assertEqual([], site_check.check_i18n_positioning("<p>plain</p>"))
+
+    def test_install_commands_must_not_be_translated(self):
+        """`/plugin install …` is a literal the user types. A translated copy in a
+        dictionary would ship a command that does not exist."""
+        broken = I18N_OK.replace('"hero.lede": "話された内容を検索"',
+                                 '"hero.lede": "/plugin install プラウド"')
+        self.assertIn("i18n-positioning", ids(site_check.check_i18n_positioning(broken)))

@@ -279,6 +279,8 @@ def run_checks(site_dir: pathlib.Path, readme_path: pathlib.Path,
     found += check_table_headers(source)
     found += check_aria_tabs(source)
     found += check_contrast(source)
+    found += check_i18n_completeness(source)
+    found += check_i18n_positioning(source)
 
     verdict, reason = classify_domain(domain, accepted)
     if verdict == "block":
@@ -529,6 +531,121 @@ def check_contrast(source: str) -> list[Finding]:
                                      f"{scheme}: {prop} {value} on --bg {bg} is {ratio:.2f}:1, "
                                      f"below {minimum}:1 for {what}"))
     return found
+
+
+# ---------------------------------------------------------------------------
+# Multi-language gate (#14)
+#
+# The positioning rules are per-language properties, not page properties. Check
+# them per language or adding a language silently means "only English is
+# verified" — the independence notice could vanish in Japanese with every gate
+# still green.
+# ---------------------------------------------------------------------------
+
+# Each language's own way of saying the page is not Plaud's. Matching the English
+# phrase everywhere would be a check that only English can pass.
+NOT_AFFILIATED = {
+    "en": ("not affiliated",),
+    "zh-Hant": ("非 Plaud", "無關", "沒有隸屬", "獨立"),
+    "ja": ("提携していません", "非公式", "独立"),
+    "de": ("nicht verbunden", "unabhängig"),
+    "es": ("no está afiliado", "no afiliado", "independiente"),
+    "fr": ("sans affiliation", "non affilié", "indépendant"),
+    "it": ("non affiliato", "indipendente"),
+    "pt": ("não afiliado", "sem afiliação", "independente"),
+    "nl": ("niet gelieerd", "onafhankelijk"),
+}
+
+
+def _i18n_tables(source: str) -> dict[str, dict[str, str]]:
+    """Pull the inline `const I18N = {...}` dictionaries out of the page.
+
+    Parsed rather than imported because the page must stay a single file with no
+    build step; a JSON sidecar would be a fetch, and the CSP grants none.
+    """
+    block = re.search(r"const\s+I18N\s*=\s*\{(.*?)\n\};", source, re.DOTALL)
+    if block is None:
+        return {}
+    tables: dict[str, dict[str, str]] = {}
+    for lang, body in re.findall(r'([a-zA-Z-]+)\s*:\s*\{(.*?)\}', block.group(1), re.DOTALL):
+        pairs = re.findall(r'"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
+        tables[lang] = {k: v for k, v in pairs}
+    return tables
+
+
+def _markup_keys(source: str) -> set[str]:
+    return set(re.findall(r'data-i18n="([^"]+)"', source))
+
+
+def _switcher_languages(source: str) -> set[str]:
+    block = re.search(r'<select[^>]*id="lang"[^>]*>(.*?)</select>', source, re.DOTALL)
+    if block is None:
+        return set()
+    return set(re.findall(r'value="([^"]+)"', block.group(1)))
+
+
+def check_i18n_completeness(source: str) -> list[Finding]:
+    """Every rendered key exists in every language, and nothing drifts either way.
+
+    A page is either fully translated into a language or does not offer it. There
+    is no useful middle state: a missing key renders blank or falls back silently,
+    and the reader cannot tell which.
+    """
+    tables = _i18n_tables(source)
+    if not tables:
+        return []
+    found = []
+    used = _markup_keys(source)
+    all_keys = set().union(*(set(t) for t in tables.values()))
+
+    for key in sorted(used - all_keys):
+        found.append(Finding("i18n-completeness", "error",
+                             f"markup renders data-i18n={key!r} but no language defines it"))
+    for key in sorted(all_keys - used):
+        found.append(Finding("i18n-completeness", "error",
+                             f"{key!r} is translated but no markup renders it — "
+                             f"either the hook was lost or the string is dead"))
+    for lang in sorted(tables):
+        for key in sorted((used & all_keys) - set(tables[lang])):
+            found.append(Finding("i18n-completeness", "error",
+                                 f"{lang} is missing {key!r} — a half-translated page"))
+
+    switcher = _switcher_languages(source)
+    if switcher:
+        for lang in sorted(set(tables) - switcher):
+            found.append(Finding("i18n-completeness", "error",
+                                 f"{lang} is translated but the switcher cannot select it"))
+        for lang in sorted(switcher - set(tables)):
+            found.append(Finding("i18n-completeness", "error",
+                                 f"the switcher offers {lang} but nothing is translated into it"))
+    return found
+
+
+def check_i18n_positioning(source: str) -> list[Finding]:
+    """Rules 2 and 4, per language. English passing says nothing about Japanese."""
+    tables = _i18n_tables(source)
+    if not tables:
+        return []
+    found = []
+    for lang in sorted(tables):
+        blob = " ".join(tables[lang].values())
+        # Install commands are literals the reader types. A translated copy would
+        # ship a command that does not exist.
+        if "/plugin " in blob:
+            found.append(Finding("i18n-positioning", "error",
+                                 f"{lang} has a '/plugin ...' command inside a translated "
+                                 f"string — install commands are literals, never translated"))
+        phrases = NOT_AFFILIATED.get(lang)
+        if phrases is None:
+            found.append(Finding("i18n-positioning", "error",
+                                 f"{lang} has no independence phrasing registered in "
+                                 f"NOT_AFFILIATED — add one before shipping the language"))
+        elif not any(p in blob for p in phrases):
+            found.append(Finding("i18n-positioning", "error",
+                                 f"{lang} never states independence from Plaud "
+                                 f"(expected one of: {', '.join(phrases)})"))
+    return found
+
 
 if __name__ == "__main__":
     sys.exit(main())
