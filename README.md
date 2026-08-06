@@ -4,6 +4,12 @@ A Claude Code plugin that bundles the **official Plaud MCP** and adds the two
 things it cannot do: **full-text transcript search** and **uploading audio into
 your own library**.
 
+> **Independent project.** Built and maintained by a Plaud user, not by Plaud.
+> Not affiliated with, endorsed by, or supported by Plaud Inc. Problems with this
+> plugin belong in [its issue tracker](https://github.com/PsychQuant/plaud-mcp-connector/issues),
+> not with Plaud support. For Plaud's own integration see
+> [docs.plaud.ai](https://docs.plaud.ai/plaud-mcp-cli/mcp).
+
 > This is not a replacement for Plaud's official integration — it contains it.
 
 ## Why
