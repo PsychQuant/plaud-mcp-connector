@@ -20,6 +20,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import unicodedata
 from datetime import datetime, timezone
 
 CACHE_DIR = pathlib.Path(
@@ -76,6 +77,32 @@ def _is_cursor_exhausted(raw) -> bool:
     return text == "" or text.lower() in {"null", "none", "undefined"}
 
 
+def normalize_pattern(pattern: str) -> str:
+    """Make a search pattern reach text in either Unicode normal form.
+
+    `café` has two canonically-equivalent encodings — NFC (`U+00E9`) and NFD
+    (`U+0065 U+0301`). grep and ripgrep both compare bytes, so one form silently
+    fails to find the other and the answer is "no match" on a transcript that
+    plainly contains the word.
+
+    The fix lives here, at the query end, rather than in a migration: a cache
+    written before this existed is a mixed bag, and rewriting it would also shift
+    every `chars` count in the manifest — a second problem introduced to solve
+    the first. Expanding the query reaches old and new entries alike.
+
+    Normalization only affects precomposed/decomposed characters, never ASCII, so
+    the caller's regex metacharacters survive untouched. When both forms are
+    identical (any pure-ASCII pattern, and CJK, which does not decompose here) the
+    pattern is returned as-is — wrapping it would alter a user's regex for nothing.
+    """
+    nfc = unicodedata.normalize("NFC", pattern)
+    nfd = unicodedata.normalize("NFD", pattern)
+    if nfc == nfd:
+        return pattern
+    # Plain `(a|b)` rather than a non-capturing group: BSD grep -E has no `(?:`.
+    return f"({nfc}|{nfd})"
+
+
 def _is_complete(rec: dict) -> bool:
     """A record with no `complete` key was written before paging existed, so its
     transcript may stop at the first page. Absent means incomplete — the opposite
@@ -107,7 +134,10 @@ def cmd_status(args) -> None:
 
 def cmd_put(args) -> None:
     rec_id = _safe_id(args.id)
-    body = sys.stdin.read()
+    # Converge new writes on one normal form so the cache stops accumulating
+    # entropy. This does not make normalize_pattern redundant — entries written
+    # before this existed are still whatever the API sent.
+    body = unicodedata.normalize("NFC", sys.stdin.read())
     if not body.strip():
         sys.exit(f"error: empty transcript body for {rec_id} — refusing to cache a blank entry")
 
@@ -186,7 +216,7 @@ def cmd_search(args) -> None:
         cmd = ["rg", "--line-number", "--no-heading", "--color=never"]
         if not args.case_sensitive:
             cmd.append("--ignore-case")
-        cmd += [args.pattern, str(CACHE_DIR)]
+        cmd += [normalize_pattern(args.pattern), str(CACHE_DIR)]
     else:
         # grep -r is POSIX-ubiquitous; ripgrep is only a speed upgrade here.
         # -E is REQUIRED, not cosmetic: BSD grep (macOS) defaults to basic regex,
@@ -197,7 +227,7 @@ def cmd_search(args) -> None:
         cmd = ["grep", "-rnE"]
         if not args.case_sensitive:
             cmd.append("-i")
-        cmd += ["--include=*.md", args.pattern, str(CACHE_DIR)]
+        cmd += ["--include=*.md", normalize_pattern(args.pattern), str(CACHE_DIR)]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):

@@ -642,3 +642,163 @@ class TestProofreadAttribution(CacheTestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# --------------------------------------------------------------------------
+# Unicode canonical equivalence (#15)
+#
+# grep and ripgrep both compare bytes. `café` has two canonically-equivalent
+# encodings — NFC (U+00E9) and NFD (U+0065 U+0301) — whose bytes differ, so a
+# byte comparison reports "no match" on text that plainly contains the word.
+# Byte equality was standing in for meaning equality; it is only ever correct
+# for pure ASCII, which is why 174 tests passed over it.
+#
+# Both engines are exercised (`have_rg` True and False): the defect is in what
+# we hand the engine, so a fix that only covers the grep path would leave every
+# machine with ripgpre installed still wrong.
+# --------------------------------------------------------------------------
+import unicodedata  # noqa: E402
+
+NFC = unicodedata.normalize("NFC", "café")
+NFD = unicodedata.normalize("NFD", "café")
+
+
+def _engines():
+    """Which search engines this machine can actually exercise.
+
+    `rg` is commonly a shell function or alias, which an interactive `command -v`
+    finds and `subprocess` does not — the same trap that made an earlier
+    root-cause read of the grep bug wrong. Only a real PATH executable counts;
+    otherwise the ripgrep variant is reported as skipped rather than passing on
+    a path that never ran.
+    """
+    engines = [False]
+    if shutil.which("rg") is not None:
+        engines.append(True)
+    return engines
+
+
+class TestNormalizePattern(unittest.TestCase):
+    def test_ascii_pattern_is_returned_unchanged(self):
+        """No pointless alternation: an ASCII pattern has one normal form, and
+        rewriting it would change the user's regex for nothing."""
+        self.assertEqual("budget", cache.normalize_pattern("budget"))
+
+    def test_accented_pattern_expands_to_both_forms(self):
+        out = cache.normalize_pattern(NFC)
+        self.assertIn(NFC, out)
+        self.assertIn(NFD, out)
+        self.assertTrue(out.startswith("(") and out.endswith(")"), out)
+
+    def test_expansion_is_the_same_whichever_form_is_given(self):
+        """Someone typing NFD must get the same coverage as someone typing NFC."""
+        self.assertEqual(
+            sorted(cache.normalize_pattern(NFC).strip("()").split("|")),
+            sorted(cache.normalize_pattern(NFD).strip("()").split("|")),
+        )
+
+    def test_regex_metacharacters_survive(self):
+        """Normalization touches precomposed/decomposed characters only; it must
+        not disturb ASCII metacharacters, or the user's regex changes meaning."""
+        self.assertEqual("^bud.*get$", cache.normalize_pattern("^bud.*get$"))
+
+    def test_alternation_pattern_stays_correct(self):
+        """`a|b` wrapped becomes `(a|b|...)` — redundant but still correct."""
+        out = cache.normalize_pattern(NFC + "|budget")
+        self.assertIn("budget", out)
+        self.assertIn(NFD, out)
+
+    def test_empty_pattern_does_not_crash(self):
+        self.assertEqual("", cache.normalize_pattern(""))
+
+    def test_cjk_pattern_unchanged(self):
+        """CJK here has no combining-mark decomposition; must not be rewritten."""
+        self.assertEqual("預算", cache.normalize_pattern("預算"))
+
+
+class TestSearchAcrossNormalizations(CacheTestCase):
+    def test_nfc_query_finds_nfd_content(self):
+        self._put("rec_nfd", body="on est allés au " + NFD + " hier")
+        for rg in _engines():
+            with self.subTest(have_rg=rg):
+                self.assertIn("1 matches", self._search(NFC, have_rg=rg))
+
+    def test_nfd_query_finds_nfc_content(self):
+        self._put("rec_nfc", body="on est allés au " + NFC + " hier")
+        for rg in _engines():
+            with self.subTest(have_rg=rg):
+                self.assertIn("1 matches", self._search(NFD, have_rg=rg))
+
+    def test_both_forms_on_disk_are_both_found(self):
+        """A cache written before this fix is a mixed bag; one query must reach
+        all of it, which is why the fix is at the query end and not a migration.
+
+        The NFD entry is written straight to disk, bypassing cmd_put, because
+        cmd_put now normalises on write — going through it would produce two NFC
+        files and quietly test nothing."""
+        self._put("rec_a", body="le " + NFC + " du matin")
+        cache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (cache.CACHE_DIR / "rec_b.md").write_text("le " + NFD + " du soir\n")
+        for rg in _engines():
+            with self.subTest(have_rg=rg):
+                self.assertIn("2 recordings", self._search(NFC, have_rg=rg))
+
+    def test_unrelated_text_still_does_not_match(self):
+        """The expansion must not become a catch-all."""
+        self._put("rec_x", body="nothing relevant here")
+        self.assertIn("no match", self._search(NFC, have_rg=False))
+
+
+class TestPutNormalizesOnWrite(CacheTestCase):
+    def test_body_is_stored_as_nfc(self):
+        """Converging new writes on one form keeps entropy from growing; the
+        query-side expansion is what keeps older mixed entries reachable."""
+        self._put("rec_w", body="un " + NFD + " serré")
+        stored = (cache.CACHE_DIR / "rec_w.md").read_text()
+        self.assertIn(NFC, stored)
+
+
+class TestRipgrepBranchGetsTheFix(CacheTestCase):
+    """ripgrep is not installed here — `rg` on this machine is a shell function,
+    invisible to subprocess — so the end-to-end tests above only ever exercise
+    the grep branch. An acid test proved the consequence: deleting the fix from
+    the ripgrep branch left the entire suite green.
+
+    The remedy is not to install ripgrep but to assert on the property we
+    actually own — the argv we hand the engine. That is verifiable anywhere,
+    and it is what would be wrong if the branch were missed again.
+    """
+
+    def _captured_argv(self, pattern: str, have_rg: bool) -> list:
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+
+        self._put("rec_argv", body="le " + NFC + " du matin")
+        ns = argparse.Namespace(pattern=pattern, case_sensitive=False, max_lines=5)
+        with mock.patch.object(cache, "_have_rg", return_value=have_rg), \
+             mock.patch.object(cache.subprocess, "run", side_effect=fake_run):
+            self._capture_stdout(cache.cmd_search, ns)
+        return captured["cmd"]
+
+    def test_ripgrep_argv_carries_both_forms(self):
+        argv = self._captured_argv(NFC, have_rg=True)
+        self.assertEqual("rg", argv[0])
+        joined = " ".join(argv)
+        self.assertIn(NFC, joined)
+        self.assertIn(NFD, joined)
+
+    def test_grep_argv_carries_both_forms(self):
+        argv = self._captured_argv(NFC, have_rg=False)
+        self.assertEqual("grep", argv[0])
+        joined = " ".join(argv)
+        self.assertIn(NFC, joined)
+        self.assertIn(NFD, joined)
+
+    def test_ascii_argv_is_left_alone_on_both_engines(self):
+        """A pattern with one normal form must reach the engine untouched."""
+        for rg in (True, False):
+            with self.subTest(have_rg=rg):
+                self.assertIn("budget", self._captured_argv("budget", have_rg=rg))
