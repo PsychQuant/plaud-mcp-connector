@@ -12,9 +12,8 @@
      A page about someone else's product that borrows their look reads as theirs. */
   :root {
     --bg: #fbfaf8;  --fg: #1a1a17;  --muted: #5f5d57;  --rule: #e2ded6;
-    /* --rule-strong is the boundary of an interactive control, which WCAG
-       1.4.11 holds to 3:1. --rule stays a hairline: it only ever outlines
-       content boxes whose text carries its own contrast. */
+    /* The language picker is an interactive control, so its boundary is held
+       to WCAG 1.4.11's 3:1 — --rule stays a hairline for content boxes. */
     --rule-strong: #847d72;
     --card: #ffffff; --accent: #1f6f5c; --accent-soft: #e8f2ee;
     --warn-bg: #fdf6e7; --warn-rule: #e8d5a8;
@@ -80,16 +79,6 @@
     margin-top: .8rem; padding-top: .8rem; border-top: 1px solid var(--rule);
   }
 
-  /* ---- install tabs ---- */
-  .tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1.25rem 0 .75rem; }
-  .tabs button {
-    font: inherit; font-size: .86rem; cursor: pointer; color: var(--muted);
-    background: transparent; border: 1px solid var(--rule-strong); border-radius: 100px;
-    padding: .35rem .85rem;
-  }
-  .tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); border-color: var(--fg); }
-  [role="tabpanel"][hidden] { display: none; }
-
   /* ---- notes ---- */
   .note {
     background: var(--warn-bg); border: 1px solid var(--warn-rule);
@@ -97,6 +86,13 @@
   }
   .note p:first-child { margin-top: 0; } .note p:last-child { margin-bottom: 0; }
   ul { padding-left: 1.15rem; } li { margin: .5rem 0; }
+
+  .langpick { display: flex; justify-content: flex-end; gap: .5rem; align-items: center;
+    font-size: .82rem; color: var(--muted); margin-bottom: 1.5rem; }
+  .langpick select {
+    font: inherit; color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--rule-strong); border-radius: 6px; padding: .2rem .4rem;
+  }
 
   footer {
     margin-top: 5rem; padding: 2.5rem 0 4rem; border-top: 1px solid var(--rule);
@@ -108,12 +104,20 @@
 
 <header>
   <div class="wrap">
-    <span class="eyebrow">Independent · not affiliated with Plaud Inc.</span>
-    <h1>Search what was actually&nbsp;said.</h1>
-    <p class="lede">
-      Plaud's official MCP can tell you a recording is called <em>"Weekly sync"</em>.
-      It cannot tell you <strong>which</strong> recording is the one where somebody
-      said <em>"we're pushing the migration to Q3"</em>.
+  <div class="langpick">
+    <label for="lang">Language</label>
+    <select id="lang">
+      <option value="en">English</option>
+      <option value="zh-Hant" lang="zh-Hant">繁體中文</option>
+      <option value="ja" lang="ja">日本語</option>
+    </select>
+  </div>
+    <span class="eyebrow" data-i18n="span1">Independent · not affiliated with Plaud Inc.</span>
+    <h1 data-i18n="hero1">You searched for &ldquo;budget&rdquo;.<br>Nothing came&nbsp;back.</h1>
+    <p class="lede" data-i18n="p1">
+      Not because nobody discussed the budget — because no recording is
+      <em>called</em> &ldquo;budget&rdquo;. Plaud's official MCP matches recording
+      <strong>names</strong>. This plugin matches what was <strong>said</strong>.
     </p>
 <pre><code>/plugin marketplace add PsychQuant/plaud-mcp-connector
 /plugin install plaud-mcp-connector@plaud-mcp-connector</code></pre>
@@ -122,124 +126,97 @@
 
 <main class="wrap">
 
-<h2>The gap this fills</h2>
-<p>
+<h2 data-i18n="h1">Four things you have tried to do</h2>
+<p data-i18n="p2">
   Plaud announced its official MCP server on 6 August 2026; the package itself
   (<code>@plaud-ai/mcp</code>) has been on npm since April. It is good, and this
-  plugin runs it unmodified — this is not a replacement, it contains it. But its
+  plugin runs it unmodified, fetched from npm at launch — this is not a
+  replacement, and nothing of Plaud's is redistributed here. But its
   surface is deliberately narrow.
 </p>
 
 <div class="tablewrap">
 <table>
-  <thead><tr><th></th><th scope="col">Official Plaud MCP</th><th scope="col">With this plugin</th></tr></thead>
+  <thead><tr><th scope="col" data-i18n="th1">What you wanted</th><th scope="col" data-i18n="th2">Official Plaud MCP</th><th scope="col" data-i18n="th3">With this plugin</th></tr></thead>
   <tbody>
     <tr>
-      <th scope="row">Search</th>
-      <td>Matches <strong>recording names only</strong>. In testing the results stopped at roughly the newest 500 recordings — observed, not documented by Plaud, so it may change without notice</td>
-      <td>Full text of every transcript you have indexed</td>
+      <th scope="row" data-i18n="th4">&ldquo;Which meeting was it where we agreed to split the budget?&rdquo;</th>
+      <td data-i18n="td1">Searches recording <strong>names</strong>. Nothing is named &ldquo;budget&rdquo;, so: no results. Plaud states the reach itself — <code>plaud search</code> &ldquo;scans up to 500 most recent recordings&rdquo;</td>
+      <td data-i18n="td2">Finds the sentence: which recording, what time, who said it</td>
     </tr>
     <tr>
-      <th scope="row">Subtitles</th>
-      <td>None — transcript text, no timed cues</td>
-      <td><code>.srt</code> export for video and lecture captions</td>
+      <th scope="row" data-i18n="th5">&ldquo;I need captions for the lecture I recorded.&rdquo;</th>
+      <td data-i18n="td3">Gives you the transcript as text. No timings, so nothing a video editor can use</td>
+      <td data-i18n="td4">A timed <code>.srt</code> you drop straight into the edit</td>
     </tr>
     <tr>
-      <th scope="row">Upload</th>
-      <td>None — all seven tools are read-only</td>
-      <td>Puts a local audio file into your own library</td>
+      <th scope="row" data-i18n="th6">&ldquo;This interview is on my laptop, not my Plaud.&rdquo;</th>
+      <td data-i18n="td5">Read-only. All seven tools read; none write</td>
+      <td data-i18n="td6">Puts the file into your library and lets Plaud transcribe it <em>(macOS)</em></td>
     </tr>
     <tr>
-      <th scope="row">Mishearings</th>
-      <td>What the ASR produced, as-is</td>
-      <td>Optional proofreading pass, stored beside the original</td>
+      <th scope="row" data-i18n="th7">&ldquo;It heard the name wrong every single time.&rdquo;</th>
+      <td data-i18n="td7">You get what the ASR produced, as-is</td>
+      <td data-i18n="td8">A corrected copy beside the original — searchable, and labelled corrected so you never quote it as verbatim</td>
     </tr>
   </tbody>
 </table>
 </div>
 
-<h2>What you actually type</h2>
-<p>Illustrative — the shape of the exchange, not transcripts of a recorded session.</p>
+<h2 data-i18n="h2">Install</h2>
+<p data-i18n="p3">Tell Claude Code: <em>&ldquo;install plaud-mcp-connector&rdquo;</em>. It runs both
+commands, turns on auto-update, and installs the optional pieces only if you ask
+for something that needs them.</p>
 
-<div class="prompt" lang="zh-Hant">
-  <p class="you">哪次會議談到預算拆兩期？</p>
-  <p class="out">── 產品週會 2026-08-01
-   id rec_8f21 · 2026-08-01 · 2 hits
-   │ [00:03:10] 講者一: 那就先把 budget 拆成兩期</p>
-</div>
-
-<div class="prompt">
-  <p class="you">index my Plaud recordings from the last 90 days</p>
-  <p class="out">cached 143 recordings · 1 incomplete (re-fetched next run)
-transcript: 2,914,006 characters indexed</p>
-</div>
-
-<div class="prompt">
-  <p class="you">make subtitles from the Kubernetes migration meeting</p>
-  <p class="out">wrote 412 cues → kubernetes-migration.srt</p>
-</div>
-
-<h2>Install</h2>
-<p>Requires <strong>Node.js 20+</strong> and a Plaud account with Cloud Sync enabled.</p>
-
-<div class="tabs" role="tablist" aria-label="Install target">
-  <button role="tab" aria-selected="true"  aria-controls="p-cc" id="t-cc">Claude Code</button>
-  <button role="tab" aria-selected="false" aria-controls="p-big" id="t-big">Large library</button>
-  <button role="tab" aria-selected="false" aria-controls="p-up" id="t-up">Upload &amp; subtitles</button>
-</div>
-
-<div role="tabpanel" id="p-cc" aria-labelledby="t-cc">
 <pre><code>/plugin marketplace add PsychQuant/plaud-mcp-connector
 /plugin install plaud-mcp-connector@plaud-mcp-connector</code></pre>
-<p>Then authorise once — ask Claude to <em>“log me into Plaud”</em>. Both commands
-above were run end to end against a clean install; they are tested, not assumed.</p>
+
+<div class="note">
+  <p data-i18n="p4"><strong>Auto-update does not come on by itself.</strong> Claude Code ships
+  third-party marketplaces with auto-update <em>disabled</em>, so an install left
+  alone stays on the version it was installed at — including versions with the
+  search bugs we have since fixed. Ask Claude to enable it, or do it yourself:
+  <code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update.</p>
 </div>
 
-<div role="tabpanel" id="p-big" aria-labelledby="t-big">
-<pre><code>npm install -g @plaud-ai/cli
-plaud login</code></pre>
-<p>With the CLI installed, indexing writes transcripts straight to disk instead of
-reading every one through the model context — the difference between a few minutes
-and a very expensive afternoon on a library of hundreds. The CLI keeps its own
-login, separate from the MCP's.</p>
-</div>
+<p data-i18n="p5">Optional, and only when you need it: the official <code>@plaud-ai/cli</code> keeps
+transcripts out of the model context on libraries of hundreds, and <code>ffmpeg</code>
+is for uploading. Ask Claude and it installs them. A Plaud account with Cloud Sync is
+the one thing nobody can install for you.</p>
 
-<div role="tabpanel" id="p-up" aria-labelledby="t-up">
-<pre><code># macOS only — upload drives Safari
-brew install ffmpeg</code></pre>
-<p>Subtitle export needs nothing extra: it reads the local cache. Upload is browser
-automation against the Plaud web app and works on macOS only.</p>
-</div>
-
-<h2>When not to install this</h2>
+<h2 data-i18n="h3">You want this if&hellip;</h2>
 <ul>
-  <li><strong>You only have a handful of recordings.</strong> The official plugin's
-    name search is enough; indexing buys you nothing.</li>
-  <li><strong>You want upload but aren't on macOS.</strong> The upload path drives
-    Safari through AppleScript. There is no Linux or Windows equivalent, and none
-    is planned.</li>
-  <li><strong>You want a hosted service.</strong> Everything here runs on your
-    machine, against your own account.</li>
+  <li data-i18n="li1"><strong>You have more recordings than you can remember.</strong> The moment you
+    think &ldquo;someone definitely said that&rdquo; and cannot place which recording,
+    name search has already failed you.</li>
+  <li data-i18n="li2"><strong>You put recordings into video.</strong> Lectures, talks, interviews —
+    anything that needs captions rather than a wall of text.</li>
+  <li data-i18n="li3"><strong>Your recordings are full of words the ASR has never met.</strong>
+    People's names, product names, jargon. Searching for them finds nothing, because
+    they were never transcribed correctly in the first place.</li>
 </ul>
 
-<h2>Limits, stated plainly</h2>
+<h2 data-i18n="h4">Limits, stated plainly</h2>
 <ul>
-  <li><strong>Search covers what you indexed.</strong> A recording made after your
+  <li data-i18n="li4"><strong>Search covers what you indexed.</strong> A recording made after your
     last index run is not searchable. The tool reports the covered range instead of
     answering “not found”.</li>
-  <li><strong>Completeness is tracked, not assumed.</strong> A recording whose fetch
+  <li data-i18n="li5"><strong>Completeness is tracked, not assumed.</strong> A recording whose fetch
     was cut short is marked incomplete, re-fetched next run, and flagged in results.
     This exists because v0.1.0 silently kept only each transcript's first page and
     reported “no match” for words that were spoken.</li>
-  <li><strong>Upload is browser automation, not an API.</strong> It works today and
-    will break the day Plaud redesigns its import dialog.</li>
-  <li><strong>Proofreading has no accuracy figure.</strong> Without a ground-truth
+  <li data-i18n="li6"><strong>Upload is macOS-only, and it is browser automation, not an API.</strong>
+    It drives Safari through AppleScript; there is no Linux or Windows equivalent and
+    none is planned. It works today and will break the day Plaud redesigns its import
+    dialog. Neither the official MCP nor the official CLI has any upload command —
+    this is the only path that exists.</li>
+  <li data-i18n="li7"><strong>Proofreading has no accuracy figure.</strong> Without a ground-truth
     transcript there is nothing to measure against. You will notice you can find
     things; nobody can give you a number.</li>
 </ul>
 
 <div class="note">
-  <p><strong>Your recordings stay yours.</strong> Transcripts are cached on your own
+  <p data-i18n="p6"><strong>Your recordings stay yours.</strong> Transcripts are cached on your own
   machine and are never committed, uploaded, or sent anywhere except to the model
   answering your question. Credentials live in your OAuth token store or the macOS
   Keychain.</p>
@@ -249,58 +226,186 @@ automation against the Plaud web app and works on macOS only.</p>
 
 <footer>
   <div class="wrap">
-    <p>
+    <p data-i18n="p7">
       <strong>plaud-mcp-connector</strong> is an independent, community-built plugin.
       It is <strong>not affiliated with, endorsed by, or supported by Plaud Inc.</strong>
       “Plaud” is used only to say what this works with.
     </p>
-    <p>
+    <p data-i18n="p8">
       Problems with this plugin belong in
       <a href="https://github.com/PsychQuant/plaud-mcp-connector/issues">the plaud-mcp-connector issue tracker</a>,
       not with Plaud support. For Plaud's own integration see
       <a href="https://docs.plaud.ai/plaud-mcp-cli/mcp">docs.plaud.ai</a>.
     </p>
-    <p>
+    <p data-i18n="p9">
       <a href="https://github.com/PsychQuant/plaud-mcp-connector">Source on GitHub</a> ·
       MIT licensed
     </p>
   </div>
 </footer>
 
+
+
 <script>
-  // Tabs, unenhanced-friendly: every panel is visible until this runs, so the
-  // page still says everything with JS disabled.
-  const tabs = [...document.querySelectorAll('[role="tab"]')];
-  const show = (id) => {
-    tabs.forEach((t) => {
-      const selected = t.id === id;
-      t.setAttribute('aria-selected', String(selected));
-      // Roving tabindex: only the selected tab is in the Tab order, so Tab
-      // moves past the whole group rather than through every option.
-      t.tabIndex = selected ? 0 : -1;
-      document.getElementById(t.getAttribute('aria-controls')).hidden = !selected;
-    });
+  // All languages live in this file. The CSP is `default-src 'none'`, which
+  // grants no fetch of any kind — a JSON sidecar per language would be blocked,
+  // so a single self-contained page is not a style choice here, it is the only
+  // shape that works.
+  const I18N = {
+  "en": {
+    "span1": "Independent · not affiliated with Plaud Inc.",
+    "hero1": "You searched for &ldquo;budget&rdquo;.<br>Nothing came&nbsp;back.",
+    "p1": "Not because nobody discussed the budget — because no recording is\n      <em>called</em> &ldquo;budget&rdquo;. Plaud's official MCP matches recording\n      <strong>names</strong>. This plugin matches what was <strong>said</strong>.",
+    "h1": "Four things you have tried to do",
+    "p2": "Plaud announced its official MCP server on 6 August 2026; the package itself\n  (<code>@plaud-ai/mcp</code>) has been on npm since April. It is good, and this\n  plugin runs it unmodified, fetched from npm at launch — this is not a\n  replacement, and nothing of Plaud's is redistributed here. But its\n  surface is deliberately narrow.",
+    "th1": "What you wanted",
+    "th2": "Official Plaud MCP",
+    "th3": "With this plugin",
+    "th4": "&ldquo;Which meeting was it where we agreed to split the budget?&rdquo;",
+    "td1": "Searches recording <strong>names</strong>. Nothing is named &ldquo;budget&rdquo;, so: no results. Plaud states the reach itself — <code>plaud search</code> &ldquo;scans up to 500 most recent recordings&rdquo;",
+    "td2": "Finds the sentence: which recording, what time, who said it",
+    "th5": "&ldquo;I need captions for the lecture I recorded.&rdquo;",
+    "td3": "Gives you the transcript as text. No timings, so nothing a video editor can use",
+    "td4": "A timed <code>.srt</code> you drop straight into the edit",
+    "th6": "&ldquo;This interview is on my laptop, not my Plaud.&rdquo;",
+    "td5": "Read-only. All seven tools read; none write",
+    "td6": "Puts the file into your library and lets Plaud transcribe it <em>(macOS)</em>",
+    "th7": "&ldquo;It heard the name wrong every single time.&rdquo;",
+    "td7": "You get what the ASR produced, as-is",
+    "td8": "A corrected copy beside the original — searchable, and labelled corrected so you never quote it as verbatim",
+    "h2": "Install",
+    "p3": "Tell Claude Code: <em>&ldquo;install plaud-mcp-connector&rdquo;</em>. It runs both\ncommands, turns on auto-update, and installs the optional pieces only if you ask\nfor something that needs them.",
+    "p4": "<strong>Auto-update does not come on by itself.</strong> Claude Code ships\n  third-party marketplaces with auto-update <em>disabled</em>, so an install left\n  alone stays on the version it was installed at — including versions with the\n  search bugs we have since fixed. Ask Claude to enable it, or do it yourself:\n  <code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update.",
+    "p5": "Optional, and only when you need it: the official <code>@plaud-ai/cli</code> keeps\ntranscripts out of the model context on libraries of hundreds, and <code>ffmpeg</code>\nis for uploading. Ask Claude and it installs them. A Plaud account with Cloud Sync is\nthe one thing nobody can install for you.",
+    "h3": "You want this if&hellip;",
+    "li1": "<strong>You have more recordings than you can remember.</strong> The moment you\n    think &ldquo;someone definitely said that&rdquo; and cannot place which recording,\n    name search has already failed you.",
+    "li2": "<strong>You put recordings into video.</strong> Lectures, talks, interviews —\n    anything that needs captions rather than a wall of text.",
+    "li3": "<strong>Your recordings are full of words the ASR has never met.</strong>\n    People's names, product names, jargon. Searching for them finds nothing, because\n    they were never transcribed correctly in the first place.",
+    "h4": "Limits, stated plainly",
+    "li4": "<strong>Search covers what you indexed.</strong> A recording made after your\n    last index run is not searchable. The tool reports the covered range instead of\n    answering “not found”.",
+    "li5": "<strong>Completeness is tracked, not assumed.</strong> A recording whose fetch\n    was cut short is marked incomplete, re-fetched next run, and flagged in results.\n    This exists because v0.1.0 silently kept only each transcript's first page and\n    reported “no match” for words that were spoken.",
+    "li6": "<strong>Upload is macOS-only, and it is browser automation, not an API.</strong>\n    It drives Safari through AppleScript; there is no Linux or Windows equivalent and\n    none is planned. It works today and will break the day Plaud redesigns its import\n    dialog. Neither the official MCP nor the official CLI has any upload command —\n    this is the only path that exists.",
+    "li7": "<strong>Proofreading has no accuracy figure.</strong> Without a ground-truth\n    transcript there is nothing to measure against. You will notice you can find\n    things; nobody can give you a number.",
+    "p6": "<strong>Your recordings stay yours.</strong> Transcripts are cached on your own\n  machine and are never committed, uploaded, or sent anywhere except to the model\n  answering your question. Credentials live in your OAuth token store or the macOS\n  Keychain.",
+    "p7": "<strong>plaud-mcp-connector</strong> is an independent, community-built plugin.\n      It is <strong>not affiliated with, endorsed by, or supported by Plaud Inc.</strong>\n      “Plaud” is used only to say what this works with.",
+    "p8": "Problems with this plugin belong in\n      <a href=\"https://github.com/PsychQuant/plaud-mcp-connector/issues\">the plaud-mcp-connector issue tracker</a>,\n      not with Plaud support. For Plaud's own integration see\n      <a href=\"https://docs.plaud.ai/plaud-mcp-cli/mcp\">docs.plaud.ai</a>.",
+    "p9": "<a href=\"https://github.com/PsychQuant/plaud-mcp-connector\">Source on GitHub</a> ·\n      MIT licensed"
+  }
+  ,
+  "zh-Hant": {
+    "span1": "獨立專案 · 與 Plaud Inc. 無關",
+    "hero1": "你搜尋「預算」。<br>什麼都沒有。",
+    "p1": "不是因為沒人談過預算 —— 是因為<em>沒有一個錄音叫「預算」</em>。官方 Plaud MCP 比對的是錄音<strong>檔名</strong>。這個 plugin 比對的是<strong>說過的話</strong>。",
+    "h1": "你試過、然後失敗的四件事",
+    "p2": "Plaud 於 2026 年 8 月 6 日發表官方 MCP 伺服器；套件本身（<code>@plaud-ai/mcp</code>）四月就在 npm 上。它很好，而這個 plugin 原封不動地執行它 —— 執行時從 npm 取得，不是取代它，也沒有轉散布 Plaud 的任何東西。只是它的介面刻意做得很窄。",
+    "th1": "你想做的事",
+    "th2": "官方 Plaud MCP",
+    "th3": "加上這個 plugin",
+    "th4": "「哪次會議談到把預算拆成兩期？」",
+    "td1": "比對錄音<strong>檔名</strong>。沒有東西叫「預算」，所以：零結果。範圍也是 Plaud 自己寫的 —— <code>plaud search</code>「掃描最新的 500 筆錄音」",
+    "td2": "找到那句話：哪筆錄音、幾分幾秒、誰說的",
+    "th5": "「我要幫錄下來的講座上字幕。」",
+    "td3": "給你純文字逐字稿。沒有時間軸，剪輯軟體用不了",
+    "td4": "帶時間軸的 <code>.srt</code>，直接丟進剪輯",
+    "th6": "「這段訪談在我筆電裡，不在 Plaud 上。」",
+    "td5": "唯讀。七個工具全部只讀，沒有一個會寫",
+    "td6": "把檔案放進你的圖書館，讓 Plaud 轉錄 <em>（僅 macOS）</em>",
+    "th7": "「那個名字它每一次都聽錯。」",
+    "td7": "ASR 產出什麼就是什麼",
+    "td8": "校對副本與原文並存 —— 可搜尋，且標示為已校對，你不會誤把它當逐字原話引用",
+    "h2": "安裝",
+    "p3": "對 Claude Code 說：<em>「幫我裝 plaud-mcp-connector」</em>。它會跑完兩條指令、打開自動更新，並且只在你真的需要時才裝選配的部分。",
+    "p4": "<strong>自動更新不會自己打開。</strong>Claude Code 對第三方 marketplace 預設<em>關閉</em>自動更新，所以裝完放著不管的話，你會一直停在安裝當下的版本 —— 包括那些搜尋有 bug、後來才修掉的版本。請 Claude 幫你打開，或自己來：<code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update。",
+    "p5": "選配，只在你需要時才裝：官方的 <code>@plaud-ai/cli</code> 讓數百筆錄音的逐字稿不必經過 model context；<code>ffmpeg</code> 是上傳用的。跟 Claude 說一聲它就會裝。唯一沒人能幫你裝的，是一個開了 Cloud Sync 的 Plaud 帳號。",
+    "h3": "你會想要它，如果……",
+    "li1": "<strong>你的錄音多到自己記不住。</strong>當你心想「一定有人講過那句話」卻想不起是哪一筆的那一刻，檔名搜尋就已經幫不上忙了。",
+    "li2": "<strong>你會把錄音放進影片。</strong>講座、演講、訪談 —— 任何需要字幕而不是一整面文字的東西。",
+    "li3": "<strong>你的錄音裡全是 ASR 沒見過的詞。</strong>人名、產品名、行話。搜尋它們找不到，因為它們一開始就沒有被正確轉錄。",
+    "h4": "限制，直說",
+    "li4": "<strong>搜尋只涵蓋你索引過的內容。</strong>上一次索引之後才錄的東西搜不到。工具會回報涵蓋的範圍，而不是回答「找不到」。",
+    "li5": "<strong>完整性是被追蹤的，不是被假設的。</strong>抓到一半被中斷的錄音會標記為不完整、下次索引重抓，並在結果中標示。這個機制存在，是因為 v0.1.0 曾經只保留每份逐字稿的第一頁，然後對說過的話回報「找不到」。",
+    "li6": "<strong>上傳僅限 macOS，而且是瀏覽器自動化不是 API。</strong>它透過 AppleScript 驅動 Safari；沒有 Linux 或 Windows 的對應版本，也沒有計畫要做。它今天能用，而 Plaud 改版 import 對話框的那天它就會壞。官方 MCP 與官方 CLI 都沒有任何上傳指令 —— 這是唯一存在的路徑。",
+    "li7": "<strong>校對沒有準確率數字。</strong>沒有 ground truth 就沒有東西可以量。你會發現東西找得到了；但沒有人能給你一個數字。",
+    "p6": "<strong>你的錄音仍然是你的。</strong>逐字稿快取在你自己的機器上，永遠不會被 commit、上傳或送到任何地方 —— 除了回答你問題的那個模型。憑證存在你的 OAuth token store 或 macOS Keychain。",
+    "p7": "<strong>plaud-mcp-connector</strong> 是一個獨立的、社群做的 plugin。它<strong>與 Plaud Inc. 無關，未經其背書，也不受其支援</strong>。使用「Plaud」一詞只是為了說明它能跟什麼搭配。",
+    "p8": "這個 plugin 的問題請到 <a href=\"https://github.com/PsychQuant/plaud-mcp-connector/issues\">plaud-mcp-connector 的 issue tracker</a>，不要找 Plaud 支援。Plaud 自己的整合請見 <a href=\"https://docs.plaud.ai/plaud-mcp-cli/mcp\">docs.plaud.ai</a>。",
+    "p9": "<a href=\"https://github.com/PsychQuant/plaud-mcp-connector\">GitHub 原始碼</a> · MIT 授權"
+  }
+  ,
+  "ja": {
+    "span1": "独立プロジェクト · Plaud Inc. とは提携していません",
+    "hero1": "「予算」で検索した。<br>何も出てこなかった。",
+    "p1": "誰も予算の話をしなかったからではありません —— <em>「予算」という名前の録音がない</em>からです。公式 Plaud MCP が照合するのは録音の<strong>名前</strong>。このプラグインが照合するのは<strong>話された内容</strong>です。",
+    "h1": "あなたが試して、できなかった四つのこと",
+    "p2": "Plaud は 2026 年 8 月 6 日に公式 MCP サーバーを発表しました。パッケージ自体（<code>@plaud-ai/mcp</code>）は 4 月から npm にあります。良いものですし、このプラグインはそれをそのまま実行します —— 起動時に npm から取得するだけで、置き換えでもなく、Plaud のものを再配布してもいません。ただ、その範囲は意図的に狭いのです。",
+    "th1": "やりたかったこと",
+    "th2": "公式 Plaud MCP",
+    "th3": "このプラグインを入れると",
+    "th4": "「予算を二期に分けると決めたのはどの会議だったか」",
+    "td1": "録音の<strong>名前</strong>を検索します。「予算」という名前のものはないので、結果はゼロ。その範囲は Plaud 自身が明記しています —— <code>plaud search</code>「直近 500 件の録音を走査」",
+    "td2": "その一文を見つけます：どの録音の、何分何秒で、誰が言ったか",
+    "th5": "「録画した講義に字幕を付けたい」",
+    "td3": "文字起こしをテキストで返します。タイムコードがないので動画編集では使えません",
+    "td4": "編集にそのまま入れられる、時間付きの <code>.srt</code>",
+    "th6": "「このインタビューはノート PC の中で、Plaud にはない」",
+    "td5": "読み取り専用。七つのツールはすべて読むだけで、書き込むものはありません",
+    "td6": "ファイルをライブラリに入れ、Plaud に文字起こしさせます <em>（macOS のみ）</em>",
+    "th7": "「あの名前を毎回聞き間違えている」",
+    "td7": "ASR が出したものがそのまま返ります",
+    "td8": "修正版が原文と並んで残ります —— 検索でき、修正済みと明示されるので、逐語の引用と取り違えることがありません",
+    "h2": "インストール",
+    "p3": "Claude Code にこう言うだけです：<em>「plaud-mcp-connector を入れて」</em>。両方のコマンドを実行し、自動更新を有効にし、必要になったときだけ任意の追加分を入れます。",
+    "p4": "<strong>自動更新は勝手には有効になりません。</strong>Claude Code はサードパーティのマーケットプレイスの自動更新を既定で<em>無効</em>にします。放っておくとインストール時のバージョンのまま —— 検索に不具合があり、その後修正されたバージョンも含めて —— 留まります。Claude に頼むか、自分で：<code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update。",
+    "p5": "任意、必要なときだけ：公式の <code>@plaud-ai/cli</code> は数百件規模のライブラリで文字起こしをモデルのコンテキストの外に保ちます。<code>ffmpeg</code> はアップロード用です。Claude に言えば入れてくれます。誰も代わりに用意できないのは、Cloud Sync を有効にした Plaud アカウントだけです。",
+    "h3": "こういう人に向いています",
+    "li1": "<strong>録音が多すぎて覚えていられない。</strong>「誰かが確かにそう言った」と思うのに、それがどの録音か思い出せない —— その時点で、名前の検索はもう役に立っていません。",
+    "li2": "<strong>録音を動画にする。</strong>講義、講演、インタビュー —— 文字の壁ではなく字幕が要るもの。",
+    "li3": "<strong>録音が ASR の知らない語だらけ。</strong>人名、製品名、専門用語。検索しても出てこないのは、そもそも正しく文字起こしされていないからです。",
+    "h4": "限界を、正直に",
+    "li4": "<strong>検索が及ぶのはインデックスした範囲だけ。</strong>前回のインデックス以降に録ったものは検索できません。ツールは「見つかりません」ではなく、対象範囲を報告します。",
+    "li5": "<strong>完全性は追跡されるもので、前提ではありません。</strong>途中で切れた取得は不完全と記録され、次回に再取得され、結果にも表示されます。この仕組みがあるのは、v0.1.0 が各文字起こしの最初のページだけを黙って保存し、話された言葉に対して「一致なし」と答えていたからです。",
+    "li6": "<strong>アップロードは macOS 限定で、API ではなくブラウザ自動化です。</strong>AppleScript で Safari を操作します。Linux や Windows 版はなく、予定もありません。今は動きますが、Plaud が取り込みダイアログを作り直した日に壊れます。公式 MCP にも公式 CLI にもアップロードのコマンドはありません —— これが存在する唯一の経路です。",
+    "li7": "<strong>校正に精度の数字はありません。</strong>正解となる文字起こしがなければ、測る対象がありません。見つかるようになったことは分かりますが、数字を出せる人はいません。",
+    "p6": "<strong>あなたの録音はあなたのものです。</strong>文字起こしはあなた自身のマシンにキャッシュされ、コミットも、アップロードも、どこかへの送信もされません —— あなたの質問に答えるモデル以外には。認証情報は OAuth トークンストアか macOS キーチェーンにあります。",
+    "p7": "<strong>plaud-mcp-connector</strong> は独立した、コミュニティ製のプラグインです。<strong>Plaud Inc. とは提携しておらず、承認も、サポートも受けていません</strong>。「Plaud」の名は、何と組み合わせて使うものかを述べるためだけに使っています。",
+    "p8": "このプラグインの問題は <a href=\"https://github.com/PsychQuant/plaud-mcp-connector/issues\">plaud-mcp-connector の issue tracker</a> へ。Plaud のサポートではありません。Plaud 自身の連携については <a href=\"https://docs.plaud.ai/plaud-mcp-cli/mcp\">docs.plaud.ai</a> をご覧ください。",
+    "p9": "<a href=\"https://github.com/PsychQuant/plaud-mcp-connector\">GitHub のソース</a> · MIT ライセンス"
+  }
   };
-  tabs.forEach((t) => t.addEventListener('click', () => show(t.id)));
 
-  // role="tab" tells assistive tech that arrow keys move between the tabs.
-  // Announcing that contract and then not honouring it is worse than never
-  // claiming the role: it is a promise made only to the users who rely on it.
-  const KEYS = { ArrowLeft: -1, ArrowRight: 1 };
-  document.querySelector('[role="tablist"]').addEventListener('keydown', (e) => {
-    const from = tabs.indexOf(document.activeElement);
-    if (from === -1) return;
-    let to;
-    if (e.key in KEYS) to = (from + KEYS[e.key] + tabs.length) % tabs.length;
-    else if (e.key === 'Home') to = 0;
-    else if (e.key === 'End') to = tabs.length - 1;
-    else return;
-    e.preventDefault();
-    show(tabs[to].id);
-    tabs[to].focus();
-  });
+  const NAMES = { "en": "English", "zh-Hant": "繁體中文", "ja": "日本語" };
+  const apply = (lang) => {
+    const table = I18N[lang] || I18N.en;
+    document.querySelectorAll("[data-i18n]").forEach((el) => {
+      const v = table[el.dataset.i18n];
+      if (v !== undefined) el.innerHTML = v;
+    });
+    // Update the document language too: a screen reader reads Japanese with
+    // English pronunciation rules otherwise, which is the same defect the
+    // gate checks for in the static markup.
+    document.documentElement.lang = lang;
+    document.getElementById("lang").value = lang;
+    try { localStorage.setItem("plaud-lang", lang); } catch (e) { /* private mode */ }
+  };
 
-  show('t-cc');   // collapse to the first tab only once JS is available
+  // Stored choice wins over the browser's guess — someone who picked a language
+  // has told you more than Accept-Language ever will.
+  let initial = null;
+  try { initial = localStorage.getItem("plaud-lang"); } catch (e) { /* ignore */ }
+  if (!initial || !I18N[initial]) {
+    const want = (navigator.languages || [navigator.language || "en"]);
+    initial = "en";
+    for (const tag of want) {
+      const t = tag.toLowerCase();
+      // zh-TW / zh-HK / zh-MO are the Chinese locales Plaud itself localises
+      // for; it publishes no simplified-Chinese locale at all.
+      if (t.startsWith("zh")) { initial = "zh-Hant"; break; }
+      if (t.startsWith("ja")) { initial = "ja"; break; }
+      if (t.startsWith("en")) { initial = "en"; break; }
+    }
+  }
+  document.getElementById("lang").addEventListener("change", (e) => apply(e.target.value));
+  apply(initial);
 </script>
 
 </body>

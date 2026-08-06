@@ -562,7 +562,10 @@ def _i18n_tables(source: str) -> dict[str, dict[str, str]]:
     Parsed rather than imported because the page must stay a single file with no
     build step; a JSON sidecar would be a fetch, and the CSP grants none.
     """
-    block = re.search(r"const\s+I18N\s*=\s*\{(.*?)\n\};", source, re.DOTALL)
+    # `\n};` would require the closing brace at column zero. The real page
+    # indents it, so that pattern parsed zero languages — and an empty table
+    # makes every downstream check a no-op, which reads exactly like passing.
+    block = re.search(r"const\s+I18N\s*=\s*\{(.*?)\n\s*\};", source, re.DOTALL)
     if block is None:
         return {}
     tables: dict[str, dict[str, str]] = {}
@@ -595,10 +598,18 @@ def check_i18n_completeness(source: str) -> list[Finding]:
     and the reader cannot tell which.
     """
     tables = _i18n_tables(source)
+    used = _markup_keys(source)
     if not tables:
+        # No table AND no hooks = a single-language page, nothing to check.
+        # Hooks with no readable table = the gate cannot see what it is meant to
+        # check, and saying nothing would be indistinguishable from approval.
+        if used:
+            return [Finding("i18n-completeness", "error",
+                            f"{len(used)} data-i18n hooks are rendered but the I18N table "
+                            f"could not be parsed — the multi-language checks would all "
+                            f"no-op, reporting success on a page they never read")]
         return []
     found = []
-    used = _markup_keys(source)
     all_keys = set().union(*(set(t) for t in tables.values()))
 
     for key in sorted(used - all_keys):

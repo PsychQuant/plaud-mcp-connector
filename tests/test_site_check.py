@@ -670,3 +670,35 @@ class TestControlBorderToken(unittest.TestCase):
 
     def test_page_without_a_switcher_passes(self):
         self.assertEqual([], site_check.check_control_border_token("<p>no controls</p>"))
+
+
+class TestI18nTableMustBeParseable(unittest.TestCase):
+    """The gate reading nothing must not look like the gate passing.
+
+    The real page indents its closing brace (`  };`), and the parser required a
+    column-zero `};`. It therefore parsed **zero languages** — and every
+    completeness check no-ops on an empty table, so the whole multi-language
+    gate reported success on a page it had never read. Silence and success are
+    not the same result, and the checks cannot tell them apart on their own.
+    """
+
+    MARKUP = '<p data-i18n="k">x</p><select id="lang"><option value="en">E</option></select>'
+
+    def test_indented_closing_brace_is_parsed(self):
+        src = self.MARKUP + '<script>\n  const I18N = {\n    "en": {"k": "not affiliated"}\n  };\n</script>'
+        self.assertEqual({"en": {"k": "not affiliated"}}, site_check._i18n_tables(src))
+
+    def test_column_zero_closing_brace_still_parsed(self):
+        src = self.MARKUP + '<script>\nconst I18N = {\n  "en": {"k": "not affiliated"}\n};\n</script>'
+        self.assertEqual({"en": {"k": "not affiliated"}}, site_check._i18n_tables(src))
+
+    def test_data_i18n_without_a_parseable_table_is_an_error(self):
+        """A page that renders data-i18n and has no readable dictionary is broken.
+        Reporting nothing would be the gate hiding its own blindness."""
+        found = site_check.check_i18n_completeness(self.MARKUP + "<script>var x = 1;</script>")
+        self.assertIn("i18n-completeness", ids(found))
+        self.assertTrue(any("could not be parsed" in f.message or "no I18N" in f.message
+                            for f in found), [f.message for f in found])
+
+    def test_page_with_neither_is_still_a_no_op(self):
+        self.assertEqual([], site_check.check_i18n_completeness("<p>plain single-language page</p>"))
