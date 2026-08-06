@@ -59,13 +59,19 @@
   .tablewrap { overflow-x: auto; }
 
   /* ---- prompt examples ---- */
+  /* The divider runs between the two halves, not down one side: it separates
+     what you typed from what came back, which is what the block is about.
+     A coloured bar on the left edge would only be decoration. */
   .prompt {
-    background: var(--card); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
-    border-radius: 0 10px 10px 0; padding: 1rem 1.15rem; margin: 1rem 0;
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 10px; padding: 1rem 1.15rem; margin: 1rem 0;
   }
   .prompt p { margin: 0; }
   .prompt .you { font-weight: 600; }
-  .prompt .out { color: var(--muted); font-size: .9rem; margin-top: .55rem; font-family: var(--mono); white-space: pre-wrap; }
+  .prompt .out {
+    color: var(--muted); font-size: .9rem; font-family: var(--mono); white-space: pre-wrap;
+    margin-top: .8rem; padding-top: .8rem; border-top: 1px solid var(--rule);
+  }
 
   /* ---- install tabs ---- */
   .tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1.25rem 0 .75rem; }
