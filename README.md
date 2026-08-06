@@ -48,6 +48,12 @@ tool directly. It opens a browser for OAuth and stores the token in
 Requirements: **Node.js ≥ 20**, a Plaud account with Cloud Sync (PCS) enabled,
 and — for uploads only — macOS with Safari.
 
+**Strongly recommended for large libraries**: `npm install -g @plaud-ai/cli`.
+With the CLI present, `plaud-index` writes transcripts straight to disk instead of
+reading every one through the model context — the difference between a few minutes
+and a very expensive afternoon on a library of hundreds. Note the CLI keeps its own
+login (`plaud login`), separate from the MCP's.
+
 > Already ran Plaud's own installer? You do not need both. This plugin declares
 > the same `@plaud-ai/mcp` package itself, so a second registration just means a
 > second server process sharing the same token file.

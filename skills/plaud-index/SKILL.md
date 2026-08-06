@@ -82,6 +82,52 @@ Re-fetching N recordings that were cached without a completeness marker
 (≈N get_transcript calls). Ctrl-C now if you would rather not.
 ```
 
+#### Prefer the CLI when it is installed — it keeps transcripts out of the context
+
+`get_transcript` returns the text **through the model**. Every page of every
+recording is read into context on the way to disk, which is what makes a large
+first index slow and expensive — and the whole point of this plugin is searching a
+large library.
+
+The official CLI writes straight to a file, so the text never enters context:
+
+```bash
+# Once per session, before using this path: does the CLI paginate too?
+plaud transcript --help
+```
+
+The docs give `plaud transcript <id>` exactly two forms — bare, and `-o <file>` —
+with **no cursor, page, or limit flag**, while `plaud files` and `plaud search` do
+document theirs (`-p/--page`, `--max`). Paging is spelled out where it exists, so
+its absence here reads as "one call returns the whole transcript". **That is an
+inference from silence, not a guarantee** — hence checking `--help` first. If it
+does list a paging flag, this fast path is unsafe: use the MCP loop below instead.
+
+```bash
+tmp=$(mktemp)
+plaud transcript "<id>" -o "$tmp"          # never touches the model context
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put \
+  --id "<id>" --name "<name>" --created-at "<created_at>" --duration "<duration>" \
+  --complete true --pages 1 --last-cursor "" < "$tmp"
+rm -f "$tmp"
+```
+
+`--complete true` here rests on the CLI fetching everything. If a recording indexed
+this way later looks truncated, that assumption is where to look first.
+
+**The CLI and the MCP hold separate logins.** Tokens live in `~/.plaud/tokens.json`
+and `~/.plaud/tokens-mcp.json` respectively, so `plaud login` and the MCP's `login`
+tool are two different acts. "The MCP works but the CLI says unauthorised" is this,
+not a bug — run `plaud login`.
+
+Not installed? Say so once and use the MCP loop:
+
+```
+plaud CLI not found — indexing through the MCP instead, which pulls every
+transcript through the model context. `npm install -g @plaud-ai/cli` makes
+large libraries much cheaper to index.
+```
+
 #### `get_transcript` is paginated — one call is not the whole transcript
 
 It returns **one page of utterances** with a `next_cursor` for the rest. Calling
