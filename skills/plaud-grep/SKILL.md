@@ -61,6 +61,20 @@ transcript is ambiguous, say so rather than smoothing it over — ASR output
 contains mishearings, and a confident paraphrase of a misheard line is worse than
 a hedged quote.
 
+## When a hit is marked `⚠ partially indexed`
+
+A recording can be cached without being cached *completely* — the fetch loop hit
+its page cap or was interrupted. Those hits carry:
+
+```
+⚠ partially indexed — more transcript may exist; re-run plaud-index
+```
+
+Treat the result as a floor, not a total. Say the recording is only partly
+indexed and suggest re-running `plaud-index` before drawing conclusions from it.
+This is not the same as "(unnamed)", which means the manifest lost the entry —
+different cause, different fix.
+
 ## When there are no matches
 
 Empty results are ambiguous. Distinguish:
@@ -71,7 +85,9 @@ Empty results are ambiguous. Distinguish:
   Say this explicitly instead of reporting "not found".
 - **Genuinely absent** → the term really was not spoken (or ASR heard it
   differently — suggest a looser pattern, e.g. a distinctive substring or an
-  alternation with likely mishearings).
+  alternation with likely mishearings). **Check `cache.py status` for an
+  `incomplete:` count first** — you cannot conclude "never said" while any
+  recording in the relevant period is only partly indexed.
 
 Never report "no such recording" when the real cause is an unindexed cache.
 

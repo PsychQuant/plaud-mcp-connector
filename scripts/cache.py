@@ -56,14 +56,47 @@ def _safe_id(rec_id: str) -> str:
     return rec_id
 
 
+def _is_cursor_exhausted(raw) -> bool:
+    """Is this `next_cursor` value the API's way of saying 'no more pages'?
+
+    This exists because `complete` would otherwise rest entirely on a judgement
+    the indexing skill makes at runtime — "does this cursor look empty?" — which
+    no test can reach. Putting the rule here makes it a testable function with
+    one definition, so a caller claiming `--complete true` can be checked rather
+    than believed.
+
+    Treated as exhausted: None, "", whitespace, and the literal strings "null" /
+    "none" / "undefined" (JSON serialisers and string coercion produce these).
+    Anything else is a real cursor, however odd it looks — "0" and "false" are
+    valid opaque cursors and must NOT be read as terminators.
+    """
+    if raw is None:
+        return True
+    text = str(raw).strip()
+    return text == "" or text.lower() in {"null", "none", "undefined"}
+
+
+def _is_complete(rec: dict) -> bool:
+    """A record with no `complete` key was written before paging existed, so its
+    transcript may stop at the first page. Absent means incomplete — the opposite
+    default to `cmd_put`, where absence means an old caller we still trust."""
+    return rec.get("complete", False) is True
+
+
 def cmd_status(args) -> None:
     man = _load_manifest()
     recs = man["recordings"]
+    incomplete = [k for k, v in recs.items() if not _is_complete(v)]
     if args.ids_only:
-        print("\n".join(sorted(recs)))
+        # Only fully-fetched ids count as "already cached". Anything partial is
+        # omitted so the indexer's diff picks it back up — that is the whole
+        # re-fetch mechanism, no --rebuild flag needed.
+        print("\n".join(sorted(k for k, v in recs.items() if _is_complete(v))))
         return
     print(f"cache dir : {CACHE_DIR}")
     print(f"cached    : {len(recs)} recordings")
+    if incomplete:
+        print(f"incomplete: {len(incomplete)} (will be re-fetched on the next plaud-index run)")
     if recs:
         dates = sorted(r.get("created_at", "") for r in recs.values() if r.get("created_at"))
         if dates:
@@ -78,6 +111,32 @@ def cmd_put(args) -> None:
     if not body.strip():
         sys.exit(f"error: empty transcript body for {rec_id} — refusing to cache a blank entry")
 
+    # getattr, not args.complete: callers that build an argparse.Namespace by hand
+    # (the test helpers do) never go through parse_args, so argparse defaults are
+    # absent on the object. Reading the attribute directly would AttributeError.
+    #
+    # Absence here means "an older caller that predates paging" → trust it as
+    # complete. That is NOT the same as a manifest record with no `complete` key,
+    # which means "written before paging existed" → treat as incomplete. Same word,
+    # opposite defaults, on purpose.
+    claimed = str(getattr(args, "complete", "true")).lower() == "true"
+    pages = int(getattr(args, "pages", 1) or 1)
+    last_cursor = getattr(args, "last_cursor", None)
+
+    # Verify the completeness claim instead of taking it on faith. If the caller
+    # says "done" but hands back a cursor that is still live, the loop stopped
+    # early — downgrade rather than error, so the transcript we did fetch is kept
+    # and the next index run picks it up.
+    complete = claimed
+    warning = ""
+    if claimed and last_cursor is not None and not _is_cursor_exhausted(last_cursor):
+        complete = False
+        warning = (
+            f"\n⚠ {rec_id}: caller claimed --complete true but --last-cursor "
+            f"{last_cursor!r} is not exhausted — recorded as INCOMPLETE. "
+            f"The fetch loop stopped early; the next index run will resume it."
+        )
+
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     front = [
         "---",
@@ -85,6 +144,8 @@ def cmd_put(args) -> None:
         f'name: "{(args.name or "").replace(chr(34), chr(39))}"',
         f"created_at: {args.created_at or ''}",
         f"duration_ms: {args.duration or ''}",
+        f"complete: {'true' if complete else 'false'}",
+        f"pages: {pages}",
         f"indexed_at: {_now()}",
         "---",
         "",
@@ -98,10 +159,17 @@ def cmd_put(args) -> None:
         "created_at": args.created_at or "",
         "duration_ms": args.duration or "",
         "chars": len(body),
+        "complete": complete,
+        "pages": pages,
+        # Kept so an interrupted fetch can resume from where it stopped instead of
+        # replaying every page. Without it a recording longer than the page cap can
+        # never finish: each run restarts at page 1, hits the cap, and gives up.
+        "last_cursor": None if complete else last_cursor,
         "indexed_at": _now(),
     }
     _save_manifest(man)
-    print(f"cached {rec_id} ({len(body):,} chars) → {path}")
+    state = "complete" if complete else "INCOMPLETE"
+    print(f"cached {rec_id} ({len(body):,} chars, {pages} page(s), {state}) → {path}{warning}")
 
 
 def _have_rg() -> bool:
@@ -157,6 +225,12 @@ def cmd_search(args) -> None:
         meta = man.get(rec_id, {})
         print(f"── {meta.get('name') or '(unnamed)'}")
         print(f"   id {rec_id}  ·  {(meta.get('created_at') or '?')[:10]}  ·  {len(lines)} hit(s)")
+        # Only for records the manifest knows about and marks incomplete. An .md
+        # with no manifest entry at all is a different problem (lost manifest, not
+        # a half-fetched transcript) and already shows as "(unnamed)" above —
+        # labelling it "partially indexed" would point at the wrong cause.
+        if rec_id in man and man[rec_id].get("complete") is False:
+            print("   ⚠ partially indexed — more transcript may exist; re-run plaud-index")
         for ln in lines[: args.max_lines]:
             print(f"   │ {ln[:200]}")
         if len(lines) > args.max_lines:
@@ -184,6 +258,13 @@ def main() -> None:
     p.add_argument("--name", default="")
     p.add_argument("--created-at", default="", dest="created_at")
     p.add_argument("--duration", default="")
+    p.add_argument("--complete", choices=["true", "false"], default="true",
+                   help="did the fetch loop run to the end of the transcript?")
+    p.add_argument("--pages", type=int, default=1,
+                   help="how many get_transcript pages were concatenated")
+    p.add_argument("--last-cursor", dest="last_cursor", default=None,
+                   help="the last next_cursor seen, verbatim, even when it looked empty — "
+                        "lets this tool check the --complete claim and resume later")
     p.set_defaults(func=cmd_put)
 
     p = sub.add_parser("search", help="full-text search cached transcripts")

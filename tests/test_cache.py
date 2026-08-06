@@ -462,5 +462,119 @@ class TestCliSmoke(unittest.TestCase):
         self.assertIn("the budget was approved", show.stdout)
 
 
+# ===========================================================================
+# Paging completeness (issue #8)
+#
+# `complete` decides whether plaud-grep warns that a search may have missed
+# text. If it can be set wrongly without anything noticing, the warning never
+# fires and a truncated cache looks authoritative — the same silent-wrong-answer
+# shape as the grep BRE bug these tests exist for.
+# ===========================================================================
+class TestCursorExhaustion(unittest.TestCase):
+    """The rule for 'is this cursor finished?', pinned as a function.
+
+    Kept here rather than in the indexing skill so it is testable at all: a
+    judgement made in skill prose at runtime cannot be asserted on.
+    """
+
+    def test_treats_empty_forms_as_exhausted(self) -> None:
+        for raw in (None, "", "   ", "\n", "null", "NULL", "None", "undefined"):
+            with self.subTest(raw=raw):
+                self.assertTrue(cache._is_cursor_exhausted(raw))
+
+    def test_falsy_looking_strings_are_still_real_cursors(self) -> None:
+        # An opaque cursor may be "0" or "false". Reading those as terminators
+        # would stop paging one page in and mark the result complete.
+        for raw in ("0", "false", "False", "nil", "abc123", " x "):
+            with self.subTest(raw=raw):
+                self.assertFalse(cache._is_cursor_exhausted(raw))
+
+
+class TestCompletenessTracking(CacheTestCase):
+    def _put_paged(self, rec_id: str, *, complete: str = "true", pages: int = 1,
+                   last_cursor=None, body: str = "hello\n", name: str = "") -> str:
+        ns = argparse.Namespace(id=rec_id, name=name, created_at="", duration="",
+                                complete=complete, pages=pages, last_cursor=last_cursor)
+        with mock.patch("sys.stdin", io.StringIO(body)):
+            return self._capture_stdout(cache.cmd_put, ns)
+
+    def _manifest(self) -> dict:
+        return cache._load_manifest()["recordings"]
+
+    def _status(self, ids_only: bool = False) -> str:
+        return self._capture_stdout(cache.cmd_status, argparse.Namespace(ids_only=ids_only))
+
+    # -- the two meanings of "absent" ---------------------------------------
+
+    def test_put_without_complete_attr_defaults_to_complete(self) -> None:
+        # Regression guard for the AttributeError this nearly shipped with: the
+        # bare `_put` helper builds a Namespace by hand, so argparse defaults are
+        # not there. cmd_put must read it defensively, and absence means "an old
+        # caller we trust", not "incomplete".
+        self._put("rec1")
+        self.assertIs(self._manifest()["rec1"]["complete"], True)
+
+    def test_manifest_record_without_complete_key_counts_as_incomplete(self) -> None:
+        # Opposite default, on purpose: a record written before paging existed
+        # may stop at page one, so it must be re-fetched.
+        self._put("old1")
+        man = cache._load_manifest()
+        del man["recordings"]["old1"]["complete"]          # simulate a v0.1.0 record
+        cache._save_manifest(man)
+        self.assertNotIn("old1", self._status(ids_only=True).split())
+        self.assertIn("incomplete: 1", self._status())
+
+    # -- the completeness claim is checked, not believed ---------------------
+
+    def test_claiming_complete_with_a_live_cursor_is_downgraded(self) -> None:
+        out = self._put_paged("liar", complete="true", last_cursor="still-alive")
+        self.assertIs(self._manifest()["liar"]["complete"], False)
+        self.assertIn("not exhausted", out)
+        self.assertIn("INCOMPLETE", out)
+
+    def test_claiming_complete_with_an_exhausted_cursor_is_honoured(self) -> None:
+        for cursor in ("", None, "null"):
+            with self.subTest(cursor=cursor):
+                self._put_paged("ok1", complete="true", last_cursor=cursor)
+                self.assertIs(self._manifest()["ok1"]["complete"], True)
+
+    def test_incomplete_record_keeps_last_cursor_for_resume(self) -> None:
+        # Without this a recording longer than the page cap can never finish:
+        # every run would restart at page 1 and hit the cap again.
+        self._put_paged("part1", complete="false", pages=3, last_cursor="cur-42")
+        rec = self._manifest()["part1"]
+        self.assertEqual(rec["last_cursor"], "cur-42")
+        self.assertEqual(rec["pages"], 3)
+
+    def test_complete_record_clears_last_cursor(self) -> None:
+        self._put_paged("done1", complete="true", last_cursor="")
+        self.assertIsNone(self._manifest()["done1"]["last_cursor"])
+
+    # -- downstream consumers ------------------------------------------------
+
+    def test_ids_only_omits_incomplete_so_the_indexer_refetches_them(self) -> None:
+        self._put_paged("done1", complete="true", last_cursor="")
+        self._put_paged("part1", complete="false", last_cursor="cur-1")
+        self.assertEqual(self._status(ids_only=True).split(), ["done1"])
+
+    def test_search_warns_only_for_records_marked_incomplete(self) -> None:
+        self._put_paged("done1", complete="true", last_cursor="", body="budget talk\n")
+        self._put_paged("part1", complete="false", last_cursor="c", body="budget again\n")
+        out = self._search("budget", have_rg=False)
+        self.assertEqual(out.count("partially indexed"), 1)
+        # anchor the warning to the right recording, not just "it appears somewhere"
+        self.assertIn("id part1", out.split("partially indexed")[0])
+
+    def test_search_does_not_call_an_orphaned_md_partially_indexed(self) -> None:
+        # No manifest entry at all is a lost manifest, not a half-fetched
+        # transcript. Same falsy `.get("complete")`, different cause — labelling
+        # it "partially indexed" would send the reader after the wrong problem.
+        cache.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (cache.CACHE_DIR / "orphan.md").write_text("---\nid: orphan\n---\n\nbudget\n")
+        out = self._search("budget", have_rg=False)
+        self.assertIn("orphan", out)
+        self.assertNotIn("partially indexed", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

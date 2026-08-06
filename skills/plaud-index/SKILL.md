@@ -69,26 +69,93 @@ Call `list_files`. Honour the user's scope argument:
 
 ### 3. Diff, then fetch only what is new
 
-Subtract the cached id set from the listed ids. For each remaining id call
-`get_transcript`.
+Subtract the cached id set from the listed ids. `--ids-only` lists **only
+recordings fetched to the end**, so anything left half-fetched comes back here
+automatically — there is no rebuild flag to remember.
 
-Then write it to the cache. Pass the transcript body on **stdin** — never as an
-argument (transcripts are long and contain quotes, newlines and CJK):
+**Say so before you start.** Recordings cached before paging existed carry no
+completeness marker and count as incomplete, so a first run after upgrading can
+re-fetch a lot. Print the count and let the user stop you:
+
+```
+Re-fetching N recordings that were cached without a completeness marker
+(≈N get_transcript calls). Ctrl-C now if you would rather not.
+```
+
+#### `get_transcript` is paginated — one call is not the whole transcript
+
+It returns **one page of utterances** with a `next_cursor` for the rest. Calling
+it once and caching the result was the v0.1.0 bug: every recording was truncated
+to its first page, and `plaud-grep` then reported "no match" for words that were
+spoken — a wrong answer that looks like a correct one.
+
+Loop per recording, accumulating pages:
+
+```
+cursor    = resume cursor from the manifest if this id was left incomplete, else none
+seen      = {}                      # cursors already followed
+segments  = []
+pages     = 0
+
+repeat up to 50 times:
+    resp = get_transcript(file_id=<id>, block="transaction", limit=200, cursor=cursor)
+    pages += 1
+    append resp segments to segments
+    nxt = resp next_cursor
+
+    if nxt is absent / null / "" / whitespace        → complete, stop
+    if nxt already in seen, or this page had 0 segments → stuck, stop INCOMPLETE
+    seen.add(nxt); cursor = nxt
+else (hit the 50-page cap)                            → stop INCOMPLETE
+```
+
+Each guard earns its place:
+
+- **`block="transaction"` explicitly.** It is the API default, but writing it
+  down keeps the next person from swapping in `transaction_polish`, whose
+  AI-cleaned wording would break `plaud-grep`'s promise that the cache holds what
+  was actually said.
+- **`limit=200`, not the 500 maximum.** 500 is legal but untested here, and the
+  API's own default of 50 suggests pages are sized to bound response size. 200
+  cuts round trips without betting the whole recording on an unverified value.
+- **Stop on a repeated cursor or an empty page.** A cursor that stops advancing
+  otherwise burns all 50 pages before anyone notices. These catch it on page 2.
+- **The 50-page cap is a backstop, not the plan.** Hitting it means incomplete,
+  never "close enough".
+
+#### Write the cache **once**, after the loop
+
+`cache.py put` **overwrites**. Calling it per page leaves only the last page on
+disk — a cache that looks populated and is 1/N complete. Concatenate every page
+first, normalise, then write one entry:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put \
   --id "<id>" \
   --name "<name>" \
   --created-at "<created_at>" \
-  --duration "<duration>" <<'TRANSCRIPT'
+  --duration "<duration>" \
+  --complete true|false \
+  --pages <N> \
+  --last-cursor "<the last next_cursor you saw, verbatim>" <<'TRANSCRIPT'
 <the transcript text, one segment per line>
 TRANSCRIPT
 ```
 
-Normalise whatever shape `get_transcript` returns into **one segment per line**,
-keeping the timestamp and speaker label inline, e.g.
-`[00:12:03] Speaker 1: ...`. One segment per line is what makes `plaud-grep`'s
-line-level hits map back to a point in the audio.
+**Pass `--last-cursor` verbatim even when it looked empty.** `cache.py` re-checks
+it against its own rule and downgrades a `--complete true` claim that does not
+hold up. That check is the only thing standing between "the loop ended early" and
+a truncated cache that reports itself as whole — this file's instructions are
+prose, and prose cannot be unit-tested.
+
+If the loop breaks part-way (network error, page cap), still write what you have
+with `--complete false`. Partial beats nothing: it is searchable now, carries a
+warning, and resumes next run.
+
+Normalise whatever `get_transcript` returns into **one segment per line**, keeping
+the timestamp and speaker label inline, e.g. `[00:12:03] Speaker 1: ...`. One
+segment per line is what makes `plaud-grep`'s line-level hits map back to a point
+in the audio.
 
 If a recording has no transcript yet (still processing), skip it and say so —
 `cache.py put` refuses an empty body rather than caching a blank entry that would
@@ -97,14 +164,21 @@ look indexed but match nothing.
 ### 4. Report
 
 State how many were already cached, how many were newly fetched, how many were
-skipped for having no transcript yet. Then show `cache.py status`.
+skipped for having no transcript yet, and **how many finished incomplete** (page
+cap, stuck cursor, or an interrupted loop). Incomplete ones resume on the next
+run — say that, so nobody goes hunting for a rebuild flag. Then show
+`cache.py status`, which prints the same count.
 
 ## Cost warning
 
-Each uncached recording costs one `get_transcript` call. A first run over hundreds
-of recordings is slow and pulls a lot of text through the model context. For a
-large library, **tell the user the count first and let them scope it** with
-`--days` / `--since` rather than silently pulling everything.
+Each uncached recording costs **at least one** `get_transcript` call — long
+recordings paginate and may need several. A first run over hundreds of recordings
+is slow and pulls a lot of text through the model context. For a large library,
+**tell the user the count first and let them scope it** with `--days` / `--since`
+rather than silently pulling everything.
+
+The same applies to the first run after upgrading from a pre-paging cache: every
+old entry is re-fetched. Step 3 tells you to announce that count before starting.
 
 ## Where the cache lives
 
