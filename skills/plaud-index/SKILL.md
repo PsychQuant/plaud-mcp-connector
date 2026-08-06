@@ -103,6 +103,12 @@ its absence here reads as "one call returns the whole transcript". **That is an
 inference from silence, not a guarantee** — hence checking `--help` first. If it
 does list a paging flag, this fast path is unsafe: use the MCP loop below instead.
 
+Checked against a real install on 2026-08-07 (CLI **0.3.7**): `transcript` offers
+only `-o/--output`, `--block`, and `--polished` — no cursor, page, or limit. The
+premise holds for that version. What is still unmeasured is the behaviour: whether
+one call really returns every utterance can only be seen with an authenticated
+account, so a later version could start truncating without adding a flag.
+
 ```bash
 tmp=$(mktemp)
 plaud transcript "<id>" -o "$tmp"          # never touches the model context
