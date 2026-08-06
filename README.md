@@ -1,7 +1,7 @@
 # plaud-mcp-connector
 
-A Claude Code plugin that bundles the **official Plaud MCP** and adds the two
-things it cannot do: **full-text transcript search** and **uploading audio into
+A Claude Code plugin that runs the **official Plaud MCP** — fetched from npm at
+launch, not vendored here — and adds the two things it cannot do: **full-text transcript search** and **uploading audio into
 your own library**.
 
 📄 **[plaud-mcp-connector.vercel.app](https://plaud-mcp-connector.vercel.app)** — what it does, and when not to install it.
