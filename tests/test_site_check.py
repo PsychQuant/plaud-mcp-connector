@@ -414,7 +414,7 @@ class TestContrast(unittest.TestCase):
         self.assertAlmostEqual(21.0, site_check.contrast_ratio("#000", "#fff"), places=1)
 
     def test_low_contrast_body_text_is_flagged(self):
-        css = ":root { --bg: #fbfaf8; --fg: #111111; --muted: #cfcbc4; }"
+        css = ":root { --bg: #fbfaf8; --fg: #111111; --rule-strong: #e2ded6; --muted: #5f5d57; }"
         self.assertIn("contrast", ids(site_check.check_contrast(f"<style>{css}</style>")))
 
     def test_adequate_contrast_passes(self):
@@ -628,3 +628,45 @@ class TestDeadSelectors(unittest.TestCase):
         alarms that train the reader to ignore this rule."""
         src = '<p>x</p><script>document.querySelector("div > p:nth-child(2)")</script>'
         self.assertEqual([], site_check.check_dead_selectors(src))
+
+
+class TestI18nQuotedLanguageKeys(unittest.TestCase):
+    """`zh-Hant` cannot be a bare JS object key, so real pages quote it. A parser
+    that only matches unquoted keys finds zero languages and every completeness
+    check silently passes on a page it never read."""
+
+    QUOTED = '''
+<p data-i18n="k">x</p>
+<select id="lang"><option value="en">E</option><option value="zh-Hant">中</option></select>
+<script>
+const I18N = {
+  "en": {"k": "not affiliated with Plaud Inc."},
+  "zh-Hant": {"k": "獨立專案，與 Plaud 無關"}
+};
+</script>'''
+
+    def test_quoted_and_hyphenated_keys_are_parsed(self):
+        self.assertEqual([], site_check.check_i18n_completeness(self.QUOTED))
+
+    def test_positioning_reaches_the_hyphenated_language(self):
+        self.assertEqual([], site_check.check_i18n_positioning(self.QUOTED))
+
+    def test_a_missing_key_in_the_quoted_language_is_still_caught(self):
+        broken = self.QUOTED.replace('"zh-Hant": {"k": "獨立專案，與 Plaud 無關"}', '"zh-Hant": {}')
+        self.assertIn("i18n-completeness", ids(site_check.check_i18n_completeness(broken)))
+
+
+class TestControlBorderToken(unittest.TestCase):
+    """A token nothing references is not a fix — the same lesson the tab-pill
+    version of this check taught, re-applied to the control that replaced them."""
+
+    def test_switcher_using_the_strong_token_passes(self):
+        self.assertEqual([], site_check.check_control_border_token(
+            "<style>.langpick select { border: 1px solid var(--rule-strong); }</style>"))
+
+    def test_switcher_falling_back_to_the_hairline_is_flagged(self):
+        self.assertIn("contrast", ids(site_check.check_control_border_token(
+            "<style>.langpick select { border: 1px solid var(--rule); }</style>")))
+
+    def test_page_without_a_switcher_passes(self):
+        self.assertEqual([], site_check.check_control_border_token("<p>no controls</p>"))

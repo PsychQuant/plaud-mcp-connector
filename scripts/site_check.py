@@ -479,13 +479,28 @@ def contrast_ratio(a: str, b: str) -> float:
 
 # (custom property, minimum ratio against --bg, what it is)
 # WCAG 1.4.11 governs the boundary of an interactive component. The install tabs
-# were the page's only control and they are gone (#16 — the install is one
-# sentence now), so `--rule-strong` and the check that it was actually referenced
-# went with them rather than standing guard over nothing. Both come back with the
-# language switcher (#14), which is the next real control.
+# were the page's only control and went away with #16; the check went with them
+# rather than standing guard over nothing. The language switcher (#14) is the
+# next real control, so both are back.
 CONTRAST_RULES = (
+    ("--rule-strong", 3.0, "the language switcher's border (WCAG 1.4.11)"),
     ("--muted", 4.5, "secondary body text (WCAG 1.4.3)"),
 )
+
+
+def check_control_border_token(source: str) -> list[Finding]:
+    """`--rule-strong` only helps if the control actually uses it.
+
+    Without this the contrast check passes on a token nothing references, and
+    the control boundary quietly reverts to the low-contrast hairline.
+    """
+    block = re.search(r"\.langpick\s+select\s*\{(.*?)\}", source, re.DOTALL)
+    if block is None:
+        return []
+    if "--rule-strong" not in block.group(1):
+        return [Finding("contrast", "error",
+                        ".langpick select does not use var(--rule-strong) for its border")]
+    return []
 
 
 def _palettes(source: str) -> dict[str, dict[str, str]]:
@@ -500,7 +515,7 @@ def _palettes(source: str) -> dict[str, dict[str, str]]:
 
 
 def check_contrast(source: str) -> list[Finding]:
-    found = []
+    found = list(check_control_border_token(source))
     for scheme, palette in _palettes(source).items():
         bg = palette.get("--bg")
         if not bg:
@@ -551,7 +566,11 @@ def _i18n_tables(source: str) -> dict[str, dict[str, str]]:
     if block is None:
         return {}
     tables: dict[str, dict[str, str]] = {}
-    for lang, body in re.findall(r'([a-zA-Z-]+)\s*:\s*\{(.*?)\}', block.group(1), re.DOTALL):
+    # Keys may be quoted, and hyphenated ones (`zh-Hant`) MUST be — a bare
+    # `zh-Hant:` is not valid JavaScript. An unquoted-only pattern silently
+    # matches zero languages on a page that is correctly written.
+    for lang, body in re.findall(r'["\']?([a-zA-Z-]+)["\']?\s*:\s*\{(.*?)\}',
+                                 block.group(1), re.DOTALL):
         pairs = re.findall(r'"([^"]+)"\s*:\s*"((?:[^"\\]|\\.)*)"', body)
         tables[lang] = {k: v for k, v in pairs}
     return tables
