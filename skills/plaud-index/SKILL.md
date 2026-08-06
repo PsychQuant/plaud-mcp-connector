@@ -140,6 +140,31 @@ transcript through the model context. `npm install -g @plaud-ai/cli` makes
 large libraries much cheaper to index.
 ```
 
+#### Cache the summary too — it is often what the person remembers
+
+What someone recalls is usually closer to the **summary** (the point that was
+made) than to the transcript (the same point buried in filler). Both are worth
+searching, so index both.
+
+```bash
+# CLI path — stays out of the model context, same as the transcript
+tmp=$(mktemp)
+plaud summary "<id>" -o "$tmp" 2>/dev/null && \
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind summary < "$tmp"
+rm -f "$tmp"
+```
+
+Through the MCP instead, `get_note` returns the same content; pipe it into the
+same `--kind summary` call.
+
+`--kind summary` writes to `summaries/` and **does not touch** the transcript,
+its `chars`, or its `complete` flag — those describe the transcript and would
+stop meaning anything if a summary could move them. A summary for a recording
+with no cached transcript is refused rather than written as an orphan.
+
+Summaries are optional. A recording with no summary is not incomplete — skip it
+quietly and carry on.
+
 #### `get_transcript` is paginated — one call is not the whole transcript
 
 **Response shape, measured 2026-08-07 (authenticated):**

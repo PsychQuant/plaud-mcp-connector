@@ -97,3 +97,22 @@ This searches **cached** transcripts only. Coverage equals whatever `plaud-index
 last pulled. Before answering a question that depends on completeness ("did we
 *ever* discuss X?"), check `cache.py status` and state the covered date range
 alongside the answer.
+
+## Some hits are not what was said
+
+Results carry a source label when the matched line did not come from the
+transcript:
+
+| Tag | Where it came from | How to use it |
+|---|---|---|
+| _(none)_ | The transcript — what was actually said | Quote it |
+| `[corrected]` | A proofread copy (`plaud-proofread`) | Quote as corrected text, not as verbatim speech |
+| `[summary]` | An AI-written summary | **Nobody said these words.** Open the transcript for the actual wording |
+
+The labels exist because the reader cannot tell by looking. A summary reads like
+clean prose precisely because it was written rather than spoken, which makes it
+the easiest thing on the page to misquote as a direct quotation.
+
+When a search only matches summaries and never the transcripts, say so — it
+usually means the phrasing the user remembers is the summariser's, not the
+speaker's, and the transcript wording is different.

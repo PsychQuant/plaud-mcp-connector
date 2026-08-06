@@ -26,6 +26,7 @@ import argparse
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import pathlib
 import shutil
@@ -82,6 +83,18 @@ class CacheTestCase(unittest.TestCase):
         ns = argparse.Namespace(id=rec_id, name=name, created_at=created_at, duration=duration)
         with mock.patch("sys.stdin", io.StringIO(body)):
             self._capture_stdout(cache.cmd_put, ns)
+
+    def _hit_line(self, out: str, needle: str) -> str:
+        """The result line carrying `needle`, excluding the trailing legend.
+
+        Asserting `"[corrected]" in out` would pass on the legend alone — the
+        sentence explaining the tag contains the tag. The claim being made is
+        that the *hit line* is marked, so the assertion has to look there.
+        """
+        for line in out.splitlines():
+            if line.lstrip().startswith("│") and needle in line:
+                return line
+        self.fail(f"no hit line containing {needle!r} in:\n{out}")
 
     def _search(self, pattern: str, have_rg: bool, case_sensitive: bool = False,
                 max_lines: int = 5) -> str:
@@ -589,18 +602,6 @@ class TestProofreadAttribution(CacheTestCase):
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{rec_id}.md").write_text(body)
 
-    def _hit_line(self, out: str, needle: str) -> str:
-        """The result line carrying `needle`, excluding the trailing legend.
-
-        Asserting `"[corrected]" in out` would pass on the legend alone — the
-        sentence explaining the tag contains the tag. The claim being made is
-        that the *hit line* is marked, so the assertion has to look there.
-        """
-        for line in out.splitlines():
-            if line.lstrip().startswith("│") and needle in line:
-                return line
-        self.fail(f"no hit line containing {needle!r} in:\n{out}")
-
     def test_hit_only_in_proofread_copy_still_finds_the_recording(self) -> None:
         # The whole point: ASR heard it wrong, so the raw transcript cannot match.
         self._put("rec1", name="Research", body="[00:01] A: 艾佛森 similarity\n")
@@ -802,3 +803,126 @@ class TestRipgrepBranchGetsTheFix(CacheTestCase):
         for rg in (True, False):
             with self.subTest(have_rg=rg):
                 self.assertIn("budget", self._captured_argv("budget", have_rg=rg))
+
+
+# --------------------------------------------------------------------------
+# Summaries in the cache (#20)
+#
+# What a person remembers is usually closer to the summary (the point) than to
+# the transcript (speech with all its filler). Summaries were never cached, so
+# plaud-grep could not reach them.
+#
+# A hit in a summary is AI-rewritten text, not something anybody said. It is
+# labelled for the same reason `[corrected]` is: quoting it as verbatim speech
+# would be wrong, and the reader cannot tell by looking.
+# --------------------------------------------------------------------------
+class TestSummaryAttribution(CacheTestCase):
+    def _put_summary(self, rec_id: str, body: str) -> None:
+        d = cache.CACHE_DIR / "summaries"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{rec_id}.md").write_text(body + "\n")
+
+    def test_summary_hit_is_labelled(self):
+        self._put("rec_s", body="lots of filler words here")
+        self._put_summary("rec_s", "Decision: split the budget across two quarters")
+        out = self._search("budget", have_rg=False)
+        line = self._hit_line(out, "budget")
+        self.assertIn("[summary]", line, out)
+
+    def test_transcript_hit_is_not_labelled(self):
+        self._put("rec_t", body="we should split the budget")
+        out = self._search("budget", have_rg=False)
+        line = self._hit_line(out, "budget")
+        self.assertNotIn("[summary]", line, out)
+
+    def test_summary_only_term_is_findable(self):
+        """The whole point: a word that exists only in the summary."""
+        self._put("rec_u", body="um so anyway yeah")
+        self._put_summary("rec_u", "Key topic: quarterly forecasting")
+        self.assertIn("1 matches", self._search("forecasting", have_rg=False))
+
+    def test_transcript_and_summary_count_as_one_recording(self):
+        """Both files carry the same stem, so the hits must group under one
+        recording — otherwise every summarised recording double-counts."""
+        self._put("rec_v", body="the budget question again")
+        self._put_summary("rec_v", "Budget was discussed")
+        out = self._search("budget", have_rg=False)
+        self.assertIn("in 1 recordings", out, out)
+
+    def test_summary_and_corrected_labels_do_not_bleed(self):
+        d = cache.CACHE_DIR / "proofread"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "rec_w.md").write_text("Kubernetes migration meeting\n")
+        self._put("rec_w", body="placeholder body")
+        self._put_summary("rec_w", "Kubernetes rollout decision")
+        out = self._search("Kubernetes", have_rg=False)
+        for line in out.splitlines():
+            if line.lstrip().startswith("│"):
+                self.assertFalse("[summary]" in line and "[corrected]" in line,
+                                 f"a single hit claimed two sources: {line}")
+
+    def test_cache_without_summaries_dir_behaves_exactly_as_before(self):
+        self._put("rec_x", body="plain transcript, no summary anywhere")
+        out = self._search("transcript", have_rg=False)
+        self.assertIn("1 matches", out)
+        self.assertNotIn("[summary]", out)
+
+
+class TestPutSummary(CacheTestCase):
+    """Writing summaries. A summary belongs to a recording — it is not a second
+    recording — so it must not create its own manifest entry or disturb the
+    transcript's completeness bookkeeping."""
+
+    def _put_kind(self, rec_id: str, body: str, kind: str = "summary") -> str:
+        ns = argparse.Namespace(id=rec_id, name="", created_at="", duration="", kind=kind)
+        with mock.patch("sys.stdin", io.StringIO(body)):
+            return self._capture_stdout(cache.cmd_put, ns)
+
+    def test_summary_lands_in_the_summaries_dir(self):
+        self._put("rec_a", body="transcript text")
+        self._put_kind("rec_a", "Decision: ship on Friday")
+        self.assertTrue((cache.CACHE_DIR / "summaries" / "rec_a.md").exists())
+
+    def test_summary_does_not_overwrite_the_transcript(self):
+        self._put("rec_b", body="the actual spoken words")
+        self._put_kind("rec_b", "A summary")
+        self.assertIn("the actual spoken words", (cache.CACHE_DIR / "rec_b.md").read_text())
+
+    def test_summary_does_not_create_a_second_manifest_entry(self):
+        self._put("rec_c", body="transcript")
+        self._put_kind("rec_c", "summary")
+        man = json.loads((cache.CACHE_DIR / "manifest.json").read_text())
+        self.assertEqual(["rec_c"], list(man["recordings"]))
+
+    def test_summary_does_not_touch_completeness_or_char_count(self):
+        """`chars` and `complete` describe the transcript. A summary landing must
+        not move numbers that mean something else."""
+        self._put("rec_d", body="transcript body here")
+        before = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_d"]
+        self._put_kind("rec_d", "a much much longer summary than the transcript ever was")
+        after = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_d"]
+        self.assertEqual(before["chars"], after["chars"])
+        self.assertEqual(before["complete"], after["complete"])
+
+    def test_summary_is_recorded_on_the_manifest_entry(self):
+        self._put("rec_e", body="transcript")
+        self._put_kind("rec_e", "summary text")
+        man = json.loads((cache.CACHE_DIR / "manifest.json").read_text())
+        self.assertTrue(man["recordings"]["rec_e"].get("has_summary"))
+
+    def test_summary_for_an_unknown_recording_is_refused(self):
+        """A summary with no transcript would be an orphan the manifest never
+        mentions — invisible to status, uncountable, and impossible to refresh."""
+        with self.assertRaises(SystemExit):
+            self._put_kind("rec_ghost", "summary with no transcript")
+
+    def test_kind_defaults_to_transcript_for_older_callers(self):
+        ns = argparse.Namespace(id="rec_f", name="", created_at="", duration="")
+        with mock.patch("sys.stdin", io.StringIO("body")):
+            self._capture_stdout(cache.cmd_put, ns)
+        self.assertTrue((cache.CACHE_DIR / "rec_f.md").exists())
+
+    def test_summary_is_normalised_like_transcripts(self):
+        self._put("rec_g", body="transcript")
+        self._put_kind("rec_g", "un " + NFD + " serré")
+        self.assertIn(NFC, (cache.CACHE_DIR / "summaries" / "rec_g.md").read_text())

@@ -130,6 +130,9 @@ def cmd_status(args) -> None:
             print(f"range     : {dates[0][:10]} → {dates[-1][:10]}")
         total = sum(r.get("chars", 0) for r in recs.values())
         print(f"transcript: {total:,} characters indexed")
+        summarised = sum(1 for r in recs.values() if r.get("has_summary"))
+        if summarised:
+            print(f"summaries : {summarised} of {len(recs)} recordings")
 
 
 def cmd_put(args) -> None:
@@ -149,6 +152,26 @@ def cmd_put(args) -> None:
     # complete. That is NOT the same as a manifest record with no `complete` key,
     # which means "written before paging existed" → treat as incomplete. Same word,
     # opposite defaults, on purpose.
+    # A summary belongs to a recording; it is not a second recording. It goes to
+    # summaries/, leaves the transcript alone, and must not move `chars` or
+    # `complete` — those describe the transcript and would start meaning nothing
+    # if a summary could change them.
+    kind = str(getattr(args, "kind", "transcript") or "transcript")
+    if kind == "summary":
+        man = _load_manifest()
+        if rec_id not in man["recordings"]:
+            sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
+                     f"orphan summary the manifest would never mention. Index it first.")
+        d = CACHE_DIR / "summaries"
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / f"{rec_id}.md"
+        path.write_text(body.rstrip("\n") + "\n")
+        man["recordings"][rec_id]["has_summary"] = True
+        man["recordings"][rec_id]["summary_indexed_at"] = _now()
+        _save_manifest(man)
+        print(f"cached summary for {rec_id} ({len(body):,} chars) → {path}")
+        return
+
     claimed = str(getattr(args, "complete", "true")).lower() == "true"
     pages = int(getattr(args, "pages", 1) or 1)
     last_cursor = getattr(args, "last_cursor", None)
@@ -206,6 +229,21 @@ def _have_rg() -> bool:
     return subprocess.run(["which", "rg"], capture_output=True).returncode == 0
 
 
+# Directory name → what a hit found there actually is. Anything else is the
+# transcript itself, which needs no label.
+HIT_SOURCES = {"proofread": "corrected", "summaries": "summary"}
+
+
+def _hit_source(path: pathlib.Path) -> str:
+    """What kind of text a hit came from: "corrected", "summary", or "" for the
+    transcript. Empty string means "what was actually said" — the only case that
+    needs no caveat."""
+    for part in path.parts:
+        if part in HIT_SOURCES:
+            return HIT_SOURCES[part]
+    return ""
+
+
 def cmd_search(args) -> None:
     if not CACHE_DIR.exists() or not any(CACHE_DIR.glob("*.md")):
         sys.exit("error: cache is empty — run the plaud-index skill first")
@@ -242,12 +280,17 @@ def cmd_search(args) -> None:
         rec_id = path.stem
         if rec_id == "manifest":
             continue
-        # A hit inside proofread/ is corrected text, not what the recording
-        # literally contains. Marking it keeps a caller from quoting it as
-        # verbatim speech — the whole point of proofreading is that the two
-        # differ, so the difference has to stay visible.
-        corrected = "proofread" in path.parts
-        hits.setdefault(rec_id, []).append((parts[2].strip(), corrected))
+        # Which file a hit came from changes what it means. proofread/ holds
+        # corrected text and summaries/ holds AI-written prose; neither is what
+        # anybody actually said. Marking the difference keeps a caller from
+        # quoting either as verbatim speech — and the reader cannot tell by
+        # looking, which is exactly why the label has to be on the line.
+        #
+        # An enum rather than a second boolean: the sources are mutually
+        # exclusive, and two booleans would admit a state ("corrected AND
+        # summary") that no file can be in.
+        source = _hit_source(path)
+        hits.setdefault(rec_id, []).append((parts[2].strip(), source))
 
     if not hits:
         print(f"no match for {args.pattern!r} across {len(man)} cached recordings")
@@ -267,14 +310,18 @@ def cmd_search(args) -> None:
         # labelling it "partially indexed" would point at the wrong cause.
         if rec_id in man and man[rec_id].get("complete") is False:
             print("   ⚠ partially indexed — more transcript may exist; re-run plaud-index")
-        for ln, corrected in lines[: args.max_lines]:
-            tag = " [corrected]" if corrected else ""
+        for ln, source in lines[: args.max_lines]:
+            tag = f" [{source}]" if source else ""
             print(f"   │ {ln[:200]}{tag}")
         if len(lines) > args.max_lines:
             print(f"   │ … {len(lines) - args.max_lines} more")
-        if any(c for _, c in lines):
+        present = {src for _, src in lines if src}
+        if "corrected" in present:
             print("   ℹ [corrected] lines come from a proofread copy — quote them as "
                   "corrected text, not as what was said verbatim")
+        if "summary" in present:
+            print("   ℹ [summary] lines come from an AI-written summary — nobody said "
+                  "these words; open the transcript for the actual wording")
         print()
 
 
@@ -302,6 +349,9 @@ def main() -> None:
                    help="did the fetch loop run to the end of the transcript?")
     p.add_argument("--pages", type=int, default=1,
                    help="how many get_transcript pages were concatenated")
+    p.add_argument("--kind", choices=["transcript", "summary"], default="transcript",
+                   help="summary writes to summaries/ and leaves the transcript, "
+                        "chars, and completeness untouched")
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
