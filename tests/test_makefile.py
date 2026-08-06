@@ -7,6 +7,7 @@ Every assertion here runs `make -n` (dry run) or a target that touches nothing
 outward-facing. A test that actually deployed would publish a page every time
 the suite ran, which is the opposite of what a test is for.
 """
+import os
 import pathlib
 import shutil
 import subprocess
@@ -17,8 +18,17 @@ MAKEFILE = REPO / "Makefile"
 
 
 def make(*args: str) -> subprocess.CompletedProcess:
+    """Run make in an environment this test controls.
+
+    MAKEFLAGS propagates command-line variables to sub-makes, so running the
+    suite through `make site-prod CONFIRM=1` handed CONFIRM=1 to the very
+    invocations that exist to prove an unconfirmed run is refused — and they
+    passed by inheriting the confirmation they were meant to lack. A test whose
+    premise is "no CONFIRM was given" has to guarantee that, not assume it.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in ("MAKEFLAGS", "MFLAGS", "CONFIRM")}
     return subprocess.run(
-        ["make", "-C", str(REPO), *args], capture_output=True, text=True, timeout=120
+        ["make", "-C", str(REPO), *args], capture_output=True, text=True, timeout=120, env=env
     )
 
 
@@ -117,6 +127,22 @@ class TestProductionNeedsConfirmation(MakefileTestCase):
     def test_refusal_says_how_to_proceed(self):
         p = make("_confirm-prod")
         self.assertIn("CONFIRM=1", p.stdout + p.stderr)
+
+    def test_refusal_survives_an_ambient_confirmation(self):
+        """Guards the harness fix: inject the exact leak that broke this before —
+        a MAKEFLAGS carrying CONFIRM=1, as `make site-prod CONFIRM=1` produces —
+        and require the refusal to still hold. Asserting on os.environ instead
+        would only restate whichever environment the suite happens to run in."""
+        original = os.environ.get("MAKEFLAGS")
+        os.environ["MAKEFLAGS"] = " -- CONFIRM=1"
+        try:
+            p = make("_confirm-prod")
+            self.assertNotEqual(0, p.returncode, "ambient CONFIRM leaked into the subprocess")
+        finally:
+            if original is None:
+                del os.environ["MAKEFLAGS"]
+            else:
+                os.environ["MAKEFLAGS"] = original
 
     def test_confirmed_prod_proceeds(self):
         p = make("_confirm-prod", "CONFIRM=1")
