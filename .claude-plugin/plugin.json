@@ -1,0 +1,17 @@
+{
+  "name": "plaud-mcp-connector",
+  "version": "0.1.0",
+  "description": "Full-text transcript search and audio upload on top of the official Plaud MCP. Bundles @plaud-ai/mcp, then adds the two things it cannot do.",
+  "author": {
+    "name": "Che Cheng"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/PsychQuant/plaud-mcp-connector",
+  "keywords": [
+    "plaud",
+    "mcp",
+    "transcription",
+    "full-text-search",
+    "voice-notes"
+  ]
+}

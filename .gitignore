@@ -1,0 +1,23 @@
+# Local email archive — contains personal addresses, payment receipts and
+# one-time login codes. Never publish. (Kept locally + in Dropbox instead.)
+communication/
+.claude/.mail/
+
+# Plaud transcript cache — third-party speech, stays on the machine
+.plaud-cache/
+*.srt
+*_notes.md
+
+# Credentials — always via Keychain / ~/.plaud, never in the repo
+.env
+.env.*
+tokens*.json
+
+# macOS
+.DS_Store
+
+# Editor / tooling
+node_modules/
+*.log
+.spectra/
+openspec/.vector-search.db*
