@@ -10,13 +10,16 @@
 #   make site-preview          deploy a preview URL (gated)
 #   make site-prod CONFIRM=1   deploy to production (gated + confirmed)
 #
-# DOMAIN=example.com checks the name the page will be served under. Leave it
-# empty for Vercel's generated hostname.
+# DOMAIN is the hostname the page is actually served under, checked against
+# positioning rule 3. ACCEPT_DOMAIN records the one plaud-containing name a
+# human has reviewed and cleared, so the gate stops re-raising a settled
+# question; it never downgrades a blocked name. Override DOMAIN to try another.
 
-PYTHON ?= python3
-SITE   ?= site
-README ?= README.md
-DOMAIN ?=
+PYTHON        ?= python3
+SITE          ?= site
+README        ?= README.md
+DOMAIN        ?= plaud-mcp-connector.vercel.app
+ACCEPT_DOMAIN ?= plaud-mcp-connector.vercel.app
 
 .DEFAULT_GOAL := help
 .PHONY: help test site-check check site-preview site-prod _confirm-prod _require-vercel
@@ -25,13 +28,14 @@ help:  ## Show this help
 	@grep -hE '^[a-z][a-zA-Z0-9_-]*:.*## ' $(MAKEFILE_LIST) \
 	  | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
 	@echo ""
-	@echo "  Variables: DOMAIN=<host>  SITE=$(SITE)  PYTHON=$(PYTHON)"
+	@echo "  Variables: DOMAIN=$(DOMAIN)  SITE=$(SITE)  PYTHON=$(PYTHON)"
 
 test:  ## Run the whole test suite
 	$(PYTHON) -m unittest discover -s tests -q
 
 site-check:  ## Check site/ against the positioning rules in site/README.md
-	$(PYTHON) scripts/site_check.py --site $(SITE) --readme $(README) --domain "$(DOMAIN)"
+	$(PYTHON) scripts/site_check.py --site $(SITE) --readme $(README) \
+	  --domain "$(DOMAIN)" --accept-domain "$(ACCEPT_DOMAIN)"
 
 check: test site-check  ## Everything that must pass before a deploy
 

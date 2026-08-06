@@ -57,6 +57,18 @@ remember:
    other.
 3. **The domain must not resemble `plaud.ai`.** `plaud-mcp.com` and friends would
    read as official.
+
+   **Reviewed and settled (2026-08-06):** `plaud-mcp-connector.vercel.app` is
+   accepted. It contains "plaud", so `site_check.py` warns on the shape by
+   default — a string comparison cannot judge whether a name reads as official.
+   A human judged it, and two independent review lenses agreed: a `.vercel.app`
+   subdomain carrying "connector", on a page that says "not affiliated" in both
+   the header and the footer, is not mistakable for Plaud's own. The decision is
+   recorded as `ACCEPT_DOMAIN` in the Makefile rather than left as prose, so the
+   gate stops re-raising it. **The record downgrades a warning on that exact
+   host only, and can never clear a blocked name** — accepting `plaud.ai` is not
+   something the mechanism can express. Any other new domain gets asked about
+   again, because it is a different question.
 4. **Every mention of the official integration links to `docs.plaud.ai`.** Readers
    looking for Plaud's own thing should be sent there, not kept here.
 

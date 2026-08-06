@@ -215,14 +215,25 @@ def check_vercel_config(text: str) -> list[Finding]:
     return []
 
 
-def classify_domain(domain: str) -> tuple[str, str]:
+def _host(value: str) -> str:
+    return re.sub(r"^[a-z]+://", "", value.strip().lower()).split("/")[0]
+
+
+def classify_domain(domain: str, accepted: str = "") -> tuple[str, str]:
     """Rule 3: the domain must not read as official. Returns (verdict, reason).
 
     "block" for names that are unambiguously Plaud's own shape, "warn" for names
     that merely contain the word — whether those read as official is a judgement
     a string comparison has no business making, so it is handed back to a human.
+
+    `accepted` records the one name a human has already looked at and cleared.
+    It downgrades a warning on exactly that host and nothing else, and it cannot
+    touch a block — otherwise the record would become a way to wave through
+    plaud.ai itself, which is the single thing the block list exists to stop.
+    A gate that re-asks a settled question is one people learn to click past,
+    and a gate people ignore is worse than none because it still looks like cover.
     """
-    host = re.sub(r"^[a-z]+://", "", domain.strip().lower()).split("/")[0]
+    host = _host(domain)
     if not host:
         return "ok", "no custom domain — Vercel's own hostname is used"
 
@@ -231,13 +242,16 @@ def classify_domain(domain: str) -> tuple[str, str]:
         return "block", (f"{host} reads as Plaud's own domain "
                          f"(site/README.md rule 3 names plaud-mcp.com as the example)")
     if any("plaud" in label for label in labels):
+        if accepted and host == _host(accepted):
+            return "ok", (f"{host} contains 'plaud' but was reviewed and accepted as not "
+                          f"readable as official (see site/README.md rule 3)")
         return "warn", (f"{host} contains 'plaud' — check it cannot be mistaken for official "
                         f"before deploying; a string comparison cannot decide this")
     return "ok", f"{host} does not resemble plaud.ai"
 
 
 def run_checks(site_dir: pathlib.Path, readme_path: pathlib.Path,
-               domain: str = "") -> list[Finding]:
+               domain: str = "", accepted: str = "") -> list[Finding]:
     site_dir, readme_path = pathlib.Path(site_dir), pathlib.Path(readme_path)
     found: list[Finding] = []
 
@@ -266,7 +280,7 @@ def run_checks(site_dir: pathlib.Path, readme_path: pathlib.Path,
     found += check_aria_tabs(source)
     found += check_contrast(source)
 
-    verdict, reason = classify_domain(domain)
+    verdict, reason = classify_domain(domain, accepted)
     if verdict == "block":
         found.append(Finding("domain", "error", reason))
     elif verdict == "warn":
@@ -280,9 +294,13 @@ def main() -> int:
     ap.add_argument("--site", default="site")
     ap.add_argument("--readme", default="README.md")
     ap.add_argument("--domain", default="", help="the domain this will be served from, if custom")
+    ap.add_argument("--accept-domain", dest="accept_domain", default="",
+                    help="a plaud-containing domain a human has reviewed and cleared; "
+                         "downgrades the warning for that exact host only, never a block")
     args = ap.parse_args()
 
-    findings = run_checks(pathlib.Path(args.site), pathlib.Path(args.readme), args.domain)
+    findings = run_checks(pathlib.Path(args.site), pathlib.Path(args.readme),
+                          args.domain, args.accept_domain)
     errors = [f for f in findings if f.level == "error"]
     warns = [f for f in findings if f.level == "warn"]
 

@@ -443,3 +443,73 @@ class TestTabBorderToken(unittest.TestCase):
 
     def test_page_without_tabs_passes(self):
         self.assertEqual([], site_check.check_tab_border_token("<p>no tabs</p>"))
+
+
+# --------------------------------------------------------------------------
+# A settled judgement should stop being asked.
+#
+# classify_domain warns on any name containing "plaud" because a string
+# comparison cannot decide whether it reads as official. Once a human HAS
+# decided, a gate that keeps asking is one people learn to click past — and a
+# gate people ignore is worse than no gate, because it still looks like cover.
+# --------------------------------------------------------------------------
+class TestAcceptedDomain(unittest.TestCase):
+    ACCEPTED = "plaud-mcp-connector.vercel.app"
+
+    def test_accepting_the_reviewed_domain_clears_the_warning(self):
+        verdict, reason = site_check.classify_domain(self.ACCEPTED, accepted=self.ACCEPTED)
+        self.assertEqual("ok", verdict)
+        self.assertIn("accepted", reason.lower())
+
+    def test_without_acceptance_it_still_warns(self):
+        self.assertEqual("warn", site_check.classify_domain(self.ACCEPTED)[0])
+
+    def test_acceptance_cannot_override_a_block(self):
+        """Otherwise the record becomes a way to wave through plaud.ai itself —
+        the one thing the block list exists to stop."""
+        for bad in ("plaud.ai", "plaud-mcp.com", "getplaud.com"):
+            self.assertEqual("block", site_check.classify_domain(bad, accepted=bad)[0], bad)
+
+    def test_acceptance_is_specific_to_the_domain_reviewed(self):
+        """Accepting one name must not silence every other plaud-ish name."""
+        self.assertEqual("warn", site_check.classify_domain("plaud-tools.vercel.app",
+                                                            accepted=self.ACCEPTED)[0])
+
+    def test_acceptance_normalises_case_and_scheme(self):
+        for written in ("PLAUD-MCP-CONNECTOR.vercel.app", "https://plaud-mcp-connector.vercel.app/"):
+            self.assertEqual("ok", site_check.classify_domain(written, accepted=self.ACCEPTED)[0], written)
+
+    def test_unrelated_domain_is_unaffected_by_an_acceptance(self):
+        self.assertEqual("ok", site_check.classify_domain("che-tools.dev", accepted=self.ACCEPTED)[0])
+
+    def test_empty_acceptance_leaves_behaviour_unchanged(self):
+        self.assertEqual("warn", site_check.classify_domain(self.ACCEPTED, accepted="")[0])
+
+    def test_run_checks_threads_the_acceptance_through(self):
+        findings = site_check.run_checks(REPO / "site", REPO / "README.md",
+                                         self.ACCEPTED, accepted=self.ACCEPTED)
+        self.assertEqual([], [f for f in findings if f.rule == "domain"])
+
+    def test_run_checks_without_acceptance_still_warns(self):
+        findings = site_check.run_checks(REPO / "site", REPO / "README.md", self.ACCEPTED)
+        warns = [f for f in findings if f.rule == "domain"]
+        self.assertEqual(1, len(warns))
+        self.assertEqual("warn", warns[0].level)
+
+
+class TestAcceptedDomainCli(unittest.TestCase):
+    def _run(self, *args):
+        return subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "site_check.py"),
+             "--site", str(REPO / "site"), "--readme", str(REPO / "README.md"), *args],
+            capture_output=True, text=True)
+
+    def test_accepted_domain_produces_no_warning(self):
+        p = self._run("--domain", "plaud-mcp-connector.vercel.app",
+                      "--accept-domain", "plaud-mcp-connector.vercel.app")
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+        self.assertNotIn("⚠", p.stdout)
+
+    def test_blocked_domain_is_not_rescued_by_accepting_it(self):
+        p = self._run("--domain", "plaud-mcp.com", "--accept-domain", "plaud-mcp.com")
+        self.assertEqual(1, p.returncode)

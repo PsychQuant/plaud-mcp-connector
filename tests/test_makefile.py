@@ -164,6 +164,36 @@ class TestProductionNeedsConfirmation(MakefileTestCase):
         self.assertNotIn("_confirm-prod", self.dry("site-preview"))
 
 
+class TestRealHostnameIsChecked(MakefileTestCase):
+    """The gate used to default DOMAIN to empty, so it reported 'no custom
+    domain' and never looked at the hostname the site is actually served on."""
+
+    HOST = "plaud-mcp-connector.vercel.app"
+
+    def test_the_serving_hostname_is_the_default(self):
+        """Bound to --domain, not merely present in the command line: the
+        --accept-domain flag carries the same hostname, so asserting the bare
+        string passed even with DOMAIN emptied back out. Same false pass as
+        `assertNotIn("--prod")` — checking that a string exists somewhere
+        instead of that it occupies the position that gives it meaning."""
+        self.assertIn(f'--domain "{self.HOST}"', self.dry("site-check"))
+
+    def test_the_reviewed_acceptance_is_passed_too(self):
+        self.assertIn(f'--accept-domain "{self.HOST}"', self.dry("site-check"))
+
+    def test_default_check_is_silent_about_the_domain(self):
+        """The judgement is recorded, so it must not be re-raised every run."""
+        p = make("site-check")
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+        self.assertNotIn("⚠", p.stdout)
+
+    def test_a_different_plaud_domain_still_warns(self):
+        """The acceptance covers one reviewed name, not the word 'plaud'."""
+        p = make("site-check", "DOMAIN=plaud-notes.example.com")
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+        self.assertIn("⚠", p.stdout)
+
+
 class TestCheckerActuallyRuns(MakefileTestCase):
     def test_site_check_passes_on_the_real_site(self):
         p = make("site-check")
