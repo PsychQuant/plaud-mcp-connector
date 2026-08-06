@@ -1,0 +1,136 @@
+#!/usr/bin/env python3
+"""Tests for the Makefile — specifically that deploying cannot skip the gate.
+
+Written before the Makefile exists.
+
+Every assertion here runs `make -n` (dry run) or a target that touches nothing
+outward-facing. A test that actually deployed would publish a page every time
+the suite ran, which is the opposite of what a test is for.
+"""
+import pathlib
+import shutil
+import subprocess
+import unittest
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
+MAKEFILE = REPO / "Makefile"
+
+
+def make(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["make", "-C", str(REPO), *args], capture_output=True, text=True, timeout=120
+    )
+
+
+@unittest.skipIf(shutil.which("make") is None, "make not installed")
+class MakefileTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        if not MAKEFILE.is_file():
+            self.fail("Makefile does not exist")
+
+    def dry(self, target: str, *extra: str) -> str:
+        p = make("-n", target, *extra)
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+        return p.stdout
+
+    def order(self, text: str, first: str, second: str) -> None:
+        i, j = text.find(first), text.find(second)
+        self.assertNotEqual(-1, i, f"{first!r} never runs:\n{text}")
+        self.assertNotEqual(-1, j, f"{second!r} never runs:\n{text}")
+        self.assertLess(i, j, f"{first!r} must run before {second!r}:\n{text}")
+
+
+class TestTargetsExist(MakefileTestCase):
+    def test_help_is_the_default_goal(self):
+        """Bare `make` must not deploy anything."""
+        p = make()
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertNotIn("vercel deploy", p.stdout)
+
+    def test_help_lists_the_deploy_targets(self):
+        out = make("help").stdout
+        for target in ("site-check", "site-preview", "site-prod"):
+            self.assertIn(target, out)
+
+    def test_test_target_runs_the_suite(self):
+        self.assertIn("unittest", self.dry("test"))
+
+    def test_site_check_runs_the_checker(self):
+        self.assertIn("site_check.py", self.dry("site-check"))
+
+
+class TestDeployIsGated(MakefileTestCase):
+    """The whole point of the Makefile: you cannot publish past a failing gate."""
+
+    # Match "vercel deploy", not "vercel": a target that merely probes for the
+    # CLI (`command -v vercel`) also contains the bare word, and matching that
+    # would test string placement rather than whether the deploy is gated.
+    def test_preview_runs_the_checker_before_vercel(self):
+        self.order(self.dry("site-preview"), "site_check.py", "vercel deploy")
+
+    def test_preview_runs_the_test_suite_before_vercel(self):
+        self.order(self.dry("site-preview"), "unittest", "vercel deploy")
+
+    def test_prod_runs_the_checker_before_vercel(self):
+        self.order(self.dry("site-prod", "CONFIRM=1"), "site_check.py", "vercel deploy")
+
+    def test_prod_deploys_to_production(self):
+        self.assertIn("--prod", self.dry("site-prod", "CONFIRM=1"))
+
+    def test_preview_does_not_deploy_to_production(self):
+        self.assertNotIn("--prod", self.dry("site-preview"))
+
+    def test_domain_is_passed_through_to_the_checker(self):
+        """Rule 3 is a property of the deploy target, not of any file, so it can
+        only be checked if the domain reaches the checker."""
+        out = self.dry("site-check", "DOMAIN=example.com")
+        self.assertIn("example.com", out)
+
+
+class TestProductionNeedsConfirmation(MakefileTestCase):
+    """Publishing is outward-facing and hard to take back."""
+
+    def test_bare_prod_refuses(self):
+        # Non-zero, not a specific code: a recipe exiting 1 makes GNU make exit
+        # 2. Asserting 1 would be testing make's reporting convention, not the
+        # property that matters — that it refuses.
+        p = make("_confirm-prod")
+        self.assertNotEqual(0, p.returncode, p.stdout)
+
+    def test_refusal_says_how_to_proceed(self):
+        p = make("_confirm-prod")
+        self.assertIn("CONFIRM=1", p.stdout + p.stderr)
+
+    def test_confirmed_prod_proceeds(self):
+        p = make("_confirm-prod", "CONFIRM=1")
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+
+    def test_prod_actually_depends_on_the_guard(self):
+        """Without this, deleting _confirm-prod from site-prod's prerequisites
+        leaves every other test in this file green — the guard would still work
+        when invoked directly and never run when it mattered.
+
+        Checked under -n so nothing executes: asserting it by running site-prod
+        for real would, on a broken guard, proceed to deploy.
+        """
+        self.assertIn("awkward to take back", self.dry("site-prod", "CONFIRM=1"))
+
+    def test_preview_needs_no_confirmation(self):
+        """A preview URL is not the public site; gating it would only train the
+        user to type CONFIRM=1 without reading it."""
+        self.assertNotIn("_confirm-prod", self.dry("site-preview"))
+
+
+class TestCheckerActuallyRuns(MakefileTestCase):
+    def test_site_check_passes_on_the_real_site(self):
+        p = make("site-check")
+        self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+
+    def test_site_check_fails_on_a_blocked_domain(self):
+        p = make("site-check", "DOMAIN=plaud-mcp.com")
+        self.assertNotEqual(0, p.returncode, "make must propagate the checker's failure")
+        self.assertIn("domain", p.stdout.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()

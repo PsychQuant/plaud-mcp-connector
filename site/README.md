@@ -16,18 +16,32 @@ content, auth, a real form — revisit it then, not now.
 
 ## Deploy
 
+Go through the Makefile at the repo root, not `vercel` directly:
+
 ```bash
-cd site
-vercel deploy          # preview URL
-vercel deploy --prod   # production
+make site-check                      # just the rules below, no deploy
+make site-preview                    # preview URL
+make site-prod CONFIRM=1             # production
+make site-check DOMAIN=example.com   # also check a custom domain
 ```
+
+Both deploy targets run the test suite and `scripts/site_check.py` first, and
+`vercel` is the last line of the recipe — so a page that breaks the rules below
+cannot reach the internet by accident. Production additionally requires
+`CONFIRM=1`, because publishing is outward-facing and awkward to take back.
+
+`vercel deploy` by hand still works and skips every one of those checks. That is
+the hole the Makefile exists to close; use the targets.
 
 Nothing to install and nothing to build; `vercel.json` only sets response headers.
 
 ## Positioning rules — do not quietly drop these
 
 This page describes a third-party tool that works with someone else's product.
-Four constraints follow from that, and they are requirements, not style notes:
+Four constraints follow from that, and they are requirements, not style notes.
+Everything mechanical about them is enforced by `scripts/site_check.py`, so the
+list below is documentation of a gate rather than a promise someone has to
+remember:
 
 1. **No Plaud logo, brand colours, or typeface.** Plaud's own material uses the
    Jokker typeface and `#8F53ED` purple; this page deliberately uses neither. A
@@ -42,9 +56,22 @@ Four constraints follow from that, and they are requirements, not style notes:
 Wording is kept identical to the README and `plugin.json`, so a reader meets the
 same sentence wherever they arrive.
 
+## What the gate can and cannot decide
+
+`make site-check` fails the deploy on: Plaud's brand purple or typeface appearing
+in effective CSS (comments naming them are exempt — this page documents the rule
+it follows), the independence notice missing from the header or the footer, no
+link to `docs.plaud.ai`, install commands that differ from `README.md`, a
+subresource the CSP would silently block, and a `vercel.json` that has lost its
+CSP. It blocks domains whose shape is unambiguously Plaud's own.
+
+It **warns rather than blocks** on a domain that merely contains "plaud". Whether
+such a name reads as official is a judgement, and a string comparison has no
+business making it — so it asks instead of pretending.
+
 ## Editing
 
 Claims on this page must match what actually ships. The install commands were run
-end to end against a clean install of v0.2.0. If the commands change, run them
-again before changing the page — every previous "surely this works" in this repo
-turned out to be wrong.
+end to end against a clean install of v0.2.0, and `site_check.py` now fails the
+deploy if the page and `README.md` ever disagree about them — that divergence is
+issue #7 verbatim, and it shipped once already.
