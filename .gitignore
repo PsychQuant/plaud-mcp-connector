@@ -19,5 +19,7 @@ tokens*.json
 # Editor / tooling
 node_modules/
 *.log
+__pycache__/
+*.pyc
 .spectra/
 openspec/.vector-search.db*
