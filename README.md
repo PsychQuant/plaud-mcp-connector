@@ -117,9 +117,15 @@ python3 scripts/cache.py show <recording-id>
   does nothing) rather than silent, but verify the file landed.
 - **Upload is macOS-only.** It drives Safari via AppleScript. There is no Linux
   or Windows path, and none is planned.
-- **First index of a large library is slow** and pulls a lot of text through the
-  model context — one `get_transcript` call per recording. Scope it with
+- **First index of a large library is slow.** Transcripts are paginated, so a long
+  recording takes several fetches. Without the CLI installed, every page also
+  passes through the model context. Install `@plaud-ai/cli` (above) and scope with
   `--days` / `--since`.
+- **Completeness is tracked, not assumed.** A recording whose fetch was cut short
+  is marked incomplete, re-fetched on the next run, and flagged in search results
+  as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
+  v0.1.0 silently kept only each transcript's first page and reported "no match"
+  for words that were spoken.
 
 ## Privacy
 
