@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plaud-mcp-connector — search what was actually said</title>
+<meta name="description" content="An independent Claude Code plugin. Full-text search across Plaud transcript bodies, subtitle export, and audio upload — the things the official Plaud MCP cannot do.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
+<style>
+  /* Deliberately nothing like Plaud's own identity: they use Jokker and #8F53ED.
+     A page about someone else's product that borrows their look reads as theirs. */
+  :root {
+    --bg: #fbfaf8;  --fg: #1a1a17;  --muted: #5f5d57;  --rule: #e2ded6;
+    --card: #ffffff; --accent: #1f6f5c; --accent-soft: #e8f2ee;
+    --warn-bg: #fdf6e7; --warn-rule: #e8d5a8;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14140f; --fg: #ece9e1; --muted: #a09c92; --rule: #2e2d27;
+      --card: #1c1b16; --accent: #6cc0a5; --accent-soft: #172b25;
+      --warn-bg: #241f12; --warn-rule: #4a3f22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.65 ui-sans-serif, -apple-system, "Segoe UI", "Noto Sans TC", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 0 1.5rem; }
+  a { color: var(--accent); }
+  code, pre { font-family: var(--mono); font-size: .875em; }
+  pre {
+    background: var(--card); border: 1px solid var(--rule); border-radius: 10px;
+    padding: 1rem 1.15rem; overflow-x: auto; line-height: 1.55;
+  }
+  h1, h2, h3 { line-height: 1.2; letter-spacing: -.02em; }
+  h2 { font-size: 1.6rem; margin: 3.5rem 0 1rem; }
+  h3 { font-size: 1.05rem; margin: 2rem 0 .5rem; }
+
+  /* ---- hero ---- */
+  header { padding: 5rem 0 3.5rem; border-bottom: 1px solid var(--rule); }
+  .eyebrow {
+    display: inline-block; font-size: .74rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--accent);
+    background: var(--accent-soft); padding: .3rem .7rem; border-radius: 100px;
+  }
+  h1 { font-size: clamp(2.1rem, 5.5vw, 3.3rem); margin: 1.2rem 0 .8rem; }
+  .lede { font-size: 1.2rem; color: var(--muted); max-width: 40rem; margin: 0 0 2rem; }
+  .lede strong { color: var(--fg); font-weight: 600; }
+
+  /* ---- gap table ---- */
+  table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: .93rem; }
+  th, td { text-align: left; padding: .8rem .9rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  td:first-child { font-weight: 600; white-space: nowrap; }
+  .tablewrap { overflow-x: auto; }
+
+  /* ---- prompt examples ---- */
+  .prompt {
+    background: var(--card); border: 1px solid var(--rule); border-left: 3px solid var(--accent);
+    border-radius: 0 10px 10px 0; padding: 1rem 1.15rem; margin: 1rem 0;
+  }
+  .prompt p { margin: 0; }
+  .prompt .you { font-weight: 600; }
+  .prompt .out { color: var(--muted); font-size: .9rem; margin-top: .55rem; font-family: var(--mono); white-space: pre-wrap; }
+
+  /* ---- install tabs ---- */
+  .tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1.25rem 0 .75rem; }
+  .tabs button {
+    font: inherit; font-size: .86rem; cursor: pointer; color: var(--muted);
+    background: transparent; border: 1px solid var(--rule); border-radius: 100px;
+    padding: .35rem .85rem;
+  }
+  .tabs button[aria-selected="true"] { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+  [role="tabpanel"][hidden] { display: none; }
+
+  /* ---- notes ---- */
+  .note {
+    background: var(--warn-bg); border: 1px solid var(--warn-rule);
+    border-radius: 10px; padding: 1rem 1.15rem; margin: 1.5rem 0; font-size: .93rem;
+  }
+  .note p:first-child { margin-top: 0; } .note p:last-child { margin-bottom: 0; }
+  ul { padding-left: 1.15rem; } li { margin: .5rem 0; }
+
+  footer {
+    margin-top: 5rem; padding: 2.5rem 0 4rem; border-top: 1px solid var(--rule);
+    color: var(--muted); font-size: .89rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <span class="eyebrow">Independent · not affiliated with Plaud Inc.</span>
+    <h1>Search what was actually&nbsp;said.</h1>
+    <p class="lede">
+      Plaud's official MCP can tell you a recording is called <em>"Weekly sync"</em>.
+      It cannot tell you <strong>which</strong> recording is the one where somebody
+      said <em>"we're pushing the migration to Q3"</em>.
+    </p>
+<pre><code>/plugin marketplace add PsychQuant/plaud-mcp-connector
+/plugin install plaud-mcp-connector@plaud-mcp-connector</code></pre>
+  </div>
+</header>
+
+<main class="wrap">
+
+<h2>The gap this fills</h2>
+<p>
+  Plaud shipped an official MCP server on 6 August 2026. It is good, and this
+  plugin runs it unmodified — this is not a replacement, it contains it. But its
+  surface is deliberately narrow.
+</p>
+
+<div class="tablewrap">
+<table>
+  <thead><tr><th></th><th>Official Plaud MCP</th><th>With this plugin</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Search</td>
+      <td>Matches <strong>recording names only</strong>, across the newest 500 recordings</td>
+      <td>Full text of every transcript you have indexed</td>
+    </tr>
+    <tr>
+      <td>Subtitles</td>
+      <td>None — transcript text, no timed cues</td>
+      <td><code>.srt</code> export for video and lecture captions</td>
+    </tr>
+    <tr>
+      <td>Upload</td>
+      <td>None — all seven tools are read-only</td>
+      <td>Puts a local audio file into your own library</td>
+    </tr>
+    <tr>
+      <td>Mishearings</td>
+      <td>What the ASR produced, as-is</td>
+      <td>Optional proofreading pass, stored beside the original</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<h2>What you actually type</h2>
+
+<div class="prompt">
+  <p class="you">哪次會議談到預算拆兩期？</p>
+  <p class="out">── 產品週會 2026-08-01
+   id rec_8f21 · 2026-08-01 · 2 hits
+   │ [00:03:10] 講者一: 那就先把 budget 拆成兩期</p>
+</div>
+
+<div class="prompt">
+  <p class="you">index my Plaud recordings from the last 90 days</p>
+  <p class="out">cached 143 recordings · 1 incomplete (re-fetched next run)
+transcript: 2,914,006 characters indexed</p>
+</div>
+
+<div class="prompt">
+  <p class="you">make subtitles from the Kubernetes migration meeting</p>
+  <p class="out">wrote 412 cues → kubernetes-migration.srt</p>
+</div>
+
+<h2>Install</h2>
+<p>Requires <strong>Node.js 20+</strong> and a Plaud account with Cloud Sync enabled.</p>
+
+<div class="tabs" role="tablist" aria-label="Install target">
+  <button role="tab" aria-selected="true"  aria-controls="p-cc" id="t-cc">Claude Code</button>
+  <button role="tab" aria-selected="false" aria-controls="p-big" id="t-big">Large library</button>
+  <button role="tab" aria-selected="false" aria-controls="p-up" id="t-up">Upload &amp; subtitles</button>
+</div>
+
+<div role="tabpanel" id="p-cc" aria-labelledby="t-cc">
+<pre><code>/plugin marketplace add PsychQuant/plaud-mcp-connector
+/plugin install plaud-mcp-connector@plaud-mcp-connector</code></pre>
+<p>Then authorise once — ask Claude to <em>“log me into Plaud”</em>. Both commands
+above were run end to end against a clean install; they are tested, not assumed.</p>
+</div>
+
+<div role="tabpanel" id="p-big" aria-labelledby="t-big">
+<pre><code>npm install -g @plaud-ai/cli
+plaud login</code></pre>
+<p>With the CLI installed, indexing writes transcripts straight to disk instead of
+reading every one through the model context — the difference between a few minutes
+and a very expensive afternoon on a library of hundreds. The CLI keeps its own
+login, separate from the MCP's.</p>
+</div>
+
+<div role="tabpanel" id="p-up" aria-labelledby="t-up">
+<pre><code># macOS only — upload drives Safari
+brew install ffmpeg</code></pre>
+<p>Subtitle export needs nothing extra: it reads the local cache. Upload is browser
+automation against the Plaud web app and works on macOS only.</p>
+</div>
+
+<h2>When not to install this</h2>
+<ul>
+  <li><strong>You only have a handful of recordings.</strong> The official plugin's
+    name search is enough; indexing buys you nothing.</li>
+  <li><strong>You want upload but aren't on macOS.</strong> The upload path drives
+    Safari through AppleScript. There is no Linux or Windows equivalent, and none
+    is planned.</li>
+  <li><strong>You want a hosted service.</strong> Everything here runs on your
+    machine, against your own account.</li>
+</ul>
+
+<h2>Limits, stated plainly</h2>
+<ul>
+  <li><strong>Search covers what you indexed.</strong> A recording made after your
+    last index run is not searchable. The tool reports the covered range instead of
+    answering “not found”.</li>
+  <li><strong>Completeness is tracked, not assumed.</strong> A recording whose fetch
+    was cut short is marked incomplete, re-fetched next run, and flagged in results.
+    This exists because v0.1.0 silently kept only each transcript's first page and
+    reported “no match” for words that were spoken.</li>
+  <li><strong>Upload is browser automation, not an API.</strong> It works today and
+    will break the day Plaud redesigns its import dialog.</li>
+  <li><strong>Proofreading has no accuracy figure.</strong> Without a ground-truth
+    transcript there is nothing to measure against. You will notice you can find
+    things; nobody can give you a number.</li>
+</ul>
+
+<div class="note">
+  <p><strong>Your recordings stay yours.</strong> Transcripts are cached on your own
+  machine and are never committed, uploaded, or sent anywhere except to the model
+  answering your question. Credentials live in your OAuth token store or the macOS
+  Keychain.</p>
+</div>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>
+      <strong>plaud-mcp-connector</strong> is an independent, community-built plugin.
+      It is <strong>not affiliated with, endorsed by, or supported by Plaud Inc.</strong>
+      “Plaud” is used only to say what this works with.
+    </p>
+    <p>
+      Problems with this plugin belong in
+      <a href="https://github.com/PsychQuant/plaud-mcp-connector/issues">its issue tracker</a>,
+      not with Plaud support. For Plaud's own integration see
+      <a href="https://docs.plaud.ai/plaud-mcp-cli/mcp">docs.plaud.ai</a>.
+    </p>
+    <p>
+      <a href="https://github.com/PsychQuant/plaud-mcp-connector">Source</a> ·
+      MIT licensed
+    </p>
+  </div>
+</footer>
+
+<script>
+  // Tabs, unenhanced-friendly: every panel is visible until this runs, so the
+  // page still says everything with JS disabled.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  const show = (id) => {
+    tabs.forEach((t) => {
+      const selected = t.id === id;
+      t.setAttribute('aria-selected', String(selected));
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !selected;
+    });
+  };
+  tabs.forEach((t) => t.addEventListener('click', () => show(t.id)));
+  show('t-cc');   // collapse to the first tab only once JS is available
+</script>
+
+</body>
+</html>
