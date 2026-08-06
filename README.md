@@ -33,8 +33,13 @@ That is the gap this fills.
 
 ```
 /plugin marketplace add PsychQuant/plaud-mcp-connector
-/plugin install plaud-mcp-connector
+/plugin install plaud-mcp-connector@plaud-mcp-connector
 ```
+
+The `@plaud-mcp-connector` suffix names the marketplace. It reads oddly because
+the marketplace and the plugin share a name, but leaving it off is ambiguous.
+Both lines above were run end to end against a clean install of v0.2.0 — they are
+tested, not assumed.
 
 Then authorise once — ask Claude to *"log me into Plaud"*, or call the `login`
 tool directly. It opens a browser for OAuth and stores the token in
