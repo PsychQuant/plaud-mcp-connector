@@ -88,6 +88,30 @@ It **warns rather than blocks** on a domain that merely contains "plaud". Whethe
 such a name reads as official is a judgement, and a string comparison has no
 business making it — so it asks instead of pretending.
 
+## Adding a language
+
+The page ships in English, Traditional Chinese, and Japanese — 22 of the 37
+markets Plaud declares an `hreflang` for. Adding one of the remaining ten
+(`es` `fr` `de` `it` `nl` `pt` `vi` `th` `ms` `ar`) is a **data change**, not a
+code change:
+
+1. Add the language to the `I18N` object in `index.html` with **every** key the
+   English table has. `scripts/site_check.py` refuses a partial set — a page
+   half-translated into a language is worse than one that does not offer it.
+2. Add an `<option value="xx" lang="xx">Name</option>` to the switcher. The
+   `lang` attribute is not optional: a language name written in its own script
+   needs it, or a screen reader pronounces it with English rules.
+3. Add the language's own way of saying "not affiliated with Plaud" to
+   `NOT_AFFILIATED` in `scripts/site_check.py`. The gate checks each language
+   against its own phrasing — matching the English phrase everywhere would be a
+   check only English can pass.
+4. Extend the `navigator.languages` branch in the page's script.
+
+**Do not machine-translate to fill the table.** The page's only real asset is
+that its claims are exact; ten translations nobody can vouch for would spend
+that to gain a language count. `ar` additionally needs `dir="rtl"` and layout
+work — it is not a data-only addition.
+
 ## Editing
 
 Claims on this page must match what actually ships. The install commands were run
