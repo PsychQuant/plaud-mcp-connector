@@ -117,13 +117,72 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
     return cues
 
 
+# Readability conventions differ by script, and one number for all of them is
+# wrong twice over: 42 characters is a long-but-standard Latin line and roughly
+# double what a CJK line should carry, because each glyph is full-width.
+LINE_LIMITS = {"latin": 42, "cjk": 20}
+
+_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_THAI = re.compile(r"[\u0e00-\u0e7f]")
+
+
+def detect_script(text: str) -> str:
+    """Which convention this line should follow: "latin", "cjk", or "thai".
+
+    Decided by which script carries most of the line, not by first character —
+    a Chinese sentence containing an English term is still a Chinese line, and
+    breaking it at 42 characters would put twice the readable width on screen.
+    """
+    cjk = len(_CJK.findall(text))
+    thai = len(_THAI.findall(text))
+    latin = sum(1 for ch in text if ch.isalpha() and ord(ch) < 0x0250)
+    if thai > cjk and thai > latin:
+        return "thai"
+    if cjk >= latin and cjk > 0:
+        return "cjk"
+    return "latin"
+
+
+def wrap_cue_text(text: str) -> str:
+    """Break one cue into readable lines for its script.
+
+    Thai is returned untouched on purpose. It has no word spaces and correct
+    breaking needs a segmenter this plugin does not carry; breaking mid-word
+    would be worse than a long line, and guessing a break point is exactly the
+    kind of plausible-looking wrongness that is hard to notice later.
+    """
+    script = detect_script(text)
+    if script == "thai":
+        return text
+    limit = LINE_LIMITS[script]
+    if len(text) <= limit:
+        return text
+
+    if script == "cjk":
+        # No word spaces to break on, so break by width. Any position is a legal
+        # break in a script that does not separate words.
+        return "\n".join(text[i:i + limit] for i in range(0, len(text), limit))
+
+    lines, current = [], ""
+    for word in text.split():
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > limit:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        lines.append(current)
+    return "\n".join(lines)
+
+
 def render_srt(cues: list[dict]) -> str:
     blocks = []
     for n, cue in enumerate(cues, start=1):
         blocks.append(
             f"{n}\n"
             f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n"
-            f"{cue['text']}\n"
+            f"{wrap_cue_text(cue['text'])}\n"
         )
     return "\n".join(blocks)
 

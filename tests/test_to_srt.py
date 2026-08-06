@@ -200,3 +200,93 @@ class TestCli(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# --------------------------------------------------------------------------
+# Language-dependent line length (#14)
+#
+# Subtitle readability conventions are not universal. Latin scripts run ~42
+# characters per line; CJK is roughly half that in character count because each
+# glyph is full-width. Emitting one unwrapped line regardless of script is the
+# same mistake in both directions — unreadably long for Latin, and wrong by a
+# factor of two for CJK.
+# --------------------------------------------------------------------------
+class TestScriptDetection(unittest.TestCase):
+    def test_latin_text(self):
+        self.assertEqual("latin", to_srt.detect_script("we should split the budget"))
+
+    def test_chinese_text(self):
+        self.assertEqual("cjk", to_srt.detect_script("我們應該把預算拆成兩期"))
+
+    def test_japanese_kana(self):
+        self.assertEqual("cjk", to_srt.detect_script("よろしくお願いします"))
+
+    def test_thai_text(self):
+        self.assertEqual("thai", to_srt.detect_script("การประชุมเรื่องงบประมาณ"))
+
+    def test_mixed_text_follows_the_majority(self):
+        """A Chinese sentence with an English term in it is still a Chinese line."""
+        self.assertEqual("cjk", to_srt.detect_script("那就先把 budget 拆成兩期比較好"))
+
+    def test_empty_text_defaults_to_latin(self):
+        self.assertEqual("latin", to_srt.detect_script(""))
+
+
+class TestWrapCueText(unittest.TestCase):
+    def test_short_latin_line_is_untouched(self):
+        self.assertEqual("hello there", to_srt.wrap_cue_text("hello there"))
+
+    def test_long_latin_wraps_on_spaces(self):
+        text = "we agreed to split the budget across two quarters and revisit it in March"
+        out = to_srt.wrap_cue_text(text)
+        self.assertIn("\n", out)
+        for line in out.split("\n"):
+            self.assertLessEqual(len(line), 42, line)
+        self.assertEqual(text.split(), out.replace("\n", " ").split())
+
+    def test_latin_never_splits_a_word(self):
+        out = to_srt.wrap_cue_text("supercalifragilistic " * 4)
+        for line in out.split("\n"):
+            for word in line.split():
+                self.assertIn(word, "supercalifragilistic")
+
+    def test_cjk_uses_a_shorter_limit(self):
+        """Full-width glyphs take about twice the space per character."""
+        text = "我們應該把預算拆成兩期然後在三月的時候重新檢視這件事情比較妥當"
+        out = to_srt.wrap_cue_text(text)
+        self.assertIn("\n", out)
+        for line in out.split("\n"):
+            self.assertLessEqual(len(line), 20, line)
+
+    def test_cjk_wraps_without_spaces(self):
+        """CJK has no word spaces — wrapping on spaces would never fire."""
+        text = "預算" * 30
+        out = to_srt.wrap_cue_text(text)
+        self.assertIn("\n", out)
+        self.assertEqual(text, out.replace("\n", ""))
+
+    def test_thai_is_left_unwrapped_and_that_is_deliberate(self):
+        """Thai has no word spaces and needs a segmenter to break correctly.
+        Breaking mid-word is worse than a long line, so it is left alone rather
+        than broken wrongly."""
+        text = "การประชุม" * 12
+        self.assertEqual(text, to_srt.wrap_cue_text(text))
+
+    def test_no_content_is_lost_for_any_script(self):
+        """Checked per script, because "same content" means different things.
+        Latin wraps AT a space, so the newline replaces one — compare tokens.
+        CJK wraps BETWEEN characters with no space involved, so replacing the
+        newline with a space would invent one — compare the raw string."""
+        for text in ["a b c " * 30, "hello"]:
+            self.assertEqual(text.split(), to_srt.wrap_cue_text(text).replace("\n", " ").split(), text)
+        for text in ["預算" * 40, "よろしく" * 20]:
+            self.assertEqual(text, to_srt.wrap_cue_text(text).replace("\n", ""), text)
+
+    def test_wrapping_is_applied_when_rendering(self):
+        cues = [{"start": 0.0, "end": 4.0,
+                 "text": "we agreed to split the budget across two quarters and revisit in March"}]
+        out = to_srt.render_srt(cues)
+        body = [l for l in out.splitlines() if l and "-->" not in l and not l.strip().isdigit()]
+        self.assertGreater(len(body), 1, out)
+        for line in body:
+            self.assertLessEqual(len(line), 42, line)

@@ -8,6 +8,8 @@ description: |
   "我要原始音檔", "export the audio so I can re-transcribe it". The official Plaud
   MCP has no tool for this at all — only the CLI can reach the audio, which is why
   this skill requires it.
+  Also triggers in the languages Plaud localises for (its own hreflang list):
+  "Originalaufnahme herunterladen", "descargar el audio original", "télécharger l'audio original", "元の音声をダウンロード", "scarica l'audio originale", "originele audio downloaden", "baixar o áudio original", "tải âm thanh gốc", "ดาวน์โหลดเสียงต้นฉบับ", "muat turun audio asal", "تنزيل الصوت الأصلي".
 ---
 
 # Plaud Audio — get the recording itself back

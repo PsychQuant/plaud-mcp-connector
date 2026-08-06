@@ -7,6 +7,8 @@ description: |
   recording", or wants to caption a video whose audio is in Plaud. Neither the
   official Plaud MCP nor the official CLI can produce timed subtitles — they
   return transcript text only.
+  Also triggers in the languages Plaud localises for (its own hreflang list):
+  "Untertitel erstellen", "crear subtítulos", "créer des sous-titres", "字幕を作成", "creare sottotitoli", "ondertitels maken", "criar legendas", "tạo phụ đề", "สร้างคำบรรยาย", "buat sari kata", "إنشاء ترجمة".
 argument-hint: "<recording name or id> [-o out.srt]"
 ---
 

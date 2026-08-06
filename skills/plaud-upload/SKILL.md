@@ -7,6 +7,8 @@ description: |
   audio/video file to be transcribed. The official Plaud MCP and CLI are
   read-only — this is the only path that writes into a personal library.
   macOS only (drives Safari).
+  Also triggers in the languages Plaud localises for (its own hreflang list):
+  "zu Plaud hochladen", "subir a Plaud", "téléverser vers Plaud", "Plaudにアップロード", "carica su Plaud", "uploaden naar Plaud", "enviar para o Plaud", "tải lên Plaud", "อัปโหลดไปยัง Plaud", "muat naik ke Plaud", "رفع إلى بلود".
 argument-hint: "<file_path_or_glob>"
 ---
 

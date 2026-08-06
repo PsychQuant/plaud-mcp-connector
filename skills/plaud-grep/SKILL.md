@@ -7,6 +7,8 @@ description: |
   discuss the budget", "找出提到 Kubernetes 的錄音", "search my transcripts for
   X", "Plaud 全文搜尋". The official Plaud MCP cannot answer these — its query
   matches recording NAMES only, over the newest 500 recordings.
+  Also triggers in the languages Plaud localises for (its own hreflang list):
+  "welche Besprechung ging es ums Budget", "¿en qué reunión hablamos del presupuesto?", "quelle réunion parlait du budget", "どの録音で予算の話をしたか", "quale riunione parlava del budget", "welke opname ging over het budget", "qual gravação falou sobre o orçamento", "cuộc họp nào nói về ngân sách", "การประชุมไหนพูดถึงงบประมาณ", "mesyuarat mana yang bincang bajet", "أي اجتماع تحدث عن الميزانية".
 argument-hint: "<search terms>"
 ---
 

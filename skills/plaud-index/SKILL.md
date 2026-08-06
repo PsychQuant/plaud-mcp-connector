@@ -7,6 +7,8 @@ description: |
   or when a plaud-grep search reports the cache is empty or stale. Also use before
   any question of the form "which recording mentioned X" — that question cannot be
   answered until the transcripts are on disk.
+  Also triggers in the languages Plaud localises for (its own hreflang list):
+  "Plaud-Aufnahmen indexieren", "indexar mis grabaciones de Plaud", "indexer mes enregistrements Plaud", "Plaudの録音をインデックス化", "indicizza le registrazioni Plaud", "Plaud-opnames indexeren", "indexar minhas gravações Plaud", "lập chỉ mục bản ghi Plaud", "จัดทำดัชนีการบันทึก Plaud", "indeks rakaman Plaud", "فهرسة تسجيلات بلود".
 argument-hint: "[--days N | --all | --since YYYY-MM-DD]"
 ---
 
