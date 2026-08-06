@@ -103,11 +103,17 @@ its absence here reads as "one call returns the whole transcript". **That is an
 inference from silence, not a guarantee** — hence checking `--help` first. If it
 does list a paging flag, this fast path is unsafe: use the MCP loop below instead.
 
-Checked against a real install on 2026-08-07 (CLI **0.3.7**): `transcript` offers
-only `-o/--output`, `--block`, and `--polished` — no cursor, page, or limit. The
-premise holds for that version. What is still unmeasured is the behaviour: whether
-one call really returns every utterance can only be seen with an authenticated
-account, so a later version could start truncating without adding a flag.
+**Measured, not inferred (2026-08-07, CLI 0.3.7, authenticated account).** A
+94-segment recording was fetched both ways: the MCP reported `total: 94`, and
+`plaud transcript <id> -o file` produced a file with exactly 94 speaker-tagged
+segments. **The CLI does not truncate** — one call returns the whole transcript.
+
+That closes the risk this section was written to flag: if the CLI *had* truncated,
+this fast path would have written truncated transcripts to disk marked
+`--complete true`, and the completeness check could not have caught it (there is no
+cursor on this path to check against). The premise is now verified for 0.3.7 rather
+than inferred from the absence of a flag — re-run `plaud transcript --help` after a
+CLI upgrade, because a later version could still start paginating.
 
 ```bash
 tmp=$(mktemp)
@@ -135,6 +141,30 @@ large libraries much cheaper to index.
 ```
 
 #### `get_transcript` is paginated — one call is not the whole transcript
+
+**Response shape, measured 2026-08-07 (authenticated):**
+
+```jsonc
+{ "file_id": "...", "block": "transaction",
+  "total": 94,          // ← total segment count, present on every page
+  "offset": 92, "limit": 200, "returned": 2,
+  "next_cursor": null,  // ← JSON null when exhausted (base64 `{"o":N}` otherwise)
+  "segments": [ { "start_time": ..., "content": "...", "speaker": "..." } ] }
+```
+
+Three things this settles:
+
+- `next_cursor` is a **top-level key**, and exhaustion is a JSON **`null`** — not a
+  missing key, not an empty string.
+- `limit` is **not silently downgraded**: a request for 200 comes back echoing 200
+  (the schema caps it at 500).
+- **`total` exists.** That is a stronger completeness test than any cursor
+  heuristic: `offset + returned >= total` is arithmetic, while "does this cursor
+  look empty" is a judgement. Prefer the arithmetic.
+
+**A recording with no transcript returns a bare `[]`, not an object.** The two
+shapes are not interchangeable — code that reaches for `.next_cursor` on the empty
+case is reading a property of an array. Treat `[]` as "not transcribed yet, skip".
 
 It returns **one page of utterances** with a `next_cursor` for the rest. Calling
 it once and caching the result was the v0.1.0 bug: every recording was truncated
