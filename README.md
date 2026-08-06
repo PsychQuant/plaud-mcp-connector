@@ -94,6 +94,20 @@ cache: no API call, no auth.
 make subtitles from the Kubernetes migration meeting
 ```
 
+### `plaud-proofread` — fix what the ASR misheard
+
+Runs `bestasr`'s proofreading pipeline over a cached transcript and stores the
+result **beside** the original, never over it. This is the ceiling on search: if
+Plaud heard "Iverson" as "艾佛森", no amount of fixing the search finds it — the
+fault is in the text. Hits from the corrected copy are tagged `[corrected]` so a
+correction is never quoted as verbatim speech. Requires the optional `bestasr`
+plugin.
+
+```
+這段逐字稿的人名都聽錯了，幫我校對
+proofread the research meeting transcript against these slides
+```
+
 ### `plaud-upload` — put a file into your library
 
 Converts video to audio, checks the 500 MB / 5 h limits, and drives Safari to

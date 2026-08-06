@@ -208,10 +208,16 @@ def cmd_search(args) -> None:
         parts = line.split(":", 2)
         if len(parts) < 3:
             continue
-        rec_id = pathlib.Path(parts[0]).stem
+        path = pathlib.Path(parts[0])
+        rec_id = path.stem
         if rec_id == "manifest":
             continue
-        hits.setdefault(rec_id, []).append(parts[2].strip())
+        # A hit inside proofread/ is corrected text, not what the recording
+        # literally contains. Marking it keeps a caller from quoting it as
+        # verbatim speech — the whole point of proofreading is that the two
+        # differ, so the difference has to stay visible.
+        corrected = "proofread" in path.parts
+        hits.setdefault(rec_id, []).append((parts[2].strip(), corrected))
 
     if not hits:
         print(f"no match for {args.pattern!r} across {len(man)} cached recordings")
@@ -231,10 +237,14 @@ def cmd_search(args) -> None:
         # labelling it "partially indexed" would point at the wrong cause.
         if rec_id in man and man[rec_id].get("complete") is False:
             print("   ⚠ partially indexed — more transcript may exist; re-run plaud-index")
-        for ln in lines[: args.max_lines]:
-            print(f"   │ {ln[:200]}")
+        for ln, corrected in lines[: args.max_lines]:
+            tag = " [corrected]" if corrected else ""
+            print(f"   │ {ln[:200]}{tag}")
         if len(lines) > args.max_lines:
             print(f"   │ … {len(lines) - args.max_lines} more")
+        if any(c for _, c in lines):
+            print("   ℹ [corrected] lines come from a proofread copy — quote them as "
+                  "corrected text, not as what was said verbatim")
         print()
 
 

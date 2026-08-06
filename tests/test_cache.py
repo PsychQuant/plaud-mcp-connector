@@ -576,5 +576,69 @@ class TestCompletenessTracking(CacheTestCase):
         self.assertNotIn("partially indexed", out)
 
 
+class TestProofreadAttribution(CacheTestCase):
+    """Hits from proofread/ must be distinguishable from verbatim transcript.
+
+    A corrected line reads exactly like a real one. If search does not say which
+    it is, a caller quoting it presents an edit as testimony — the failure the
+    proofreading pass itself is meant to make visible, not hide.
+    """
+
+    def _write_proofread(self, rec_id: str, body: str) -> None:
+        d = cache.CACHE_DIR / "proofread"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{rec_id}.md").write_text(body)
+
+    def _hit_line(self, out: str, needle: str) -> str:
+        """The result line carrying `needle`, excluding the trailing legend.
+
+        Asserting `"[corrected]" in out` would pass on the legend alone — the
+        sentence explaining the tag contains the tag. The claim being made is
+        that the *hit line* is marked, so the assertion has to look there.
+        """
+        for line in out.splitlines():
+            if line.lstrip().startswith("│") and needle in line:
+                return line
+        self.fail(f"no hit line containing {needle!r} in:\n{out}")
+
+    def test_hit_only_in_proofread_copy_still_finds_the_recording(self) -> None:
+        # The whole point: ASR heard it wrong, so the raw transcript cannot match.
+        self._put("rec1", name="Research", body="[00:01] A: 艾佛森 similarity\n")
+        self._write_proofread("rec1", "[00:01] A: Iverson similarity\n")
+        out = self._search("Iverson", have_rg=False)
+        self.assertIn("Research", out)
+        self.assertIn("[corrected]", self._hit_line(out, "Iverson similarity"))
+
+    def test_the_tag_is_on_the_line_not_only_in_the_legend(self) -> None:
+        # Regression guard for a false-passing assertion: dropping the per-line
+        # tag left the legend behind, so a bare `assertIn` stayed green while the
+        # thing it claimed to check was gone.
+        self._put("rec1", name="Research", body="[00:01] A: verbatim budget\n")
+        self._write_proofread("rec1", "[00:01] A: corrected budget\n")
+        out = self._search("budget", have_rg=False)
+        self.assertIn("[corrected]", self._hit_line(out, "corrected budget"))
+        self.assertNotIn("[corrected]", self._hit_line(out, "verbatim budget"))
+
+    def test_verbatim_hits_are_not_tagged(self) -> None:
+        self._put("rec1", name="Research", body="[00:01] A: budget talk\n")
+        out = self._search("budget", have_rg=False)
+        self.assertNotIn("[corrected]", out)
+
+    def test_explains_the_tag_when_one_is_shown(self) -> None:
+        self._put("rec1", name="Research", body="[00:01] A: 艾佛森\n")
+        self._write_proofread("rec1", "[00:01] A: Iverson\n")
+        out = self._search("Iverson", have_rg=False)
+        self.assertIn("not as what was said verbatim", out)
+
+    def test_proofread_copy_groups_under_the_original_recording(self) -> None:
+        # Same stem in a subdirectory must resolve to the same recording, not a
+        # second "(unnamed)" entry.
+        self._put("rec1", name="Research", body="[00:01] A: shared word\n")
+        self._write_proofread("rec1", "[00:01] A: shared word\n")
+        out = self._search("shared word", have_rg=False)
+        self.assertIn("1 recordings", out)
+        self.assertNotIn("(unnamed)", out)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
