@@ -926,3 +926,94 @@ class TestPutSummary(CacheTestCase):
         self._put("rec_g", body="transcript")
         self._put_kind("rec_g", "un " + NFD + " serré")
         self.assertIn(NFC, (cache.CACHE_DIR / "summaries" / "rec_g.md").read_text())
+
+
+# --------------------------------------------------------------------------
+# Polished transcripts (#22)
+#
+# Plaud returns two versions of the same speech: raw, and a filler-thinned
+# "polish" with identical segments and timings. Subtitles want the second;
+# search wants the first, because search answers "what was said".
+#
+# The dividing line between polish/ and summaries/ is the point of this block:
+# a summary is NEW content (words that exist nowhere else, so searching it finds
+# things), while a polish is the SAME sentence said more tidily. Including
+# polish in search would return every line twice — once raw, once cleaned —
+# which is not extra reach, it is halved signal.
+# --------------------------------------------------------------------------
+class TestPolishIsExcludedFromSearch(CacheTestCase):
+    def _put_polish(self, rec_id: str, body: str) -> None:
+        d = cache.CACHE_DIR / "polish"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{rec_id}.md").write_text(body + "\n")
+
+    def test_polish_hit_does_not_appear(self):
+        self._put("rec_p", body="呃 那個 我們要把預算拆成兩期")
+        self._put_polish("rec_p", "我們要把預算拆成兩期")
+        out = self._search("預算", have_rg=False)
+        self.assertIn("1 matches", out, out)   # not 2
+
+    def test_transcript_is_still_found(self):
+        self._put("rec_q", body="我們要把預算拆成兩期")
+        self._put_polish("rec_q", "我們要把預算拆成兩期")
+        self.assertIn("1 matches", self._search("預算", have_rg=False))
+
+    def test_a_term_only_in_polish_is_not_findable(self):
+        """Deliberate. Polish is a rewording of speech, not a source of new
+        content — a word that exists only there was never actually said, and
+        surfacing it as a hit would misrepresent the recording."""
+        self._put("rec_r", body="something else entirely")
+        self._put_polish("rec_r", "quarterly forecasting")
+        self.assertIn("no match", self._search("forecasting", have_rg=False))
+
+    def test_summaries_remain_searchable(self):
+        """The contrast that makes the rule coherent — summaries stay in."""
+        d = cache.CACHE_DIR / "summaries"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "rec_s.md").write_text("Decision: quarterly forecasting\n")
+        self._put("rec_s", body="um so anyway")
+        self.assertIn("1 matches", self._search("forecasting", have_rg=False))
+
+    def test_polish_and_summary_together_behave_as_specified(self):
+        self._put("rec_t", body="呃 就是 預算的事")
+        self._put_polish("rec_t", "預算的事")
+        (cache.CACHE_DIR / "summaries").mkdir(parents=True, exist_ok=True)
+        (cache.CACHE_DIR / "summaries" / "rec_t.md").write_text("決議：預算拆兩期\n")
+        out = self._search("預算", have_rg=False)
+        self.assertIn("2 matches", out, out)   # transcript + summary, not polish
+        self.assertIn("[summary]", out)
+
+
+class TestPutPolish(CacheTestCase):
+    def _put_kind(self, rec_id: str, body: str, kind: str) -> str:
+        ns = argparse.Namespace(id=rec_id, name="", created_at="", duration="", kind=kind)
+        with mock.patch("sys.stdin", io.StringIO(body)):
+            return self._capture_stdout(cache.cmd_put, ns)
+
+    def test_polish_lands_in_its_own_dir(self):
+        self._put("rec_a", body="raw text")
+        self._put_kind("rec_a", "tidy text", "polish")
+        self.assertTrue((cache.CACHE_DIR / "polish" / "rec_a.md").exists())
+
+    def test_polish_does_not_overwrite_the_transcript(self):
+        self._put("rec_b", body="the actual spoken words")
+        self._put_kind("rec_b", "tidied", "polish")
+        self.assertIn("the actual spoken words", (cache.CACHE_DIR / "rec_b.md").read_text())
+
+    def test_polish_does_not_move_chars_or_completeness(self):
+        self._put("rec_c", body="raw body here")
+        before = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_c"]
+        self._put_kind("rec_c", "a very much longer tidied version than the raw ever was", "polish")
+        after = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_c"]
+        self.assertEqual(before["chars"], after["chars"])
+        self.assertEqual(before["complete"], after["complete"])
+
+    def test_polish_is_recorded_on_the_manifest(self):
+        self._put("rec_d", body="raw")
+        self._put_kind("rec_d", "tidy", "polish")
+        man = json.loads((cache.CACHE_DIR / "manifest.json").read_text())
+        self.assertTrue(man["recordings"]["rec_d"].get("has_polish"))
+
+    def test_orphan_polish_is_refused(self):
+        with self.assertRaises(SystemExit):
+            self._put_kind("rec_ghost", "tidy with no transcript", "polish")

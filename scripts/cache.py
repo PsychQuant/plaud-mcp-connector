@@ -133,6 +133,9 @@ def cmd_status(args) -> None:
         summarised = sum(1 for r in recs.values() if r.get("has_summary"))
         if summarised:
             print(f"summaries : {summarised} of {len(recs)} recordings")
+        polished = sum(1 for r in recs.values() if r.get("has_polish"))
+        if polished:
+            print(f"polished  : {polished} of {len(recs)} recordings (subtitles only)")
 
 
 def cmd_put(args) -> None:
@@ -157,19 +160,20 @@ def cmd_put(args) -> None:
     # `complete` — those describe the transcript and would start meaning nothing
     # if a summary could change them.
     kind = str(getattr(args, "kind", "transcript") or "transcript")
-    if kind == "summary":
+    if kind in ("summary", "polish"):
         man = _load_manifest()
         if rec_id not in man["recordings"]:
             sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
-                     f"orphan summary the manifest would never mention. Index it first.")
-        d = CACHE_DIR / "summaries"
+                     f"orphan {kind} the manifest would never mention. Index it first.")
+        subdir, flag = ("summaries", "has_summary") if kind == "summary" else ("polish", "has_polish")
+        d = CACHE_DIR / subdir
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{rec_id}.md"
         path.write_text(body.rstrip("\n") + "\n")
-        man["recordings"][rec_id]["has_summary"] = True
-        man["recordings"][rec_id]["summary_indexed_at"] = _now()
+        man["recordings"][rec_id][flag] = True
+        man["recordings"][rec_id][f"{kind}_indexed_at"] = _now()
         _save_manifest(man)
-        print(f"cached summary for {rec_id} ({len(body):,} chars) → {path}")
+        print(f"cached {kind} for {rec_id} ({len(body):,} chars) → {path}")
         return
 
     claimed = str(getattr(args, "complete", "true")).lower() == "true"
@@ -233,6 +237,16 @@ def _have_rg() -> bool:
 # transcript itself, which needs no label.
 HIT_SOURCES = {"proofread": "corrected", "summaries": "summary"}
 
+# Subdirectories held back from search. `polish/` is the same speech said more
+# tidily — including it would return every line twice, once raw and once
+# cleaned. That is not extra reach, it is halved signal.
+#
+# The contrast with `summaries/` is what makes the rule coherent: a summary is
+# NEW content, so searching it finds things findable nowhere else. A polish is a
+# rewording, so a term that appears only there was never actually said, and
+# surfacing it as a hit would misrepresent the recording.
+SEARCH_EXCLUDED_DIRS = {"polish"}
+
 
 def _hit_source(path: pathlib.Path) -> str:
     """What kind of text a hit came from: "corrected", "summary", or "" for the
@@ -279,6 +293,8 @@ def cmd_search(args) -> None:
         path = pathlib.Path(parts[0])
         rec_id = path.stem
         if rec_id == "manifest":
+            continue
+        if SEARCH_EXCLUDED_DIRS & set(path.parts):
             continue
         # Which file a hit came from changes what it means. proofread/ holds
         # corrected text and summaries/ holds AI-written prose; neither is what
@@ -349,9 +365,10 @@ def main() -> None:
                    help="did the fetch loop run to the end of the transcript?")
     p.add_argument("--pages", type=int, default=1,
                    help="how many get_transcript pages were concatenated")
-    p.add_argument("--kind", choices=["transcript", "summary"], default="transcript",
-                   help="summary writes to summaries/ and leaves the transcript, "
-                        "chars, and completeness untouched")
+    p.add_argument("--kind", choices=["transcript", "summary", "polish"], default="transcript",
+                   help="summary writes to summaries/ (searchable, labelled); polish writes "
+                        "to polish/ (NOT searchable — it is the same speech reworded); both "
+                        "leave the transcript, chars, and completeness untouched")
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")

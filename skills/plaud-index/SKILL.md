@@ -142,6 +142,41 @@ transcript through the model context. `npm install -g @plaud-ai/cli` makes
 large libraries much cheaper to index.
 ```
 
+#### Cache the polished transcript too — subtitles want it, search must not
+
+Plaud returns the same speech twice: raw, and a filler-thinned **polish** with
+**identical segments and identical timings** (measured 2026-08-07 — 94 segments
+either way, filler roughly halved). Subtitles want the tidy one; nobody reads
+"呃" on screen.
+
+```bash
+tmp=$(mktemp)
+plaud transcript "<id>" --polished -o "$tmp" 2>/dev/null && \
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind polish < "$tmp"
+rm -f "$tmp"
+```
+
+Through the MCP: `get_transcript` with `block="transaction_polish"`, same paging
+loop as the raw transcript, piped into the same `--kind polish` call.
+
+**`polish/` is deliberately excluded from search.** It is the same sentence said
+more tidily, so including it would return every line twice — raw and cleaned —
+which is not extra reach, it is halved signal. Contrast `summaries/`, which IS
+searched: a summary is *new* content, so searching it finds things findable
+nowhere else. That difference is the whole rule.
+
+Two things polish does **not** do, both measured — say them if the user expects
+otherwise:
+
+- **It does not fix mishearings.** In one recording a speaker's surname appears
+  one way four times and another way once; the polished copy keeps both. For that,
+  `plaud-proofread`.
+- **It normalises script** — simplified characters came back traditional. Good for
+  most readers here, a surprise for anyone expecting the bytes as transcribed.
+
+Polish is optional. A recording without one falls back to the raw transcript for
+subtitles, which is the pre-existing behaviour.
+
 #### Cache the summary too — it is often what the person remembers
 
 What someone recalls is usually closer to the **summary** (the point that was

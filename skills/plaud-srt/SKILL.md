@@ -39,6 +39,23 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
 `search` prints the id under each hit. If the recording is not cached, run
 `plaud-index` first — this skill never fetches.
 
+### 2. Pick the source (automatic)
+
+`to_srt.py` uses `polish/<id>.md` when the cache has one — Plaud's filler-thinned
+version of the same speech, with the same segments and the same timings, so the
+timeline does not shift. It falls back to the raw transcript otherwise.
+
+This is why the skill still never fetches: the choice was made at index time.
+If the user explicitly wants the words exactly as transcribed — research use,
+quoting verbatim — pass `--file` pointing at the raw transcript:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" --file "$HOME/.plaud-connector/cache/<id>.md" -o out.srt
+```
+
+Polish does **not** fix misheard names (that is `plaud-proofread`) and it
+normalises simplified characters to traditional. Say so if it matters to them.
+
 ### 2. Convert
 
 ```bash

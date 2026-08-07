@@ -290,3 +290,73 @@ class TestWrapCueText(unittest.TestCase):
         self.assertGreater(len(body), 1, out)
         for line in body:
             self.assertLessEqual(len(line), 42, line)
+
+
+# --------------------------------------------------------------------------
+# Subtitle source preference (#22)
+#
+# Plaud returns two versions of the same speech with identical segments and
+# timings: raw, and a filler-thinned polish. Subtitles want the tidy one —
+# nobody reads "呃" on screen — while search keeps the raw one, because search
+# answers "what was said".
+# --------------------------------------------------------------------------
+class TestSubtitleSource(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cache = pathlib.Path(self._tmp.name)
+        patch = mock.patch.object(to_srt, "CACHE_DIR", self.cache)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _write(self, rel: str, text: str) -> pathlib.Path:
+        p = self.cache / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        return p
+
+    def test_polish_is_preferred_when_present(self):
+        self._write("rec_a.md", "[00:00:01] Speaker 1: raw words\n")
+        self._write("polish/rec_a.md", "[00:00:01] Speaker 1: tidy words\n")
+        self.assertEqual(self.cache / "polish" / "rec_a.md", to_srt.subtitle_source("rec_a"))
+
+    def test_transcript_is_used_when_no_polish(self):
+        self._write("rec_b.md", "[00:00:01] Speaker 1: raw words\n")
+        self.assertEqual(self.cache / "rec_b.md", to_srt.subtitle_source("rec_b"))
+
+    def test_missing_recording_returns_the_transcript_path(self):
+        """So the caller's own 'not cached' error still fires, with the path the
+        user expects to see named in it."""
+        self.assertEqual(self.cache / "rec_c.md", to_srt.subtitle_source("rec_c"))
+
+    def test_empty_polish_file_is_not_preferred(self):
+        """A zero-byte polish would silently produce an empty subtitle file —
+        the failure that looks like success."""
+        self._write("rec_d.md", "[00:00:01] Speaker 1: raw words\n")
+        self._write("polish/rec_d.md", "")
+        self.assertEqual(self.cache / "rec_d.md", to_srt.subtitle_source("rec_d"))
+
+    def test_the_cli_actually_uses_the_preference(self):
+        """Testing `subtitle_source` alone proves the part works, not that it is
+        wired in — deleting the call from main() left every other test green.
+        Exercise the command, not the helper."""
+        self._write("rec_e.md", "[00:00:01] Speaker 1: 呃 那個 raw wording\n")
+        self._write("polish/rec_e.md", "[00:00:01] Speaker 1: tidy wording\n")
+        out = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "to_srt.py"), "rec_e"],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache)},
+        )
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("tidy wording", out.stdout)
+        self.assertNotIn("raw wording", out.stdout)
+
+    def test_the_cli_falls_back_when_no_polish(self):
+        self._write("rec_f.md", "[00:00:01] Speaker 1: only the raw exists\n")
+        out = subprocess.run(
+            [sys.executable, str(REPO / "scripts" / "to_srt.py"), "rec_f"],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache)},
+        )
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("only the raw exists", out.stdout)

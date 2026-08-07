@@ -187,6 +187,28 @@ def render_srt(cues: list[dict]) -> str:
     return "\n".join(blocks)
 
 
+def subtitle_source(rec_id: str) -> pathlib.Path:
+    """Which cached file this recording's subtitles should come from.
+
+    Prefers `polish/<id>.md` — Plaud's filler-thinned version of the same speech,
+    with the same segments and the same timings, so the timeline does not shift.
+    Nobody reads "呃" on screen.
+
+    The raw transcript stays the search corpus: search answers "what was said",
+    and that question needs the words as spoken. The two questions have different
+    right answers, which is why Plaud returns two files and why this picks
+    between them rather than caching only one.
+
+    An empty polish file is ignored rather than preferred — a zero-byte source
+    would produce an empty subtitle file, which is the failure shape that reads
+    as success.
+    """
+    polished = CACHE_DIR / "polish" / f"{rec_id}.md"
+    if polished.is_file() and polished.stat().st_size > 0:
+        return polished
+    return CACHE_DIR / f"{rec_id}.md"
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -205,7 +227,7 @@ def main() -> None:
     else:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.id or ""):
             sys.exit(f"error: refusing unsafe recording id: {args.id!r}")
-        path = CACHE_DIR / f"{args.id}.md"
+        path = subtitle_source(args.id)
 
     if not path.is_file():
         sys.exit(f"error: {path} not found — run the plaud-index skill first")
