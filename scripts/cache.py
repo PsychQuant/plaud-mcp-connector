@@ -199,11 +199,15 @@ def list_cutoff(man: dict) -> str | None:
     return edge.replace(tzinfo=None).isoformat()
 
 
-def page_verdict(dates: list, cutoff: str | None) -> tuple:
+LATCH = "set --anomaly-seen for the rest of this run"
+
+
+def page_verdict(dates: list, cutoff: str | None,
+                 prev_last: str | None = None, anomaly_seen: bool = False) -> tuple:
     """Does this page of `list_files` end the walk? Returns (stop, reason).
 
-    Three separate ways to answer "keep going", each covering a case where
-    stopping would be wrong in a way nobody would notice:
+    Ways to answer "keep going", each covering a case where stopping would be
+    wrong in a way nobody would notice:
 
     - **An empty page.** `all([])` is True, so the naive test reads no results
       as "everything here is old".
@@ -211,12 +215,31 @@ def page_verdict(dates: list, cutoff: str | None) -> tuple:
       because `list_files` returns descending `created_at`. That is observed,
       not promised — if it ever sorted by `start_at` (a recording's own time
       rather than its upload time) the walk would stop short in silence.
+    - **A page starting newer than the previous one ended.** One page being
+      descending says nothing about the sequence. Three pages can each descend
+      internally while page 3 jumps back above page 2 — and with one entry per
+      page the within-page check passes vacuously every time. So `prev_last`
+      carries the boundary forward.
     - **A timestamp that will not parse.** Unknown is not old.
 
     Every uncertain case resolves to "keep paging": slower, and correct.
+
+    **`anomaly_seen` latches the whole run.** Before it existed, a page that
+    came back out of order only stopped *that* page from ending the walk; the
+    next orderly-looking page could still stop it. The latch state belongs to
+    the caller — one run, many invocations — so it arrives as a flag. What is
+    NOT left to the caller is remembering to set it: every anomaly reason
+    carries the instruction in its own text, so the next thing that has to
+    happen is in the output rather than in prose somewhere else.
+
+    What this cannot do: prove the pages after this one stay ordered. It
+    detects a violation once seen. Nothing short of reading them does better.
     """
     if cutoff is None:
         return False, "continue: no cutoff — nothing cached to stop at, walk the whole library"
+    if anomaly_seen:
+        return False, ("continue: an earlier page in this run was refused — the early exit "
+                       "is off for the rest of it, so this walk runs to the end")
     if not dates:
         return False, "continue: empty page — no entries to judge, so nothing here says stop"
 
@@ -224,12 +247,19 @@ def page_verdict(dates: list, cutoff: str | None) -> tuple:
     for raw in dates:
         when = _parse_api_time(raw)
         if when is None:
-            return False, f"continue: cannot read the timestamp {raw!r} — unknown is not old"
+            return False, (f"continue: cannot read the timestamp {raw!r} — unknown is not "
+                           f"old; {LATCH}")
         parsed.append(when)
 
     if any(a < b for a, b in zip(parsed, parsed[1:])):
         return False, ("continue: this page is not descending — list_files is expected to "
-                       "return newest-first, and an early exit is only safe if it does")
+                       f"return newest-first, and an early exit is only safe if it does; {LATCH}")
+
+    boundary = _parse_api_time(prev_last) if prev_last else None
+    if boundary is not None and parsed[0] > boundary:
+        return False, (f"continue: this page starts at {dates[0]}, newer than {prev_last} "
+                       f"where the previous page ended — the listing is not descending "
+                       f"across pages; {LATCH}")
 
     edge = _parse_api_time(cutoff)
     if edge is None:
@@ -502,7 +532,9 @@ def cmd_should_stop_paging(args) -> None:
     # which is exactly how a page becomes wrongly all-old. An unreadable entry
     # must reach page_verdict so it can say "continue".
     dates = [ln.strip() for ln in sys.stdin.read().splitlines()]
-    stop, reason = page_verdict(dates, args.cutoff)
+    stop, reason = page_verdict(dates, args.cutoff,
+                                prev_last=getattr(args, "prev_last", None),
+                                anomaly_seen=getattr(args, "anomaly_seen", False))
     print(reason)
     # The answer is carried by BOTH the word and the exit code. Anyone wiring
     # this into a shell reaches for `if cmd; then` — that is the idiom — and
@@ -575,6 +607,13 @@ def main() -> None:
                             "one created_at per line")
     p.add_argument("--cutoff", required=True,
                    help="the value from `status --list-cutoff`")
+    p.add_argument("--prev-last", dest="prev_last", default=None,
+                   help="the LAST created_at of the previous page — catches a listing "
+                        "that is not descending ACROSS pages, which the within-page "
+                        "check cannot see (and never sees at one entry per page)")
+    p.add_argument("--anomaly-seen", dest="anomaly_seen", action="store_true",
+                   help="an earlier page in this run was refused; keep the early exit "
+                        "off for the rest of it")
     p.set_defaults(func=cmd_should_stop_paging)
 
     p = sub.add_parser("search", help="full-text search cached transcripts")

@@ -93,8 +93,23 @@ Then, after each page, hand it the page's `created_at` values and do what it say
 
 ```bash
 printf '%s\n' <created_at of every entry on this page, in the order returned> \
-  | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" should-stop-paging --cutoff "<the cutoff>"
+  | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" should-stop-paging \
+      --cutoff "<the cutoff>" \
+      --prev-last "<the LAST created_at of the previous page, omit on page 1>" \
+      ${ANOMALY_SEEN:+--anomaly-seen}
 ```
+
+Carry two things between pages:
+
+| Carry | Why |
+|---|---|
+| `--prev-last` | One page being descending says nothing about the next. Three pages can each descend internally while page 3 jumps back above page 2 — and at one entry per page the within-page check passes vacuously every time |
+| `--anomaly-seen` | Once any page has been refused for an anomaly, the early exit stays off for the **rest of the run**. Without it, one orderly-looking page after a disordered one could still end the walk |
+
+**You do not have to remember when to latch.** Every anomaly reason ends with
+`set --anomaly-seen for the rest of this run` — when you read that, set it and
+keep it set. An ordinary `continue:` (just a recording newer than the cutoff)
+does not say it, because that is normal, not an anomaly.
 
 It prints `stop: …` or `continue: …` with the reason, **and carries the same
 answer in its exit code — 0 stop, 3 continue** (3, not 1, because continuing is
@@ -115,12 +130,11 @@ page is "old enough to stop at" has three ways to be wrong that produce no sympt
 timestamp that will not parse. Prose cannot be unit-tested; that command can, and
 is.
 
-**What the order check does and does not do.** It looks at one page. It cannot
-see that page 3 jumps back to a newer timestamp after page 2 looked orderly, and
-it does not disable the early exit for the rest of the run — a page that comes
-back out of order only stops *that* page from ending the walk. So treat a
-`continue: … not descending` as a signal to **finish the walk without the early
-exit at all**, and say so in the report.
+**What the order check still cannot do.** With `--prev-last` and
+`--anomaly-seen` it now catches a violation across pages and keeps the exit off
+once one is seen. It still cannot prove the pages *after* this one stay ordered
+— nothing short of reading them can. So a run that latched is a run that walked
+everything, and that is the correct outcome, not a failure.
 
 `--all` and a re-index after clearing the cache skip this entirely and walk every
 page.

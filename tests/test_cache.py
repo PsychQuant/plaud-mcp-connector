@@ -1586,3 +1586,112 @@ class TestNoClockInTheCutoffPath(CacheTestCase):
                     f"this comparison must come from the API, which is the whole "
                     f"reason the official CLI's eight-hour skew is not inherited",
                 )
+
+
+class TestCrossPageOrder(CacheTestCase):
+    """One page being descending proves nothing about the next (issue #33).
+
+    The counterexample, from cross-model verify:
+
+        cutoff: 2026-08-05
+        page 1: 2026-08-06, 2026-08-05  -> continue
+        page 2: 2026-08-04, 2026-08-03  -> stop
+        page 3: 2026-08-07, 2026-08-02  -> never read
+
+    Every page descends internally; the sequence does not. With one entry per
+    page the per-page check passes vacuously every time.
+
+    So the walk carries the previous page's last timestamp forward. This
+    detects a violation once it has been seen — it cannot prove the pages
+    after this one stay ordered, and nothing short of reading them can.
+    """
+
+    CUTOFF = "2026-08-05T00:00:00"
+
+    def test_a_page_starting_newer_than_the_last_one_ended_is_a_violation(self):
+        stop, reason = cache.page_verdict(
+            ["2026-08-04T10:00:00", "2026-08-02T00:00:00"], self.CUTOFF,
+            prev_last="2026-08-03T00:00:00")
+        self.assertFalse(stop)
+        self.assertIn("previous page", reason)
+
+    def test_a_properly_descending_boundary_still_stops(self):
+        stop, reason = cache.page_verdict(
+            ["2026-08-02T10:00:00", "2026-08-01T00:00:00"], self.CUTOFF,
+            prev_last="2026-08-03T00:00:00")
+        self.assertTrue(stop, reason)
+
+    def test_single_entry_pages_are_checked_against_each_other(self):
+        """The case the per-page check can never catch: nothing to compare within."""
+        stop, _ = cache.page_verdict(["2026-08-04T00:00:00"], self.CUTOFF,
+                                     prev_last="2026-08-03T00:00:00")
+        self.assertFalse(stop, "a lone newer entry must not end the walk")
+
+    def test_no_previous_page_means_no_boundary_check(self):
+        stop, _ = cache.page_verdict(["2026-08-04T00:00:00"], self.CUTOFF)
+        self.assertTrue(stop)
+
+
+class TestAnomalyLatch(CacheTestCase):
+    """One refused page must disable the early exit for the whole run.
+
+    Before this, a page that came back out of order only stopped *that* page
+    from ending the walk — the next orderly-looking page could still stop it.
+    The SKILL.md text claiming it "degrades to a full walk" was simply false,
+    and it was false in the direction that loses recordings.
+
+    The latch state belongs to the caller (one run, many invocations), so it
+    arrives as a flag. What does NOT belong to the caller is remembering to
+    set it: every anomaly reason carries the instruction in its own text, so
+    the thing that has to happen next is in the output rather than in prose
+    somewhere else.
+    """
+
+    CUTOFF = "2026-08-05T00:00:00"
+
+    def test_a_latched_run_never_stops(self):
+        stop, reason = cache.page_verdict(["2026-08-01T00:00:00"], self.CUTOFF,
+                                          anomaly_seen=True)
+        self.assertFalse(stop)
+        self.assertIn("earlier page", reason)
+
+    def test_every_anomaly_reason_tells_the_caller_to_latch(self):
+        anomalies = [
+            (["2026-08-04T10:00:00", "2026-08-04T11:00:00"], None),   # not descending
+            (["2026-08-04T10:00:00", "???"], None),                    # unreadable
+            (["2026-08-04T10:00:00"], "2026-08-03T00:00:00"),          # boundary
+        ]
+        for dates, prev in anomalies:
+            with self.subTest(dates=dates):
+                stop, reason = cache.page_verdict(dates, self.CUTOFF, prev_last=prev)
+                self.assertFalse(stop)
+                self.assertIn("--anomaly-seen", reason,
+                              "an anomaly must name the flag that latches it")
+
+    def test_an_ordinary_continue_does_not_ask_for_the_latch(self):
+        """Seeing a newer recording is normal — it is not an anomaly."""
+        stop, reason = cache.page_verdict(["2026-08-09T10:00:00"], self.CUTOFF)
+        self.assertFalse(stop)
+        self.assertNotIn("--anomaly-seen", reason)
+
+
+class TestPagingCliLatchFlags(unittest.TestCase):
+    def _run(self, page: str, *extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CACHE_PY), "should-stop-paging",
+             "--cutoff", "2026-08-05T00:00:00", *extra],
+            input=page, capture_output=True, text=True, timeout=60)
+
+    def test_anomaly_seen_flag_forces_continue(self):
+        out = self._run("2026-08-01T00:00:00\n", "--anomaly-seen")
+        self.assertEqual(3, out.returncode, out.stdout)
+        self.assertTrue(out.stdout.startswith("continue:"), out.stdout)
+
+    def test_prev_last_flag_catches_a_boundary_violation(self):
+        out = self._run("2026-08-04T00:00:00\n", "--prev-last", "2026-08-03T00:00:00")
+        self.assertEqual(3, out.returncode, out.stdout)
+        self.assertIn("previous page", out.stdout)
+
+    def test_without_the_flags_behaviour_is_unchanged(self):
+        out = self._run("2026-08-01T00:00:00\n")
+        self.assertEqual(0, out.returncode, out.stdout)
