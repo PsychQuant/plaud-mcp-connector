@@ -84,6 +84,41 @@ Re-fetching N recordings that were cached without a completeness marker
 (≈N get_transcript calls). Ctrl-C now if you would rather not.
 ```
 
+#### Ask what a recording HAS before fetching it — on a first index
+
+`list_files` does not say whether a recording has a transcript (measured: it
+returns `id`, `name`, `created_at`, `start_at`, `duration`, and nothing else). So
+the naive loop fetches everything and finds out the expensive way — a recording
+that was never transcribed answers with a bare `[]`.
+
+There is a better signal, on a call this skill never used to make:
+
+```bash
+plaud file "<id>"       # → audio: available / transcript: available / summary: available
+```
+
+Through the MCP: `get_file` returns the same fields. **Do both paths** — which one
+a user is on is decided by what they installed, not by us, and covering only one
+leaves the other still fetching blind.
+
+**When to pre-check, and when not to.** This trades N cheap `get_file` calls for
+M avoided `get_transcript` calls, where M is however many recordings have no
+transcript. When M is near zero it is a net loss:
+
+| Situation | Do |
+|---|---|
+| First index of a library, or `--rebuild` | **Pre-check.** M is unknown and possibly large |
+| Incremental run over a handful of new ids | **Skip the pre-check.** Just fetch — N ≈ M ≈ small, and the extra round trip buys nothing |
+
+Say which one you did, and report skipped-for-no-transcript **separately** from
+skipped-for-already-cached. They are different facts about the library and
+merging them hides one of them.
+
+Why this matters beyond speed: the real rate limit is **unmeasured** (see #6 —
+normal use does not trigger throttling, but no ceiling was probed for). Not making
+a request you know will be useless is the one optimisation that is correct without
+knowing where the limit is.
+
 #### Prefer the CLI when it is installed — it keeps transcripts out of the context
 
 `get_transcript` returns the text **through the model**. Every page of every
