@@ -142,8 +142,16 @@ def _parse_api_time(raw) -> datetime | None:
     """
     if not isinstance(raw, str) or not raw.strip():
         return None
+    text = raw.strip()
+    # A date with no time is not a timestamp. `fromisoformat("2026-08-05")`
+    # succeeds and silently means midnight — inventing precision that was not
+    # there, and landing on the side that pages LESS. Nothing in `created_at`
+    # is ever date-only, so that shape means a hand-edited manifest or a
+    # changed API: unknown, and the rule for unknown is "page more".
+    if "T" not in text and " " not in text:
+        return None
     try:
-        when = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except (ValueError, TypeError):
         # TypeError as well as ValueError: this function's whole promise is
         # "None if it cannot be read", and an exception escaping it would take

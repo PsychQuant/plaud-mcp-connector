@@ -1171,8 +1171,15 @@ class TestPageVerdict(CacheTestCase):
         stop, _ = cache.page_verdict([self.CUTOFF], self.CUTOFF)
         self.assertFalse(stop)
 
-    def test_cutoff_comparison_never_reads_the_local_clock(self):
-        """Both sides come from the API; a local clock has no business here.
+    def test_cutoff_comparison_does_not_call_datetime_now(self):
+        """One call, named as one call — see TestNoClockInTheCutoffPath for the property.
+
+        This test's original name claimed the whole "never reads the local
+        clock" property while mocking exactly one classmethod. `today()`,
+        `utcnow()` and `time.time()` all walked past it. Renamed rather than
+        deleted: the check is real, it was the claim that was too big.
+
+        Both sides come from the API; a local clock has no business here.
 
         This is the defect `plaud recent` has and we do not: it parses a
         timezone-less API timestamp as local time and compares it to
@@ -1486,3 +1493,96 @@ class TestMarkFullSweepCli(unittest.TestCase):
         after = self._cli("status", "--list-cutoff")
         self.assertEqual(0, after.returncode, after.stderr)
         self.assertEqual("2026-08-04T09:00:00", after.stdout.strip())
+
+
+class TestTimestampStrictness(CacheTestCase):
+    """A date with no time is not a timestamp (issue #34).
+
+    `datetime.fromisoformat("2026-08-05")` succeeds and silently means
+    midnight. Nothing in `created_at` is ever date-only, so a value that shape
+    is a manifest someone edited or an API that changed — either way it is
+    unknown, and the rule for unknown is "page more", not "assume the earliest
+    moment of that day".
+
+    Assuming midnight is the wrong direction twice over: it invents precision
+    that was not there, and it lands on the side that pages LESS.
+    """
+
+    def test_a_date_without_a_time_is_unreadable(self):
+        self.assertIsNone(cache._parse_api_time("2026-08-05"))
+
+    def test_a_date_only_entry_does_not_move_the_cutoff(self):
+        man = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00", "recordings": {
+            "good": {"created_at": "2026-08-05T09:00:00", "complete": True},
+            "dateonly": {"created_at": "2026-08-09", "complete": True},
+        }}
+        self.assertEqual("2026-08-04T09:00:00", cache.list_cutoff(man))
+
+    def test_a_date_only_entry_on_a_page_keeps_the_walk_going(self):
+        stop, reason = cache.page_verdict(["2026-08-04T10:00:00", "2026-08-03"],
+                                          "2026-08-05T00:00:00")
+        self.assertFalse(stop)
+        self.assertIn("2026-08-03", reason)
+
+    def test_a_space_separated_datetime_is_still_a_timestamp(self):
+        """Rejecting date-only must not reject the other legal separator."""
+        self.assertIsNotNone(cache._parse_api_time("2026-08-05 09:00:00"))
+
+
+class TestNoClockInTheCutoffPath(CacheTestCase):
+    """Two independent guards, because the first one alone did not earn its name.
+
+    `test_cutoff_comparison_never_reads_the_local_clock` mocked
+    `cache.datetime.now` and nothing else — `today()`, `utcnow()`,
+    `time.time()` and a bare `.astimezone()` all walk straight past it. The
+    name promised the whole property; the test checked one call.
+
+    So: a behavioural guard that explodes on every clock-shaped classmethod,
+    and a structural one that reads the two functions' own source. Either
+    alone is escapable; both together are hard to slip past by accident.
+    """
+
+    MAN = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00",
+           "recordings": {"a": {"created_at": "2026-08-05T09:00:00", "complete": True}}}
+
+    def test_no_clock_classmethod_is_reachable_from_the_cutoff_path(self):
+        class NoClock(cache.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("cutoff path must not read the clock: now()")
+
+            @classmethod
+            def today(cls):
+                raise AssertionError("cutoff path must not read the clock: today()")
+
+            @classmethod
+            def utcnow(cls):
+                raise AssertionError("cutoff path must not read the clock: utcnow()")
+
+            @classmethod
+            def fromtimestamp(cls, ts, tz=None):
+                raise AssertionError("cutoff path must not read the clock: fromtimestamp()")
+
+        with mock.patch.object(cache, "datetime", NoClock):
+            cutoff = cache.list_cutoff(self.MAN)
+            stop, _ = cache.page_verdict(["2026-08-01T00:00:00"], cutoff)
+        self.assertTrue(stop)
+
+    def test_the_cutoff_functions_contain_no_clock_call_at_all(self):
+        """Structural, because a mock only catches what it was told to catch.
+
+        `_now()` exists in this module and is legitimate — `cmd_put` stamps
+        `indexed_at` with it. This asserts it stays out of the three functions
+        that decide where paging stops.
+        """
+        import inspect
+        for fn in (cache._parse_api_time, cache.list_cutoff, cache.page_verdict):
+            src = inspect.getsource(fn)
+            for forbidden in ("datetime.now", "datetime.today", "datetime.utcnow",
+                              "time.time", "_now("):
+                self.assertNotIn(
+                    forbidden, src,
+                    f"{fn.__name__} reads the clock via {forbidden} — both sides of "
+                    f"this comparison must come from the API, which is the whole "
+                    f"reason the official CLI's eight-hour skew is not inherited",
+                )
