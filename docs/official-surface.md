@@ -190,6 +190,70 @@ reading a property of an array. Treat `[]` as "not transcribed yet, skip".
 
 ---
 
+## How the official plugin is distributed — and why one documented command cannot work
+
+`@plaud-ai/mcp` is not only an MCP server. The published tarball also contains a
+Claude Code **plugin**:
+
+```
+package/plugin.json   { "name": "plaud", "version": "0.3.7", … }
+package/.mcp.json     { "mcpServers": { "plaud": { … } } }
+```
+
+It reaches Claude Code through the **skills-directory** mechanism, not a
+marketplace. From the package's own bundled source:
+
+```js
+await installSkillsToClaudeCode();
+console.log("Plaud Skills have been installed to ~/.claude/skills/ for Claude Code.");
+```
+
+A folder under a skills directory carrying a `plugin.json` is loaded as
+`<name>@skills-dir` on the next session — no marketplace, no install step. That
+is why `npx @plaud-ai/mcp` offers `clean-plugin` (which *clears* the Claude Code
+plugin cache) but nothing that publishes or registers a marketplace: grepping the
+bundled output for marketplace registration finds nothing at all.
+
+### The consequence
+
+Plaud's upgrade instructions end with:
+
+> Then reinstall inside Claude Code:
+> `/plugin install plaud`
+
+**That command cannot succeed on any machine.** `/plugin install <name>` resolves
+names against *registered marketplaces*, and no marketplace publishes `plaud` —
+Plaud does not operate one. Running it returns `Plugin "plaud" not found in any
+marketplace`. The working path is `npx @plaud-ai/mcp install`, after which the
+plugin loads on the next session with nothing further to type.
+
+The two mental models got crossed in the docs: a skills-dir plugin is installed
+by *placing a directory*, and a marketplace plugin is installed by *name*. The
+instructions distribute one and then tell you to install the other.
+
+### What this repo does instead, and what that costs
+
+This plugin ships through a marketplace (`/plugin marketplace add …` then
+`/plugin install …@…`). That is one more step at install time. What it buys:
+a declared version, an update path, and visibility in the `/plugin` UI — none of
+which a skills-dir drop has. The trade runs the other way too: zero-step install
+is genuinely nicer, right up until someone needs to know which version they are
+running.
+
+**Not measured:** `plaud-mcp install` was never executed here — it rewrites the
+client's own configuration, which is not something to do to a machine in order to
+document it. Everything above is read from the published tarball, the `--help`
+output, and the absence of any `plaud` entry in this machine's registered
+marketplaces.
+
+### If you reach the MCP through `npx`, none of this applies
+
+`.mcp.json` in this repo runs `npx -y @plaud-ai/mcp@latest`, which fetches the
+package at launch and never touches `~/.claude/skills/`. Plaud's upgrade
+procedure — `npm install -g`, `clean-plugin`, reinstall — is for people who used
+its installer. On the `npx` path there is nothing to upgrade: `@latest` already
+resolves fresh each launch.
+
 ## Packaging
 
 | | `@plaud-ai/cli` | `@plaud-ai/mcp` |
