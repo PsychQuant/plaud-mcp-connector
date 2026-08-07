@@ -6,8 +6,15 @@ What the official CLI and MCP actually do — not what `--help` says they do.
 `@plaud-ai/mcp` 0.3.7, on an authenticated personal account.**
 
 Everything here was run. Where something was inferred rather than executed, it
-says so. Re-measure after a version bump: these are observations of one release,
-not a contract Plaud has published.
+says so. These are observations of one release, not a contract Plaud has
+published.
+
+**To re-measure, run `plaud-audit`.** It exists because "re-measure after a
+version bump" as a sentence in a file has never once caused anyone to re-measure —
+and because the *checklist* matters more than the reminder: that skill encodes the
+specific ways this repo has been wrong about someone else's software (reading a
+tool list instead of opening the tarball; treating a present field as a cheap
+one). A version number that has not moved is not evidence that nothing changed.
 
 > Contains no transcript content. The recordings used are the author's own, and
 > what other people said in them stays out of this repository.
