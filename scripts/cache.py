@@ -135,7 +135,12 @@ def _parse_api_time(raw) -> datetime | None:
         return None
     try:
         return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
-    except ValueError:
+    except (ValueError, TypeError):
+        # TypeError as well as ValueError: this function's whole promise is
+        # "None if it cannot be read", and an exception escaping it would take
+        # down an indexing run over one bad manifest entry. The isinstance
+        # check above covers the known route in; this is the backstop for the
+        # ones nobody thought of.
         return None
 
 

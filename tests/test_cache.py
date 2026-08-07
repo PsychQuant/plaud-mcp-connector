@@ -1101,6 +1101,20 @@ class TestListCutoff(CacheTestCase):
         man = self._manifest({"junk": {"created_at": "", "complete": True}})
         self.assertIsNone(cache.list_cutoff(man))
 
+    def test_cutoff_survives_a_timestamp_that_is_not_a_string(self):
+        """A manifest is a file on disk, and files get hand-edited.
+
+        `fromisoformat` raises TypeError rather than ValueError on a non-string,
+        which the ValueError handler would not catch — the whole indexing run
+        would die on one bad entry. Found by an acid test: removing the type
+        check left every existing test green, because they all pass strings.
+        """
+        man = self._manifest({
+            "good": {"created_at": "2026-08-05T09:00:00", "complete": True},
+            "numeric": {"created_at": 1786068094817, "complete": True},
+        })
+        self.assertEqual("2026-08-04T09:00:00", cache.list_cutoff(man))
+
 
 class TestPageVerdict(CacheTestCase):
     """Whether a page of `list_files` results ends the walk."""
