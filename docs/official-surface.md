@@ -135,8 +135,31 @@ Launched via `npx -y @plaud-ai/mcp@latest`. All read-only except `login` /
 `login`, `logout`, `get_current_user`, `list_files`, `get_file`, `get_note`,
 `get_transcript`.
 
-**There is no `audio` tool.** The original recording is reachable only through
-the CLI — the one capability gap that runs in that direction.
+**There is no tool *named* `audio` — but the audio is reachable.** `get_file`
+returns a `presigned_url`, and Plaud's own `plaud-read` skill uses exactly that.
+An earlier version of this file said the recording was "reachable only through
+the CLI". That was wrong: absence of a name was read as absence of a capability.
+
+What is true is a cost difference — see `get_file` below.
+
+### `get_file` — carries a lot more than metadata
+
+Measured response for one recording: **140,970 characters**.
+
+| Field | Size |
+|---|---|
+| `source_list` | 135,268 |
+| `note_list` | 3,502 |
+| `presigned_url` | 1,726 |
+| `id` / `name` / `created_at` / `serial_number` / `start_at` / `duration` | ~140 |
+
+It embeds the transcript source. Two consequences worth stating plainly:
+
+- **It is the expensive door to the audio link.** The CLI's `plaud audio` returns
+  the same URL in one line.
+- **It is unusable as an availability pre-check.** Pulling 141KB to learn whether
+  a 53KB transcript exists costs more than just fetching the transcript. The CLI's
+  `plaud file` carries the same availability flags as pure metadata.
 
 ### `list_files`
 
@@ -253,6 +276,30 @@ package at launch and never touches `~/.claude/skills/`. Plaud's upgrade
 procedure — `npm install -g`, `clean-plugin`, reinstall — is for people who used
 its installer. On the `npx` path there is nothing to upgrade: `@latest` already
 resolves fresh each launch.
+
+## The official plugin ships seven skills, not just seven tools
+
+Enumerated from the tarball's `skills/` directory:
+
+| Skill | What it does |
+|---|---|
+| `plaud-shared` | Auth, error handling, output conventions — the prerequisite read for the others |
+| `plaud-browse` | List and paginate recordings |
+| `plaud-find` | Find a recording by name keyword, date range, or topic |
+| `plaud-read` | Read transcript, summary, notes; get the audio link via `get_file` |
+| `plaud-followup` | Generate a follow-up email, thank-you note, action-item list, **SOAP note**, or meeting brief |
+| `plaud-digest` | Roll several recordings into a weekly or monthly digest |
+| `plaud-export` | Push content to Notion, Slack, HubSpot, Linear, Gmail, or a webhook |
+
+This file previously documented the seven MCP **tools** and stopped there, which
+made the official offering look narrower than it is. Reading a tool list is not
+reading a package.
+
+**They are only present if `plaud-mcp install` was run** — that is the command
+that copies them into `~/.claude/skills/`. Running the MCP server through `npx`
+(what this plugin's `.mcp.json` does) starts the server and installs nothing. So
+the two distributions are **alternatives, not layers**: a user who installed this
+plugin does not get those skills by default.
 
 ## Packaging
 

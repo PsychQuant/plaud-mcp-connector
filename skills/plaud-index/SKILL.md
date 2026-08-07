@@ -97,9 +97,18 @@ There is a better signal, on a call this skill never used to make:
 plaud file "<id>"       # → audio: available / transcript: available / summary: available
 ```
 
-Through the MCP: `get_file` returns the same fields. **Do both paths** — which one
-a user is on is decided by what they installed, not by us, and covering only one
-leaves the other still fetching blind.
+**Through the MCP, do not do this.** `get_file` carries the same availability
+information, but its response is **140,970 characters** measured — it embeds the
+transcript source (`source_list` alone is 135,268). Pre-checking with it costs
+more than the ~53KB fetch it would avoid: you would pull three transcripts' worth
+of payload to learn you can skip one.
+
+So the pre-check is **CLI-only**. On the MCP path, fetch and treat the bare `[]`
+as the answer — that is the cheaper of the two wrong-shaped options.
+
+*(An earlier version of this section said "do both paths". That was written from
+the field list without measuring the payload — having the field you need does not
+mean it is cheap to obtain.)*
 
 **When to pre-check, and when not to.** This trades N cheap `get_file` calls for
 M avoided `get_transcript` calls, where M is however many recordings have no

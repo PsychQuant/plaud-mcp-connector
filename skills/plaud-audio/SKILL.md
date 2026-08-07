@@ -5,19 +5,36 @@ description: |
   transcript. Use when the user wants the audio to archive, to edit, to feed to
   another tool, or to transcribe again with a different engine: "download the
   audio from that meeting", "get me the original recording", "把那次錄音的音檔抓下來",
-  "我要原始音檔", "export the audio so I can re-transcribe it". The official Plaud
-  MCP has no tool for this at all — only the CLI can reach the audio, which is why
-  this skill requires it.
+  "我要原始音檔", "export the audio so I can re-transcribe it". Reaches the audio
+  through the official CLI, which returns the link directly — and downloads the
+  file rather than handing over a link that expires.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Originalaufnahme herunterladen", "descargar el audio original", "télécharger l'audio original", "元の音声をダウンロード", "scarica l'audio originale", "originele audio downloaden", "baixar o áudio original", "tải âm thanh gốc", "ดาวน์โหลดเสียงต้นฉบับ", "muat turun audio asal", "تنزيل الصوت الأصلي".
 ---
 
 # Plaud Audio — get the recording itself back
 
-The official MCP ships seven tools and none of them return audio. The official
-CLI has `plaud audio <file_id>`. That asymmetry is the whole reason this skill
-exists: with the CLI installed, the original recording is reachable; without it,
-it is not reachable at all.
+**Correction (2026-08-07).** An earlier version of this skill said the official
+MCP "has no tool for this at all". That was wrong, and it was wrong in an
+instructive way: there is no tool *named* `audio`, and that got treated as
+there being no *capability*. `get_file` returns a `presigned_url`, and Plaud's
+own `plaud-read` skill uses exactly that.
+
+What is actually true is a cost difference:
+
+| Path | To get the audio link | Response size (measured) |
+|---|---|---|
+| CLI `plaud audio <id>` | one call, one line back | a URL |
+| MCP `get_file <id>` | the URL is one field of the payload | **140,970 chars** — `source_list` alone is 135,268 |
+
+`get_file` embeds the transcript source, so reaching the audio through it means
+pulling a whole transcript into the model context to read one field. That is why
+this skill uses the CLI — not because the MCP cannot, but because it is the
+cheap door to the same room.
+
+This skill also **downloads the file**, where the official path hands you a link.
+The link expires (below), so which of those you want depends on whether you
+intend to keep the audio or just click once.
 
 ## The one thing that will bite you
 
@@ -41,8 +58,9 @@ correct patterns.
 
 ```bash
 command -v plaud >/dev/null || {
-  echo "The official CLI is required — the MCP cannot return audio at all."
+  echo "This skill uses the official CLI — one call for the link."
   echo "  npm install -g @plaud-ai/cli && plaud login"
+  echo "  (The MCP's get_file also carries a presigned_url, but returns ~141KB to do it.)"
   exit 1
 }
 plaud me >/dev/null 2>&1 || echo "Run 'plaud login' — the CLI holds its own token, separate from the MCP's."
@@ -103,7 +121,7 @@ For correcting Plaud's own transcript rather than replacing it, use
 
 | Symptom | Cause |
 |---|---|
-| `plaud: command not found` | CLI not installed. The MCP cannot substitute — it has no audio tool |
+| `plaud: command not found` | CLI not installed. The MCP's `get_file` can substitute — its `presigned_url` field is the same link — but the response is ~141KB, so install the CLI if you will do this more than once |
 | `[AUTH_FAILED] Token invalid or expired` | CLI's own login expired. `plaud login` |
 | Download 403s | The URL expired. Get a fresh one; never reuse a stored URL |
 | No URL in output | The recording may still be processing, or has no audio (imported text) |
