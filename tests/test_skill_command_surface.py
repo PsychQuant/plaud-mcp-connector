@@ -93,7 +93,10 @@ def _help_text(script: str, *sub: str) -> str:
 # renamed subcommand still "existed" because its old name was sitting in the
 # prose two paragraphs down. Renaming `mark-full-sweep` left the test green.
 # Checking a proxy for the property instead of the property.
-CHOICES = re.compile(r"\{([a-z0-9,_-]+)\}")
+# Anchored to the usage block, not the whole help text — the comment above said
+# "read THAT", and searching everything did not do it. A `{...}` in a
+# description or a positional's choices, printed earlier, would win.
+USAGE_CHOICES = re.compile(r"(?s)^usage:.*?\{([a-z0-9,_-]+)\}")
 
 # Same hazard for flags: a flag named in a description line is not a flag the
 # parser accepts. argparse puts real options in their own indented column.
@@ -102,7 +105,7 @@ def _option_line(flag: str) -> re.Pattern:
 
 
 def _subcommands(script: str) -> set[str]:
-    m = CHOICES.search(_help_text(script))
+    m = USAGE_CHOICES.search(_help_text(script))
     return set(m.group(1).split(",")) if m else set()
 
 
@@ -133,8 +136,15 @@ class TestQuotedCommandsExist(unittest.TestCase):
             sub = m.group(1)
             with self.subTest(skill=skill_md.parent.name, script=script, sub=sub):
                 offered = _subcommands(script)
-                if not offered:
-                    continue  # no subparsers on this script
+                # NOT `continue` on empty. A skill quoting `cache.py status`
+                # while cache.py offers no subcommands at all is the loudest
+                # possible drift — skipping it meant deleting every subparser
+                # kept this test green.
+                self.assertTrue(
+                    offered,
+                    f"{skill_md.relative_to(REPO_ROOT)} calls `{script} {sub}` but "
+                    f"{script} exposes no subcommands at all",
+                )
                 self.assertIn(
                     sub, offered,
                     f"{skill_md.relative_to(REPO_ROOT)} calls `{script} {sub}`, but "

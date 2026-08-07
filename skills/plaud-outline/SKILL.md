@@ -66,15 +66,25 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
 
 Falling back to `plaud search` matches names only, across the newest 500.
 
-### 2. Fetch
+### 2. Read the cached one, or fetch
 
 ```bash
-plaud transcript "<id>" --block outline
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline "<id>" 2>/dev/null \
+  || plaud transcript "<id>" --block outline
 ```
 
-It is small. Reading it into the conversation is fine — that is the point of
-this skill. A full transcript is not, and `plaud-index` exists so you never have
-to.
+Cache first. That is the whole cost saving this skill was missing — fetching
+every time is what `#28` was filed about, and a cache that is written but never
+read does not fix it.
+
+Refetch when the user asks for the current version, or when the recording was
+reprocessed. There is no staleness check: at 2,502 B against a transcript's
+53,060 B, fetching again costs less than deciding whether the cached copy went
+stale.
+
+Either way it is small. Reading it into the conversation is fine — that is the
+point of this skill. A full transcript is not, and `plaud-index` exists so you
+never have to.
 
 ### 3. Report
 

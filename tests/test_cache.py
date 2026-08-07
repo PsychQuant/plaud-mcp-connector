@@ -416,7 +416,10 @@ class TestCmdShow(CacheTestCase):
     def test_nonexistent_id_exits_cleanly(self):
         with self.assertRaises(SystemExit) as ctx:
             cache.cmd_show(argparse.Namespace(id="ghost"))
-        self.assertIn("not cached", str(ctx.exception))
+        # Wording changed when `show` learned --kind: it now names WHICH view
+        # is missing, because "not cached" was ambiguous once a recording could
+        # have a transcript and no outline.
+        self.assertIn("no cached transcript", str(ctx.exception))
 
     def test_unsafe_id_rejected_before_any_filesystem_check(self):
         with self.assertRaises(SystemExit) as ctx:
@@ -1579,8 +1582,13 @@ class TestNoClockInTheCutoffPath(CacheTestCase):
         import inspect
         for fn in (cache._parse_api_time, cache.list_cutoff, cache.page_verdict):
             src = inspect.getsource(fn)
+            # `.astimezone()` with no argument is the sneakiest of these: on a
+            # naive datetime it assumes the LOCAL zone, which is precisely the
+            # official CLI's eight-hour bug wearing a different name. The
+            # behavioural guard above misses it on a UTC machine, so it has to
+            # be named here.
             for forbidden in ("datetime.now", "datetime.today", "datetime.utcnow",
-                              "time.time", "_now("):
+                              "time.time", "_now(", ".astimezone()"):
                 self.assertNotIn(
                     forbidden, src,
                     f"{fn.__name__} reads the clock via {forbidden} — both sides of "
@@ -1832,3 +1840,34 @@ class TestOutlineCaching(CacheTestCase):
 
     def test_outline_is_named_in_the_exclusion_set(self):
         self.assertIn("outline", cache.SEARCH_EXCLUDED_DIRS)
+
+
+class TestShowKind(CacheTestCase):
+    """A cache nobody reads back saves nothing (issue #28, found in verify).
+
+    `plaud-outline`'s flow fetched, wrote the cache, and fetched again next
+    time — the file was produced and never consumed. Cross-model review caught
+    the contradiction between "cache it so the next run does not pay again" and
+    a flow that always refetches.
+    """
+
+    def test_show_reads_the_outline_not_the_transcript(self):
+        self._put("rec_s", body="what was said")
+        ns = argparse.Namespace(id="rec_s", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:00] The structure\n")):
+            self._capture_stdout(cache.cmd_put, ns)
+        out = self._capture_stdout(cache.cmd_show, argparse.Namespace(id="rec_s", kind="outline"))
+        self.assertIn("The structure", out)
+        self.assertNotIn("what was said", out)
+
+    def test_show_without_kind_still_prints_the_transcript(self):
+        """Old callers pass no --kind at all."""
+        self._put("rec_t", body="the transcript")
+        out = self._capture_stdout(cache.cmd_show, argparse.Namespace(id="rec_t"))
+        self.assertIn("the transcript", out)
+
+    def test_a_missing_outline_exits_naming_the_kind(self):
+        self._put("rec_u", body="transcript only")
+        with self.assertRaises(SystemExit) as ctx:
+            self._capture_stdout(cache.cmd_show, argparse.Namespace(id="rec_u", kind="outline"))
+        self.assertIn("outline", str(ctx.exception))

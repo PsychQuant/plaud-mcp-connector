@@ -17,6 +17,7 @@ Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
 """
 import argparse
 import json
+import math
 import os
 import pathlib
 import re
@@ -190,7 +191,7 @@ def list_cutoff(man: dict) -> str | None:
     a cutoff existed, the next run stopped on the first old page, and every
     run after that stopped in the same place.
     """
-    if not man.get("full_sweep_at"):
+    if not sweep_recorded(man):
         return None
     times = [
         t for rec in man.get("recordings", {}).values()
@@ -229,7 +230,14 @@ def page_verdict(dates: list, cutoff: str | None,
       carries the boundary forward.
     - **A timestamp that will not parse.** Unknown is not old.
 
-    Every uncertain case resolves to "keep paging": slower, and correct.
+    Every uncertain case here resolves to "keep paging": slower, and correct.
+
+    That is a claim about THIS function, not about the walk. An early exit
+    cannot be made lossless: a recording that reached the cloud late carries an
+    old `created_at`, sits below the cutoff, and is stepped over by a listing
+    that is perfectly ordered and perfectly parseable. No check here reaches
+    it. The remedy is a periodic full sweep, which is why `status` says how
+    long since the last one.
 
     **`anomaly_seen` latches the whole run.** Before it existed, a page that
     came back out of order only stopped *that* page from ending the walk; the
@@ -248,7 +256,12 @@ def page_verdict(dates: list, cutoff: str | None,
         return False, ("continue: an earlier page in this run was refused — the early exit "
                        "is off for the rest of it, so this walk runs to the end")
     if not dates:
-        return False, "continue: empty page — no entries to judge, so nothing here says stop"
+        # Latched, because this function cannot tell a terminal empty page from
+        # an anomalous one — it never sees the cursor. If it was terminal the
+        # walk is ending anyway and the latch costs nothing; if it was not, the
+        # latch is the only thing standing between here and a silent stop.
+        return False, ("continue: empty page — no entries to judge, and nothing here "
+                       f"says whether the listing ended or hiccuped; {LATCH}")
 
     parsed = []
     for raw in dates:
@@ -262,7 +275,15 @@ def page_verdict(dates: list, cutoff: str | None,
         return False, ("continue: this page is not descending — list_files is expected to "
                        f"return newest-first, and an early exit is only safe if it does; {LATCH}")
 
-    boundary = _parse_api_time(prev_last) if prev_last else None
+    boundary = None
+    if prev_last:
+        boundary = _parse_api_time(prev_last)
+        if boundary is None:
+            # Given but unreadable is not the same as not given. Skipping the
+            # boundary check on a value the caller DID supply is how a stop
+            # happens with the guard silently switched off.
+            return False, (f"continue: --prev-last {prev_last!r} cannot be read, so the "
+                           f"page boundary went unchecked; {LATCH}")
     if boundary is not None and parsed[0] > boundary:
         return False, (f"continue: this page starts at {dates[0]}, newer than {prev_last} "
                        f"where the previous page ended — the listing is not descending "
@@ -327,7 +348,14 @@ def cmd_status(args) -> None:
         # no error and no count. A periodic --all is the only remedy, and a
         # remedy nobody is reminded of is not a remedy.
         age = sweep_age_days(man)
-        if age is None:
+        if age is None and sweep_recorded(man):
+            # Readable, but dated in the future — a wrong clock, a hand-edited
+            # manifest, or a cache copied from another machine. Not evidence of
+            # a recent sweep, and saying "never" would hide which of the two
+            # problems this is.
+            print("full sweep: recorded, but its timestamp is in the future — check "
+                  "the clock; treat the coverage claim as unverified")
+        elif age is None:
             print("full sweep: never — incremental runs may be stepping over older "
                   "recordings; run plaud-index --all")
         # Whole days, so the number printed and the decision made agree. On a
@@ -586,16 +614,50 @@ def cmd_should_stop_paging(args) -> None:
 
 
 def sweep_age_days(man: dict) -> float | None:
-    """How long since the listing was last walked to its end, or None if never.
+    """Whole days since the listing was last walked to its end, or None.
 
-    None also covers a marker that cannot be read: an unreadable timestamp is
-    not evidence of a recent sweep, and the honest answer to "when did this
-    last happen" is the same as if it never did.
+    None covers three cases that are all "no usable evidence of a sweep": never
+    marked, a marker that cannot be read, and a marker in the future. The last
+    one matters because a wrong clock, a hand-edited manifest or a cache copied
+    between machines all produce a future timestamp, and a future timestamp is
+    not evidence of a recent sweep — it is evidence of something wrong.
+
+    Whole days, floored, so the number shown and the decision made are the same
+    number. Truncating one and rounding the other prints "31 days ago" beside
+    "not over 30 days", which reads as a contradiction to whoever is looking at
+    it. (`int()` against `:.0f` did exactly that at 30.6.)
+
+    This is the ONE place a local clock is legitimate: it answers "how long ago
+    was this", never "should paging stop here". The listing cutoff never sees
+    it.
     """
     when = _parse_api_time(man.get("full_sweep_at"))
     if when is None:
         return None
-    return (datetime.now(timezone.utc) - when).total_seconds() / 86400
+    age = (datetime.now(timezone.utc) - when).total_seconds() / 86400
+    if age < 0:
+        return None
+    return math.floor(age)
+
+
+def sweep_recorded(man: dict) -> bool:
+    """Is there a readable full-sweep marker? **Reads no clock.**
+
+    Deliberately weaker than `sweep_age_days`, which also rejects a timestamp
+    in the future — that rejection needs the current time, and the cutoff path
+    must never touch it. Gating the cutoff on freshness was tried and the clock
+    guards caught it immediately, which is what they are for.
+
+    The trade-off, stated rather than hidden: a marker with a future timestamp
+    still enables the cutoff. That is defensible — a future timestamp means a
+    sweep WAS recorded, just stamped by a wrong clock, so the coverage claim
+    holds even though its age does not. `status` says so out loud.
+
+    It replaces a plain truthiness check, which disagreed with `status`: a
+    marker reading `"garbage"` had `status` printing "never" while the cutoff
+    quietly switched on.
+    """
+    return _parse_api_time(man.get("full_sweep_at")) is not None
 
 
 def cmd_mark_full_sweep(args) -> None:
@@ -613,9 +675,12 @@ def cmd_mark_full_sweep(args) -> None:
 
 
 def cmd_show(args) -> None:
-    path = CACHE_DIR / f"{_safe_id(args.id)}.md"
+    rec_id = _safe_id(args.id)
+    kind = str(getattr(args, "kind", "transcript") or "transcript")
+    subdir = {"summary": "summaries", "polish": "polish", "outline": "outline"}.get(kind)
+    path = (CACHE_DIR / subdir / f"{rec_id}.md") if subdir else (CACHE_DIR / f"{rec_id}.md")
     if not path.exists():
-        sys.exit(f"error: {args.id} is not cached — run the plaud-index skill")
+        sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-index skill")
     sys.stdout.write(path.read_text())
 
 
@@ -677,8 +742,12 @@ def main() -> None:
     p.add_argument("--max-lines", type=int, default=5, help="context lines per recording")
     p.set_defaults(func=cmd_search)
 
-    p = sub.add_parser("show", help="print one cached transcript")
+    p = sub.add_parser("show", help="print one cached transcript, summary, polish or outline")
     p.add_argument("id")
+    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline"],
+                   default="transcript",
+                   help="which cached view to print; a cache written but never read "
+                        "saves nothing, which is what #28 was about")
     p.set_defaults(func=cmd_show)
 
     args = ap.parse_args()
