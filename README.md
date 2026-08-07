@@ -73,6 +73,12 @@ Walks `list_files`, fetches `get_transcript` for anything not already cached, an
 writes one markdown file per recording to `~/.plaud-connector/cache/`. Incremental:
 a re-run only fetches what is new.
 
+On a first index it asks `plaud file` whether a recording has a transcript at all
+and skips the ones that do not — a recording can sit there with audio and no
+transcript for as long as it likes, and fetching it is a guaranteed wasted call.
+Incremental runs skip the check: paying one call to maybe save one is a losing
+trade when almost nothing is new.
+
 ```
 索引最近 90 天的 Plaud 錄音
 index my Plaud recordings from 2026-01-01
@@ -95,6 +101,12 @@ search my transcripts for "action item"
 Converts a cached transcript to `.srt`. Neither the official MCP nor the official
 CLI produces timed subtitles — they return transcript text only. Runs on the local
 cache: no API call, no auth.
+
+Subtitles use Plaud's cleaned-up transcript when there is one, so the fillers stay
+off the screen. Search does not — `plaud-grep` keeps matching the verbatim text,
+because what you remember is what someone *said*, not what an AI tidied it into.
+Both versions sit in the cache; only one of them is searched, so a hit is never
+counted twice.
 
 ```
 把上週的產品週會轉成字幕
