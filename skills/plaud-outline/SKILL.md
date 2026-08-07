@@ -38,6 +38,8 @@ the cost of reading it.
 | What was decided | the cached summary (`plaud-grep` finds those too, marked `[summary]`) |
 | **How this recording is laid out, and where to jump** | **here** |
 
+Cached but deliberately kept out of search — see "What an outline is not" below.
+
 ## Prerequisites
 
 ```bash
@@ -94,11 +96,35 @@ transcript segments: the outline *skips things*. So:
   `plaud-grep` answer properly.
 - Never present an outline as coverage of a whole recording.
 
-**It is not cached.** This skill fetches each time, by design. Putting outlines
-in the cache would put them in `plaud-grep`'s results, and then the question
-"how should AI-written structure be labelled in search hits" has to be answered —
-the same question `[summary]` and `[corrected]` answer for their content. That is
-worth doing properly rather than as a side effect here.
+**It is cached, and it is not searched.** Cache it after fetching so the next
+run does not pay for it again:
+
+```bash
+tmp=$(mktemp)
+plaud transcript "<id>" --block outline -o "$tmp" 2>/dev/null && \
+  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind outline < "$tmp"
+rm -f "$tmp"
+```
+
+It writes to `outline/`, which `plaud-grep` skips — the same treatment
+`polish/` gets, for the same reason. The rule is not "AI-written text is
+excluded": summaries are AI-written and **are** searched, because a summary is
+new content and searching it reaches things nothing else reaches. A polish is
+the same sentence reworded, so including it returns every line twice. An
+outline's *text* is mostly a rewording too; the one genuinely new thing it
+carries is a timestamp — and a timestamp is not something grep finds.
+
+That timestamp is also why a fourth `[outline]` tag would not settle it.
+`[summary]` carries no locator, so nobody quotes it as "at 12:03 they said X".
+An outline line does carry one, and it means something else: not "this was
+spoken here" but "the section starting here is about this". Same syntax,
+different relation. Searching outlines needs that answered first, and it has
+not been — see `#28`.
+
+**Refetch rather than track staleness.** An outline changes when Plaud
+reprocesses a recording; a transcript does not. At 2,502 B against a
+transcript's 53,060 B, fetching it again costs less than deciding whether the
+cached one went stale.
 
 ## Failure modes
 

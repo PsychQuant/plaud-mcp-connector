@@ -1760,3 +1760,75 @@ class TestSweepStaleness(CacheTestCase):
     def test_an_empty_cache_says_nothing_about_sweeps(self):
         out = self._status({"version": "1", "recordings": {}})
         self.assertNotIn("sweep", out.lower())
+
+
+class TestOutlineCaching(CacheTestCase):
+    """Outlines are cached so `plaud-outline` stops refetching — and excluded
+    from search, for the same reason `polish/` is (issue #28).
+
+    The rule that decides this is not "AI-written text is excluded" — summaries
+    are AI-written and ARE searched. It is **is what you find here findable
+    anywhere else**: a summary is new content, so searching it reaches things
+    nothing else reaches; a polish is the same sentence reworded, so including
+    it returns every line twice.
+
+    An outline sits on the polish side. Its *text* is mostly a rewording of
+    what was said; the one genuinely new thing it carries is a timestamp — and
+    a timestamp is not something grep finds.
+
+    That timestamp is also why a fourth `[outline]` tag would not have been
+    enough. `[summary]` carries no locator, so nobody cites it as "at 12:03
+    they said X". An outline line does carry one, and it means something else:
+    not "this was spoken here" but "the section starting here is about this".
+    Same syntax, different relation. If outlines are ever searched, that needs
+    answering first — and it has not been.
+    """
+
+    def test_outline_is_written_beside_the_transcript(self):
+        self._put("rec_o", body="what was actually said")
+        ns = argparse.Namespace(id="rec_o", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:00] Opening remarks\n")):
+            self._capture_stdout(cache.cmd_put, ns)
+        self.assertTrue((cache.CACHE_DIR / "outline" / "rec_o.md").is_file())
+
+    def test_outline_does_not_disturb_the_transcript_or_its_counts(self):
+        self._put("rec_p", body="raw body here")
+        before = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_p"]
+        ns = argparse.Namespace(id="rec_p", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:00] A much longer outline than the raw\n")):
+            self._capture_stdout(cache.cmd_put, ns)
+        after = json.loads((cache.CACHE_DIR / "manifest.json").read_text())["recordings"]["rec_p"]
+        self.assertEqual(before["chars"], after["chars"])
+        self.assertEqual(before["complete"], after["complete"])
+
+    def test_outline_is_recorded_on_the_manifest(self):
+        self._put("rec_q", body="raw")
+        ns = argparse.Namespace(id="rec_q", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:00] Structure\n")):
+            self._capture_stdout(cache.cmd_put, ns)
+        man = json.loads((cache.CACHE_DIR / "manifest.json").read_text())
+        self.assertTrue(man["recordings"]["rec_q"].get("has_outline"))
+
+    def test_an_orphan_outline_is_refused(self):
+        ns = argparse.Namespace(id="rec_ghost", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:00] nothing to attach to\n")):
+            with self.assertRaises(SystemExit):
+                self._capture_stdout(cache.cmd_put, ns)
+
+    def test_outline_is_excluded_from_search(self):
+        """The claim this whole issue turned on."""
+        # The transcript must NOT contain the word, or a legitimate transcript
+        # hit masks whether the outline was excluded. (First draft of this test
+        # put "zebras" in the transcript and a case-insensitive search found it
+        # there — the test failed while the exclusion worked fine.)
+        self._put("rec_r", body="the transcript is about something else entirely")
+        ns = argparse.Namespace(id="rec_r", kind="outline")
+        with mock.patch("sys.stdin", io.StringIO("[00:12:03] Zebras and other topics\n")):
+            self._capture_stdout(cache.cmd_put, ns)
+        out = self._search("Zebras", have_rg=False)
+        self.assertIn("no match", out,
+                      "an outline heading must not surface as a search hit — it carries a "
+                      "timestamp that reads like a citation and is not one")
+
+    def test_outline_is_named_in_the_exclusion_set(self):
+        self.assertIn("outline", cache.SEARCH_EXCLUDED_DIRS)

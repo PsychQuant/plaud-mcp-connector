@@ -362,12 +362,16 @@ def cmd_put(args) -> None:
     # `complete` — those describe the transcript and would start meaning nothing
     # if a summary could change them.
     kind = str(getattr(args, "kind", "transcript") or "transcript")
-    if kind in ("summary", "polish"):
+    if kind in ("summary", "polish", "outline"):
         man = _load_manifest()
         if rec_id not in man["recordings"]:
             sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
                      f"orphan {kind} the manifest would never mention. Index it first.")
-        subdir, flag = ("summaries", "has_summary") if kind == "summary" else ("polish", "has_polish")
+        subdir, flag = {
+            "summary": ("summaries", "has_summary"),
+            "polish": ("polish", "has_polish"),
+            "outline": ("outline", "has_outline"),
+        }[kind]
         d = CACHE_DIR / subdir
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{rec_id}.md"
@@ -447,7 +451,17 @@ HIT_SOURCES = {"proofread": "corrected", "summaries": "summary"}
 # NEW content, so searching it finds things findable nowhere else. A polish is a
 # rewording, so a term that appears only there was never actually said, and
 # surfacing it as a hit would misrepresent the recording.
-SEARCH_EXCLUDED_DIRS = {"polish"}
+#
+# `outline/` sits on the polish side by that same rule. Its TEXT is mostly a
+# rewording of what was said; the one genuinely new thing it carries is a
+# timestamp — and a timestamp is not something grep finds.
+#
+# The timestamp is also why a fourth `[outline]` tag would not have been enough.
+# `[summary]` carries no locator, so nobody cites it as "at 12:03 they said X".
+# An outline line does carry one, and it means something different: not "this
+# was spoken here" but "the section starting here is about this". Same syntax,
+# different relation. Searching outlines needs that answered first (#28).
+SEARCH_EXCLUDED_DIRS = {"polish", "outline"}
 
 
 def _hit_source(path: pathlib.Path) -> str:
@@ -626,10 +640,13 @@ def main() -> None:
                    help="did the fetch loop run to the end of the transcript?")
     p.add_argument("--pages", type=int, default=1,
                    help="how many get_transcript pages were concatenated")
-    p.add_argument("--kind", choices=["transcript", "summary", "polish"], default="transcript",
-                   help="summary writes to summaries/ (searchable, labelled); polish writes "
-                        "to polish/ (NOT searchable — it is the same speech reworded); both "
-                        "leave the transcript, chars, and completeness untouched")
+    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline"],
+                   default="transcript",
+                   help="summary writes to summaries/ (searchable, labelled); polish and "
+                        "outline write to polish/ and outline/ (NOT searchable — a polish is "
+                        "the same speech reworded, an outline is AI-written structure whose "
+                        "timestamps are section starts, not citations); all three leave the "
+                        "transcript, chars, and completeness untouched")
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
