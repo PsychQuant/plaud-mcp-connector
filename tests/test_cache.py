@@ -1236,12 +1236,20 @@ class TestShouldStopPagingCli(unittest.TestCase):
 
     def test_prints_continue_with_a_reason(self):
         out = self._run("2026-08-09T10:00:00\n", "2026-08-05T00:00:00")
-        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertEqual(3, out.returncode, out.stderr)
         self.assertTrue(out.stdout.startswith("continue:"), out.stdout)
 
-    def test_blank_lines_in_the_page_are_ignored_not_treated_as_junk(self):
-        out = self._run("\n2026-08-04T10:00:00\n\n", "2026-08-05T00:00:00")
-        self.assertTrue(out.stdout.startswith("stop:"), out.stdout)
+    def test_a_blank_line_is_an_unreadable_entry_not_an_absent_one(self):
+        """Dropping it would shorten the page and make it look wrongly all-old.
+
+        A recording whose `created_at` is empty arrives as a blank line. Found
+        in verify: filtering blank lines turned "one entry we cannot read" into
+        "an entry that was never there", so a page holding one old timestamp
+        and one unreadable one answered `stop`.
+        """
+        out = self._run("\n2026-08-04T10:00:00\n", "2026-08-05T00:00:00")
+        self.assertTrue(out.stdout.startswith("continue:"), out.stdout)
+        self.assertEqual(3, out.returncode)
 
     def test_missing_cutoff_is_a_usage_error_not_a_silent_stop(self):
         out = subprocess.run(
@@ -1250,3 +1258,142 @@ class TestShouldStopPagingCli(unittest.TestCase):
         )
         self.assertNotEqual(0, out.returncode)
         self.assertNotIn("stop", out.stdout)
+
+
+class TestTimezoneMixing(CacheTestCase):
+    """Timestamps with and without an offset must still be comparable.
+
+    Found in verify by adversarial self-review, and the irony is worth
+    recording: `_parse_api_time` translates a trailing `Z` into `+00:00` so an
+    offset-carrying timestamp is understood — and that is precisely what
+    creates the crash. A parsed `Z` timestamp is offset-AWARE; a parsed bare
+    one is offset-NAIVE; Python refuses to order the two and raises TypeError.
+    The robustness feature introduced the failure mode.
+
+    Measured (all three raised `TypeError: can't compare offset-naive and
+    offset-aware datetimes` before the fix): a manifest holding both forms,
+    a cutoff carrying an offset against a page that does not, and one page
+    holding both.
+
+    The fix is not to stop parsing `Z`. The API's offset-less timestamps ARE
+    UTC — measured on one recording, `start_at: …T02:01:34` against an
+    auto-generated name of `10:01:34` local, an eight-hour offset. So a naive
+    timestamp is read as UTC, everything is comparable, and no assumption is
+    being invented to paper over a crash.
+    """
+
+    def test_manifest_mixing_offset_forms_does_not_crash(self):
+        man = {"version": "1", "recordings": {
+            "naive": {"created_at": "2026-08-05T09:00:00", "complete": True},
+            "aware": {"created_at": "2026-08-06T09:00:00Z", "complete": True},
+        }}
+        # The newest is the Z-suffixed one, so the cutoff is a day before it.
+        self.assertEqual("2026-08-05T09:00:00", cache.list_cutoff(man))
+
+    def test_aware_cutoff_against_a_naive_page_does_not_crash(self):
+        stop, reason = cache.page_verdict(["2026-08-01T00:00:00"], "2026-08-05T00:00:00+00:00")
+        self.assertTrue(stop, reason)
+
+    def test_a_page_mixing_offset_forms_does_not_crash(self):
+        stop, reason = cache.page_verdict(
+            ["2026-08-04T10:00:00Z", "2026-08-03T10:00:00"], "2026-08-05T00:00:00")
+        self.assertTrue(stop, reason)
+
+    def test_a_naive_timestamp_is_read_as_utc_not_as_local_time(self):
+        """The assumption is measured, so pin it — a future 'fix' must not flip it.
+
+        Reading a naive timestamp as local time is the exact defect the official
+        CLI has. Same instant written both ways must compare equal.
+        """
+        naive = cache._parse_api_time("2026-08-05T09:00:00")
+        aware = cache._parse_api_time("2026-08-05T09:00:00+00:00")
+        self.assertEqual(aware, naive)
+
+    def test_cutoff_output_keeps_the_api_shape(self):
+        """What comes out must be something `--cutoff` can read back in.
+
+        The cutoff crosses a shell boundary as a string, so its shape is part
+        of the contract, not an implementation detail.
+        """
+        man = {"version": "1", "recordings": {
+            "a": {"created_at": "2026-08-05T09:00:00Z", "complete": True}}}
+        cutoff = cache.list_cutoff(man)
+        self.assertNotIn("+", cutoff, "an offset would not match what list_files sends")
+        stop, reason = cache.page_verdict(["2026-08-01T00:00:00"], cutoff)
+        self.assertTrue(stop, reason)
+
+
+class TestShouldStopPagingExitCode(unittest.TestCase):
+    """The answer must survive being read as an exit code, not only as a word.
+
+    Anyone wiring this into a shell reaches for `if cmd; then` — that is the
+    idiom. With exit 0 on both branches that reads as "stop" every time, which
+    is the one failure this whole change exists to prevent. So the exit code
+    carries the answer too: 0 stop, 3 continue. 3 rather than 1 because 1 is
+    what a crash looks like, and "keep paging" is not a failure.
+    """
+
+    def _run(self, page: str, cutoff: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CACHE_PY), "should-stop-paging", "--cutoff", cutoff],
+            input=page, capture_output=True, text=True,
+        )
+
+    def test_exit_0_means_stop(self):
+        out = self._run("2026-08-04T10:00:00\n", "2026-08-05T00:00:00")
+        self.assertEqual(0, out.returncode, out.stdout)
+
+    def test_exit_3_means_continue(self):
+        out = self._run("2026-08-09T10:00:00\n", "2026-08-05T00:00:00")
+        self.assertEqual(3, out.returncode, out.stdout)
+
+    def test_continue_is_never_exit_1_which_would_read_as_a_crash(self):
+        out = self._run("", "2026-08-05T00:00:00")
+        self.assertNotEqual(1, out.returncode)
+        self.assertEqual(3, out.returncode)
+
+
+class TestListCutoffRealCliWiring(unittest.TestCase):
+    """Through argparse, as a subprocess — the previous class did not.
+
+    `TestListCutoffCommandWiring` builds an `argparse.Namespace` by hand and
+    calls `cmd_status` directly, so deleting `p.add_argument("--list-cutoff")`
+    leaves every one of its tests green. Caught in verify by the cross-model
+    reviewer, and it is the #22 error repeating inside the class named after
+    guarding against it: the flag reaching the function was never tested, only
+    the function.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="plaud-cli-wiring-")
+        self.addCleanup(self._tmp.cleanup)
+        self.cache_dir = pathlib.Path(self._tmp.name) / "cache"
+        self.cache_dir.mkdir(parents=True)
+
+    def _write_manifest(self, recordings: dict) -> None:
+        (self.cache_dir / "manifest.json").write_text(
+            json.dumps({"version": "1", "recordings": recordings}))
+
+    def _cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CACHE_PY), "status", *args],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache_dir)},
+        )
+
+    def test_the_flag_exists_and_reaches_the_function(self):
+        self._write_manifest({"a": {"created_at": "2026-08-05T09:00:00", "complete": True}})
+        out = self._cli("--list-cutoff")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertEqual("2026-08-04T09:00:00", out.stdout.strip())
+
+    def test_exit_3_reaches_the_shell_on_an_empty_cache(self):
+        self._write_manifest({})
+        out = self._cli("--list-cutoff")
+        self.assertEqual(3, out.returncode, out.stdout)
+
+    def test_ids_only_and_list_cutoff_together_is_refused_not_silently_ranked(self):
+        self._write_manifest({"a": {"created_at": "2026-08-05T09:00:00", "complete": True}})
+        out = self._cli("--ids-only", "--list-cutoff")
+        self.assertNotEqual(0, out.returncode)
+        self.assertIn("--ids-only", out.stderr)

@@ -75,8 +75,10 @@ a re-run only fetches what is new.
 
 It also stops **listing** early. Walking every page to find three new recordings
 costs more each time the library grows, so a re-run pages until it is past
-everything it already holds and then stops — normally one page. A first index,
-or `--all`, still walks the lot.
+everything it already holds and then stops. The saving is bounded below by two
+pages, not one: the cutoff sits a day behind the newest cached recording, and
+that recording is still on page one — so page one always says keep going. A
+first index, or `--all`, still walks the lot.
 
 The official CLI has a `plaud recent` that looks like the tool for this. It is
 not: it is the same `list_files` walk with a local filter, capped at 300

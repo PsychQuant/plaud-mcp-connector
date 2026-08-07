@@ -91,16 +91,31 @@ printf '%s\n' <created_at of every entry on this page, in the order returned> \
   | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" should-stop-paging --cutoff "<the cutoff>"
 ```
 
-It prints `stop: …` or `continue: …`, always with the reason. **Report the reason
-in step 4** — "stopped after 1 page" and "walked 14 pages because the listing came
-back out of order" are different facts about the run, and only one of them is
-normal.
+It prints `stop: …` or `continue: …` with the reason, **and carries the same
+answer in its exit code — 0 stop, 3 continue** (3, not 1, because continuing is
+not a failure). Use whichever the surrounding script reads more clearly; do not
+assume exit 0 alone means stop.
+
+**Expect at least two pages.** The cutoff sits a day behind the newest cached
+recording, and that recording is still on page one — so page one always says
+continue. Anything advertising "one page" is wrong.
+
+**Report the reason in step 4** — "stopped on page 2" and "walked 14 pages
+because the listing came back out of order" are different facts about the run,
+and only one of them is normal.
 
 The judgement lives in that command rather than in this file on purpose. Whether a
 page is "old enough to stop at" has three ways to be wrong that produce no symptom
 — an empty page (`all([])` is true), a page that is not sorted newest-first, and a
 timestamp that will not parse. Prose cannot be unit-tested; that command can, and
 is.
+
+**What the order check does and does not do.** It looks at one page. It cannot
+see that page 3 jumps back to a newer timestamp after page 2 looked orderly, and
+it does not disable the early exit for the rest of the run — a page that comes
+back out of order only stops *that* page from ending the walk. So treat a
+`continue: … not descending` as a signal to **finish the walk without the early
+exit at all**, and say so in the report.
 
 `--all` and a re-index after clearing the cache skip this entirely and walk every
 page.

@@ -130,11 +130,19 @@ def _parse_api_time(raw) -> datetime | None:
     hours older. The official CLI's `plaud recent` does exactly that
     (`new Date(created_at)` against `Date.now()`), which is the defect this
     code exists to not inherit.
+
+    A timestamp with no offset is read as **UTC**, not as local time. That is
+    measured rather than assumed: one recording's `start_at` reads
+    `...T02:01:34` while the name Plaud generated for it reads `10:01:34`, an
+    eight-hour offset on a UTC+8 machine. Reading it as local time instead is
+    the official CLI's bug — and leaving it naive would make a `Z`-suffixed
+    timestamp incomparable with a bare one, since Python refuses to order
+    offset-aware against offset-naive and the run would die rather than answer.
     """
     if not isinstance(raw, str) or not raw.strip():
         return None
     try:
-        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        when = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
     except (ValueError, TypeError):
         # TypeError as well as ValueError: this function's whole promise is
         # "None if it cannot be read", and an exception escaping it would take
@@ -142,6 +150,7 @@ def _parse_api_time(raw) -> datetime | None:
         # check above covers the known route in; this is the backstop for the
         # ones nobody thought of.
         return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 def list_cutoff(man: dict) -> str | None:
@@ -162,7 +171,12 @@ def list_cutoff(man: dict) -> str | None:
     ]
     if not times:
         return None
-    return (max(times) - LIST_SAFETY_MARGIN).isoformat()
+    # Emitted without the offset, matching the shape `list_files` sends. The
+    # cutoff crosses a shell boundary as a string and comes back through
+    # `--cutoff`, so its shape is part of the contract — and anything read back
+    # in with no offset is treated as UTC, which is what it is.
+    edge = (max(times) - LIST_SAFETY_MARGIN).astimezone(timezone.utc)
+    return edge.replace(tzinfo=None).isoformat()
 
 
 def page_verdict(dates: list, cutoff: str | None) -> tuple:
@@ -215,6 +229,9 @@ def cmd_status(args) -> None:
     # would any older caller). Reading the attribute directly would turn an
     # unrelated status call into an AttributeError.
     if getattr(args, "list_cutoff", False):
+        if getattr(args, "ids_only", False):
+            sys.exit("error: --ids-only and --list-cutoff answer different questions "
+                     "— pass one or the other, not both")
         cutoff = list_cutoff(man)
         if cutoff is None:
             # Exit 3, not an empty line: "nothing to stop at" has to be
@@ -459,9 +476,22 @@ def cmd_should_stop_paging(args) -> None:
     matters as much as the answer — a run that stopped early should be able to
     say why, and a run that kept going should be able to say what it saw.
     """
-    dates = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
-    _, reason = page_verdict(dates, args.cutoff)
+    # Blank lines are kept, not filtered. A page entry whose `created_at` is
+    # empty arrives as a blank line, and dropping it would shorten the page —
+    # turning "one entry we cannot read" into "an entry that was never there",
+    # which is exactly how a page becomes wrongly all-old. An unreadable entry
+    # must reach page_verdict so it can say "continue".
+    dates = [ln.strip() for ln in sys.stdin.read().splitlines()]
+    stop, reason = page_verdict(dates, args.cutoff)
     print(reason)
+    # The answer is carried by BOTH the word and the exit code. Anyone wiring
+    # this into a shell reaches for `if cmd; then` — that is the idiom — and
+    # with exit 0 on both branches it would read as "stop" every time, which is
+    # the single failure this whole change exists to prevent. Exit 3 rather
+    # than 1 for "keep paging": 1 is what a crash looks like, and continuing to
+    # page is not a failure.
+    if not stop:
+        sys.exit(3)
 
 
 def cmd_show(args) -> None:
