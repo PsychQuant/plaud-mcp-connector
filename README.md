@@ -102,11 +102,17 @@ Converts a cached transcript to `.srt`. Neither the official MCP nor the officia
 CLI produces timed subtitles — they return transcript text only. Runs on the local
 cache: no API call, no auth.
 
-Subtitles use Plaud's cleaned-up transcript when there is one, so the fillers stay
-off the screen. Search does not — `plaud-grep` keeps matching the verbatim text,
-because what you remember is what someone *said*, not what an AI tidied it into.
-Both versions sit in the cache; only one of them is searched, so a hit is never
-counted twice.
+Subtitles use Plaud's cleaned-up transcript by default, so the fillers stay off
+the screen — but that is a preference, not a verdict. Qualitative work measures
+disfluency: hesitation and restarts are the data, and polish deletes them. The
+first time a recording has both versions you get asked once, shown one line of
+your own recording rendered both ways, and the answer is remembered in
+`~/.plaud-connector/config.json`.
+
+Search does not follow that preference and cannot be made to. `plaud-grep` keeps
+matching the verbatim text, because what you remember is what someone *said*,
+not what an AI tidied it into. Both versions sit in the cache; only one of them
+is searched, so a hit is never counted twice.
 
 ```
 把上週的產品週會轉成字幕

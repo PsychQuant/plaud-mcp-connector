@@ -7,6 +7,7 @@ produces *some* output.
 
 import importlib.util
 import io
+import json
 import os
 import pathlib
 import subprocess
@@ -360,3 +361,241 @@ class TestSubtitleSource(unittest.TestCase):
         )
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertIn("only the raw exists", out.stdout)
+
+
+# --------------------------------------------------------------------------
+# Subtitle source as a preference, not a decision (#29)
+#
+# #22 established the split — subtitles from the polish, search from the raw —
+# and hardcoded it. Which one your *subtitles* use is a preference, though:
+# clean reads better on screen, verbatim keeps the disfluency that qualitative
+# work measures. Both answers are right; which one depends on the work.
+#
+# Search is NOT configurable and deliberately so: polish is the same speech
+# reworded, so searching it returns sentences nobody said. That is #28's
+# unanswered labelling question, not a preference.
+# --------------------------------------------------------------------------
+class TestSourcePreference(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cache = pathlib.Path(self._tmp.name)
+        patch = mock.patch.object(to_srt, "CACHE_DIR", self.cache)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _write(self, rel: str, text: str) -> pathlib.Path:
+        p = self.cache / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        return p
+
+    def _both(self, rec_id: str) -> None:
+        self._write(f"{rec_id}.md", "[00:00:01] Speaker 1: 呃 那個 就是 raw wording\n")
+        self._write(f"polish/{rec_id}.md", "[00:00:01] Speaker 1: tidy wording\n")
+
+    def test_polished_is_still_the_default(self) -> None:
+        """The default must not move — an existing user with no config file has
+        to see exactly what they saw yesterday."""
+        self._both("r1")
+        self.assertEqual(self.cache / "polish" / "r1.md", to_srt.subtitle_source("r1"))
+
+    def test_verbatim_takes_the_raw_transcript_even_though_polish_exists(self) -> None:
+        self._both("r2")
+        self.assertEqual(self.cache / "r2.md",
+                         to_srt.subtitle_source("r2", prefer="verbatim"))
+
+    def test_verbatim_with_no_polish_is_still_the_raw_transcript(self) -> None:
+        self._write("r3.md", "[00:00:01] Speaker 1: only raw\n")
+        self.assertEqual(self.cache / "r3.md",
+                         to_srt.subtitle_source("r3", prefer="verbatim"))
+
+
+class TestDifferingSample(unittest.TestCase):
+    """The pair of lines that makes the question answerable.
+
+    Asking "polished or verbatim?" in the abstract is not answerable — the user
+    has not seen either. Asking it beside the same line rendered both ways is.
+    That is the whole reason this function exists.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cache = pathlib.Path(self._tmp.name)
+        patch = mock.patch.object(to_srt, "CACHE_DIR", self.cache)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def _write(self, rel: str, text: str) -> None:
+        p = self.cache / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def test_returns_the_first_segment_that_actually_differs(self) -> None:
+        """Not the first segment — the first *differing* one. A recording whose
+        opening line has no fillers would otherwise preview two identical lines
+        and demonstrate nothing."""
+        self._write("s1.md",
+                    "[00:00:01] A: same opening\n[00:00:05] A: 呃 那個 the budget\n")
+        self._write("polish/s1.md",
+                    "[00:00:01] A: same opening\n[00:00:05] A: the budget\n")
+        sample = to_srt.differing_sample("s1")
+        self.assertIsNotNone(sample)
+        self.assertIn("呃 那個 the budget", sample["verbatim"])
+        self.assertEqual("A: the budget", sample["polished"])
+
+    def test_returns_none_when_there_is_no_polish(self) -> None:
+        self._write("s2.md", "[00:00:01] A: only raw\n")
+        self.assertIsNone(to_srt.differing_sample("s2"))
+
+    def test_returns_none_when_the_two_versions_are_identical(self) -> None:
+        """The fifth state the issue's table did not list. A recording with no
+        fillers to thin has nothing to choose between — asking anyway would be
+        a question with no information in it."""
+        text = "[00:00:01] A: nothing to thin here\n"
+        self._write("s3.md", text)
+        self._write("polish/s3.md", text)
+        self.assertIsNone(to_srt.differing_sample("s3"))
+
+    def test_returns_none_when_polish_is_empty(self) -> None:
+        self._write("s4.md", "[00:00:01] A: raw\n")
+        self._write("polish/s4.md", "")
+        self.assertIsNone(to_srt.differing_sample("s4"))
+
+
+class TestConfigurableLineLimits(unittest.TestCase):
+    def test_default_limits_still_apply_when_none_passed(self) -> None:
+        """The existing single-argument call sites must keep working unchanged."""
+        text = "一二三四五六七八九十一二三四五六七八九十一二三"
+        self.assertEqual(to_srt.wrap_cue_text(text),
+                         to_srt.wrap_cue_text(text, limits=to_srt.LINE_LIMITS))
+
+    def test_a_narrower_cjk_limit_wraps_sooner(self) -> None:
+        text = "一二三四五六七八九十一二"      # 12 chars: under the default 20
+        self.assertNotIn("\n", to_srt.wrap_cue_text(text))
+        wrapped = to_srt.wrap_cue_text(text, limits={"latin": 42, "cjk": 5})
+        self.assertIn("\n", wrapped)
+        self.assertTrue(all(len(line) <= 5 for line in wrapped.split("\n")))
+
+    def test_a_narrower_latin_limit_wraps_sooner(self) -> None:
+        text = "the quick brown fox jumps over the lazy dog"
+        wrapped = to_srt.wrap_cue_text(text, limits={"latin": 12, "cjk": 20})
+        self.assertTrue(all(len(line) <= 12 for line in wrapped.split("\n")
+                            if " " in line or len(line) <= 12))
+
+    def test_render_srt_threads_the_limits_through(self) -> None:
+        """Testing wrap_cue_text alone proves the part works, not that render_srt
+        hands it anything — the #22 lesson, applied one layer up."""
+        cues = [{"start": 0.0, "end": 2.0, "text": "一二三四五六七八九十"}]
+        self.assertIn("\n", to_srt.render_srt(cues, limits={"latin": 42, "cjk": 3}))
+
+
+class TestSourcePreferenceCLI(unittest.TestCase):
+    """The wiring, not the parts.
+
+    #22 shipped a passing test for `subtitle_source()` while `main()` could have
+    stopped calling it entirely without a single test going red. Everything here
+    runs the actual command.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cache = pathlib.Path(self._tmp.name)
+        self.config = self.cache / "config.json"
+
+    def _write(self, rel: str, text: str) -> None:
+        p = self.cache / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def _both(self, rec_id: str) -> None:
+        self._write(f"{rec_id}.md", "[00:00:01] Speaker 1: 呃 raw wording\n")
+        self._write(f"polish/{rec_id}.md", "[00:00:01] Speaker 1: tidy wording\n")
+
+    def _run(self, *args: str, **env_extra: str) -> subprocess.CompletedProcess:
+        env = {**os.environ,
+               "PLAUD_CACHE_DIR": str(self.cache),
+               "PLAUD_CONFIG": str(self.config),
+               **env_extra}
+        return subprocess.run([sys.executable, str(SCRIPT), *args],
+                              capture_output=True, text=True, env=env)
+
+    def _set_config(self, **keys) -> None:
+        self.config.write_text(json.dumps(keys), encoding="utf-8")
+
+    def test_config_file_preference_reaches_the_output(self) -> None:
+        self._both("c1")
+        self._set_config(subtitle_source="verbatim")
+        out = self._run("c1")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("raw wording", out.stdout)
+        self.assertNotIn("tidy wording", out.stdout)
+
+    def test_flag_beats_config_file(self) -> None:
+        self._both("c2")
+        self._set_config(subtitle_source="verbatim")
+        out = self._run("c2", "--source", "polished")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("tidy wording", out.stdout)
+
+    def test_env_beats_config_file(self) -> None:
+        self._both("c3")
+        self._set_config(subtitle_source="polished")
+        out = self._run("c3", PLAUD_SUBTITLE_SOURCE="verbatim")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("raw wording", out.stdout)
+
+    def test_flag_beats_env(self) -> None:
+        self._both("c4")
+        out = self._run("c4", "--source", "polished", PLAUD_SUBTITLE_SOURCE="verbatim")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("tidy wording", out.stdout)
+
+    def test_no_config_still_means_polished(self) -> None:
+        self._both("c5")
+        out = self._run("c5")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("tidy wording", out.stdout)
+
+    def test_line_limits_from_config_reach_the_output(self) -> None:
+        self._write("c6.md", "[00:00:01] A: 一二三四五六七八九十\n")
+        self._set_config(srt_line_limits={"cjk": 3})
+        out = self._run("c6", "--no-speaker")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("一二三\n", out.stdout)
+
+    def test_preview_sources_prints_both_and_exits_zero(self) -> None:
+        self._both("c7")
+        out = self._run("c7", "--preview-sources")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("raw wording", out.stdout)
+        self.assertIn("tidy wording", out.stdout)
+
+    def test_preview_sources_exits_3_when_there_is_no_choice(self) -> None:
+        """Exit 3, not exit 0 with empty output.
+
+        An empty stdout that exits 0 is indistinguishable from success, and a
+        caller branching on it would ask the user to choose between two things
+        it never found.
+        """
+        self._write("c8.md", "[00:00:01] A: only raw\n")
+        out = self._run("c8", "--preview-sources")
+        self.assertEqual(3, out.returncode)
+
+    def test_preview_sources_exits_3_when_versions_are_identical(self) -> None:
+        text = "[00:00:01] A: nothing to thin\n"
+        self._write("c9.md", text)
+        self._write("polish/c9.md", text)
+        out = self._run("c9", "--preview-sources")
+        self.assertEqual(3, out.returncode)
+
+    def test_unknown_config_key_warns_but_subtitles_still_come_out(self) -> None:
+        """A typo costs you the preference, never the work."""
+        self._both("c10")
+        self._set_config(subtitle_soruce="verbatim")
+        out = self._run("c10")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertIn("subtitle_soruce", out.stderr)
+        self.assertIn("tidy wording", out.stdout, "the typo must not silently take effect")

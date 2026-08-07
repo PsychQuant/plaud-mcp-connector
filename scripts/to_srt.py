@@ -19,10 +19,20 @@ Usage:
 """
 
 import argparse
+import importlib.util
 import os
 import pathlib
 import re
 import sys
+
+# These scripts are run directly (`python3 scripts/to_srt.py`), never imported as
+# a package, so a plain `import config` would resolve against the caller's cwd —
+# or not at all. Load it by path, from beside this file.
+_cfg_spec = importlib.util.spec_from_file_location(
+    "plaud_config", pathlib.Path(__file__).resolve().parent / "config.py"
+)
+config = importlib.util.module_from_spec(_cfg_spec)
+_cfg_spec.loader.exec_module(config)
 
 CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
@@ -143,8 +153,13 @@ def detect_script(text: str) -> str:
     return "latin"
 
 
-def wrap_cue_text(text: str) -> str:
+def wrap_cue_text(text: str, limits: dict | None = None) -> str:
     """Break one cue into readable lines for its script.
+
+    `limits` defaults to `LINE_LIMITS` rather than being read from the module
+    directly, so a caller can pass configured widths without mutating global
+    state — a mutated global would leak between tests and between recordings in
+    the same run.
 
     Thai is returned untouched on purpose. It has no word spaces and correct
     breaking needs a segmenter this plugin does not carry; breaking mid-word
@@ -154,7 +169,7 @@ def wrap_cue_text(text: str) -> str:
     script = detect_script(text)
     if script == "thai":
         return text
-    limit = LINE_LIMITS[script]
+    limit = (limits or LINE_LIMITS)[script]
     if len(text) <= limit:
         return text
 
@@ -176,37 +191,82 @@ def wrap_cue_text(text: str) -> str:
     return "\n".join(lines)
 
 
-def render_srt(cues: list[dict]) -> str:
+def render_srt(cues: list[dict], limits: dict | None = None) -> str:
     blocks = []
     for n, cue in enumerate(cues, start=1):
         blocks.append(
             f"{n}\n"
             f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n"
-            f"{wrap_cue_text(cue['text'])}\n"
+            f"{wrap_cue_text(cue['text'], limits)}\n"
         )
     return "\n".join(blocks)
 
 
-def subtitle_source(rec_id: str) -> pathlib.Path:
+def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
     """Which cached file this recording's subtitles should come from.
 
-    Prefers `polish/<id>.md` — Plaud's filler-thinned version of the same speech,
-    with the same segments and the same timings, so the timeline does not shift.
-    Nobody reads "呃" on screen.
+    `polished` (the default) takes Plaud's filler-thinned version when there is
+    one — same segments, same timings, so the timeline does not shift. Nobody
+    reads "呃" on screen.
 
-    The raw transcript stays the search corpus: search answers "what was said",
-    and that question needs the words as spoken. The two questions have different
-    right answers, which is why Plaud returns two files and why this picks
-    between them rather than caching only one.
+    `verbatim` takes the raw transcript even when a polish exists. That is not a
+    worse choice, it is a different job: qualitative and conversation-analytic
+    work treats disfluency as data, and hesitation is exactly what gets thinned
+    away. Which one is right depends on what the subtitles are for, which is why
+    this is a preference rather than a decision (see `scripts/config.py`).
+
+    Search is not configurable and deliberately so — it stays on the raw
+    transcript, because search answers "what was said" and polish is the same
+    speech reworded.
 
     An empty polish file is ignored rather than preferred — a zero-byte source
     would produce an empty subtitle file, which is the failure shape that reads
     as success.
     """
-    polished = CACHE_DIR / "polish" / f"{rec_id}.md"
-    if polished.is_file() and polished.stat().st_size > 0:
-        return polished
+    if prefer != "verbatim":
+        polished = CACHE_DIR / "polish" / f"{rec_id}.md"
+        if polished.is_file() and polished.stat().st_size > 0:
+            return polished
     return CACHE_DIR / f"{rec_id}.md"
+
+
+def _cue_lines(path: pathlib.Path) -> list[str]:
+    """A file's segments rendered the way a cue would read, speaker included."""
+    if not path.is_file() or path.stat().st_size == 0:
+        return []
+    segments = parse_segments(strip_frontmatter(path.read_text()))
+    return [c["text"] for c in build_cues(segments)]
+
+
+def differing_sample(rec_id: str) -> dict | None:
+    """The same line both ways, or None when there is nothing to choose between.
+
+    This exists to make the question answerable. "Polished or verbatim?" asked
+    in the abstract cannot be answered by someone who has not seen either; asked
+    beside one real line of their own recording rendered both ways, it answers
+    itself. The failure was never that users could not decide — it was that the
+    question had no content in it.
+
+    Returns None in three cases, all of which mean *do not ask*:
+      - no polish for this recording — there is no choice
+      - polish is empty — same
+      - the two versions are identical — a recording with no fillers to thin.
+        Asking anyway would present two identical lines and demand a preference
+        between them.
+
+    Pairs by position: Plaud returns both blocks with the same segment count and
+    the same timings (94 against 94, measured in #22), so index alignment holds.
+    If a future release breaks that, the zip below simply stops at the shorter
+    one rather than pairing lines that are not the same moment.
+    """
+    polished = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
+    verbatim = _cue_lines(CACHE_DIR / f"{rec_id}.md")
+    if not polished or not verbatim:
+        return None
+    for tidy, raw in zip(polished, verbatim):
+        if tidy != raw:
+            return {"polished": tidy, "verbatim": raw}
+    return None
 
 
 def main() -> None:
@@ -220,14 +280,48 @@ def main() -> None:
                     help="omit the speaker prefix from cue text")
     ap.add_argument("--tail-seconds", type=float, default=4.0,
                     help="duration for the final cue, which has no successor (default 4)")
+    ap.add_argument("--source", choices=("polished", "verbatim"),
+                    help="which transcript to subtitle from, just this once "
+                         "(overrides PLAUD_SUBTITLE_SOURCE and the config file)")
+    ap.add_argument("--preview-sources", action="store_true",
+                    help="print one line rendered both ways so a caller can ask "
+                         "which is wanted; exits 3 when there is nothing to choose")
     args = ap.parse_args()
+
+    cfg = config.load_config()
+
+    # Intent beats environment beats stored preference beats default. The
+    # one-off flag has to win, or "just this once" would mean editing a file.
+    prefer = (args.source
+              or os.environ.get("PLAUD_SUBTITLE_SOURCE")
+              or cfg["subtitle_source"])
+    if prefer not in config.SUBTITLE_SOURCES:
+        print(f"config: PLAUD_SUBTITLE_SOURCE={prefer!r} is not one of "
+              f"{', '.join(config.SUBTITLE_SOURCES)} — using "
+              f"{config.DEFAULTS['subtitle_source']!r}", file=sys.stderr)
+        prefer = config.DEFAULTS["subtitle_source"]
+
+    if args.preview_sources:
+        if args.file:
+            sys.exit("error: --preview-sources needs a recording id, not --file")
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.id or ""):
+            sys.exit(f"error: refusing unsafe recording id: {args.id!r}")
+        sample = differing_sample(args.id)
+        if sample is None:
+            # Exit 3, not 0-with-empty-output. A caller branching on empty stdout
+            # would be indistinguishable from a caller branching on success, and
+            # would go on to offer a choice between two things it never found.
+            sys.exit(3)
+        print(f"polished: {sample['polished']}")
+        print(f"verbatim: {sample['verbatim']}")
+        return
 
     if args.file:
         path = pathlib.Path(args.file)
     else:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.id or ""):
             sys.exit(f"error: refusing unsafe recording id: {args.id!r}")
-        path = subtitle_source(args.id)
+        path = subtitle_source(args.id, prefer=prefer)
 
     if not path.is_file():
         sys.exit(f"error: {path} not found — run the plaud-index skill first")
@@ -249,7 +343,8 @@ def main() -> None:
 
     srt = render_srt(build_cues(segments,
                                 show_speaker=not args.no_speaker,
-                                tail_seconds=args.tail_seconds))
+                                tail_seconds=args.tail_seconds),
+                     limits=cfg["srt_line_limits"])
     if args.output:
         pathlib.Path(args.output).write_text(srt)
         print(f"wrote {len(segments)} cues → {args.output}")

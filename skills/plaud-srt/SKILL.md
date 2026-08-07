@@ -39,24 +39,55 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
 `search` prints the id under each hit. If the recording is not cached, run
 `plaud-index` first — this skill never fetches.
 
-### 2. Pick the source (automatic)
+### 2. Pick the source — ask once, then remember
 
-`to_srt.py` uses `polish/<id>.md` when the cache has one — Plaud's filler-thinned
-version of the same speech, with the same segments and the same timings, so the
-timeline does not shift. It falls back to the raw transcript otherwise.
+Plaud gives two versions of the same speech. Both are cached, with the same
+segments and the same timings, so switching never shifts the timeline:
 
-This is why the skill still never fetches: the choice was made at index time.
-If the user explicitly wants the words exactly as transcribed — research use,
-quoting verbatim — pass `--file` pointing at the raw transcript:
+| | |
+|---|---|
+| **polished** (default) | filler-thinned. Nobody wants to read "呃 那個 就是" on screen |
+| **verbatim** | exactly as transcribed. Qualitative and conversation-analytic work **measures** disfluency — hesitation and restarts are the data, and polish deletes them |
+
+Neither is the right answer in general, which is why it is a preference rather
+than something this skill decides. Search is a different matter and is **not**
+configurable: it stays on the verbatim text, because polish is the same speech
+reworded and a search that returns sentences nobody said is a different problem
+(see `#28`).
+
+**Do not ask every time, and do not ask in the abstract.** Ask once, when the
+choice is real, showing the user one line of their own recording rendered both
+ways — then remember the answer:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" --file "$HOME/.plaud-connector/cache/<id>.md" -o out.srt
+# Has a preference already been chosen? exit 3 = never asked.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/config.py" get subtitle_source
+
+# Is there anything to choose between? exit 3 = no, do not ask.
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> --preview-sources
 ```
+
+| Situation | What to do |
+|---|---|
+| `get` exits 3 **and** `--preview-sources` exits 0 | **Ask**, quoting the two lines it printed. Then `config.py set subtitle_source <answer>` |
+| `get` exits 0 | A choice is on record — use it, say nothing |
+| `--preview-sources` exits 3 | **Do not ask.** Either there is no polish, or the two versions are identical — there is no choice to offer, and asking would present two identical lines |
+| Nobody is there to answer | Use the default and **say which version you used** in the report |
+
+Asking "polished or verbatim?" with nothing attached is unanswerable — the user
+has not seen either. Asking it beside their own line answers itself:
+
+```
+polished: 講者一: 我們要把預算拆成兩期
+verbatim: 講者一: 呃 那個 就是 我們要把預算拆成兩期
+```
+
+For one recording only, skip the preference entirely: `--source verbatim`.
 
 Polish does **not** fix misheard names (that is `plaud-proofread`) and it
 normalises simplified characters to traditional. Say so if it matters to them.
 
-### 2. Convert
+### 3. Convert
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> -o "<name>.srt"
@@ -69,11 +100,13 @@ Useful flags:
 | `--no-speaker` | drop the `Speaker 1: ` prefix from every cue |
 | `--tail-seconds N` | duration for the final cue (default 4) |
 | `--file <path>` | convert a transcript file directly, bypassing the cache |
+| `--source polished\|verbatim` | override the stored preference, this once |
+| `--preview-sources` | print one line both ways; exit 3 when there is no choice |
 
 Without `-o` it writes to stdout, which is handy for piping but **do not paste a
 long transcript into the conversation** — write the file and report the path.
 
-### 3. Report honestly
+### 4. Report honestly
 
 Say where the file went and how many cues it has. Two things to surface if they
 happen, because neither is visible in the resulting `.srt`:
@@ -102,6 +135,34 @@ vanish rather than merely sit at the wrong moment.
 - **No re-timing against the audio.** Cue boundaries come from the transcript's
   own timestamps. If Plaud's ASR placed an utterance a second late, the subtitle
   inherits that.
-- **No line wrapping.** A long utterance becomes one long cue. Players wrap it,
-  but a subtitle editor may want it split.
+- **No re-wrapping to your player's taste.** Long cues *are* wrapped — 42
+  characters for Latin script, 20 for CJK, since each CJK glyph is full-width.
+  Both are configurable (`srt_line_limits`, below). Thai is deliberately left
+  unwrapped: it has no word spaces, and guessing a break point is worse than a
+  long line.
 - **No translation.** Subtitles come out in whatever language was spoken.
+
+## Preferences
+
+Stored in `~/.plaud-connector/config.json` — beside the cache, not inside it, so
+clearing the cache to fix an indexing problem does not also erase your settings.
+
+```json
+{
+  "subtitle_source": "polished",
+  "srt_line_limits": { "latin": 42, "cjk": 20 }
+}
+```
+
+`python3 "${CLAUDE_PLUGIN_ROOT}/scripts/config.py" show` prints the current
+values and marks which are still defaults.
+
+Precedence, highest first: `--source` flag → `PLAUD_SUBTITLE_SOURCE` →
+config file → default. An unrecognised key is reported on stderr and skipped —
+a typo costs you the preference, never the subtitles.
+
+`srt_line_limits` has no ask-once flow, unlike `subtitle_source`. There is no
+moment in captioning a recording where "how many characters per line does your
+player like?" is a natural question, so it is edited by hand. That asymmetry is
+deliberate but it does mean the two settings differ in how discoverable they
+are: one introduces itself, the other only exists in this document.
