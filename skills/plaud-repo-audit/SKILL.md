@@ -34,6 +34,7 @@ about someone else's software.
 | `get_file` returns `presigned_url` → "the MCP cannot reach audio" was false | No tool was *named* `audio`; absence of a name read as absence of a capability | **§4 Response shapes** |
 | Recommended `get_file` as a cheap pre-check | Saw the field it needed; never measured the payload (141 KB) | **§4 Response shapes** — sizes, not just fields |
 | CLI transcript truncation assumed impossible | Inferred from a missing flag | **§3 Command surface** — flags AND behaviour |
+| §4's own measurement could report a stale file's size as this recording's | `plaud transcript` exits 0 when the block is absent, so `&&` guarded nothing | **§4** — `mktemp -d` per run + explicit `[ -s ]` (found 2026-08-07, first real run of this skill) |
 
 **A version number that has not moved is not evidence of nothing changing.**
 `.mcp.json` runs `npx -y @plaud-ai/mcp@latest`, so users can be on a build the doc
@@ -118,9 +119,29 @@ For each of `get_transcript`, `get_file`, `list_files`, record:
   difference between a good pre-check and a bad one.
 
 ```bash
-# Size, without reading the payload into the conversation
-plaud transcript "<id>" -o /tmp/a.txt && wc -c < /tmp/a.txt && rm -f /tmp/a.txt
+# Size, without reading the payload into the conversation.
+# Fresh directory per run and an explicit non-empty check, because
+# `plaud transcript` EXITS 0 when the block does not exist — it prints
+# `No "transaction" transcript for this recording. Available: (none).`
+# and writes no file. With a shared path and `&&` alone, a leftover file
+# from the previous run gets measured and reported as this recording's
+# size. An audit that mixes up which recording it measured is worse than
+# one that admits it measured nothing.
+D=$(mktemp -d)
+if plaud transcript "<id>" --block transaction -o "$D/t.txt" && [ -s "$D/t.txt" ]; then
+  wc -c < "$D/t.txt"
+else
+  echo "no transaction block for this recording — check 'plaud file <id>'"
+fi
+rm -rf "$D"
 ```
+
+**Pick the recording before measuring.** `plaud file <id>` reports
+`transcript: available | unavailable` per recording; a fresh recording commonly
+has `audio: available` with `transcript: unavailable`. Measured 2026-08-07: the
+30 most recent recordings on this account all had transcripts unavailable, so
+"the fetch returned nothing" was an accurate statement about the recording, not
+a fault in the CLI. Check availability first and you skip that whole detour.
 
 For MCP tools, call them and note the response size the harness reports.
 
