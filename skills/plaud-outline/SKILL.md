@@ -24,10 +24,11 @@ use here; this is the third.
 | `transaction_polish` | 50,159 B, 94 segments | Same, filler thinned |
 | **`outline`** | **2,502 B, 59 timestamped items** | **Structure** |
 
-Two orders of magnitude smaller, and still timestamped. That combination is what
-makes it useful: a summary tells you what a meeting was about but gives you
-nowhere to jump to; a transcript gives you everywhere to jump to at 20× the cost
-of reading it.
+Roughly a twentieth the size (21× by bytes, 13× by characters — CJK costs three
+bytes each, so the two ratios differ), and still timestamped. That combination is
+what makes it useful: a summary tells you what a meeting was about but gives you
+nowhere to jump to; a transcript gives you everywhere to jump to at twenty times
+the cost of reading it.
 
 ## What this fills
 
