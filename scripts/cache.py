@@ -33,6 +33,13 @@ from datetime import datetime, timedelta, timezone
 # rather than an hour, and it is subtracted, never added.
 LIST_SAFETY_MARGIN = timedelta(days=1)
 
+# How long a full listing sweep stays trustworthy before `status` says so. Not
+# a preference: applying the test in config.py — can you say who picks the
+# other value, in what situation, and why they are right? — nobody has an
+# answer for "my blind spot should be allowed to grow for 60 days instead of
+# 30". It is a decision, and decisions belong in the code.
+SWEEP_STALE_DAYS = 30
+
 CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
 )
@@ -313,6 +320,24 @@ def cmd_status(args) -> None:
         polished = sum(1 for r in recs.values() if r.get("has_polish"))
         if polished:
             print(f"polished  : {polished} of {len(recs)} recordings (subtitles only)")
+        # `range` above is the span of what is CACHED. This is the span of what
+        # was SCANNED. They look alike and differ by exactly the blind spot the
+        # early exit creates: a recording that reached the cloud late carries an
+        # old created_at, sits deep in the listing, and gets stepped over with
+        # no error and no count. A periodic --all is the only remedy, and a
+        # remedy nobody is reminded of is not a remedy.
+        age = sweep_age_days(man)
+        if age is None:
+            print("full sweep: never — incremental runs may be stepping over older "
+                  "recordings; run plaud-index --all")
+        # Whole days, so the number printed and the decision made agree. On a
+        # float comparison "30 days ago" warns about being over 30 days, which
+        # reads as a contradiction to anyone looking at it.
+        elif int(age) > SWEEP_STALE_DAYS:
+            print(f"full sweep: {age:.0f} days ago")
+            print(f"          ⚠ over {SWEEP_STALE_DAYS} days — run plaud-index --all")
+        else:
+            print(f"full sweep: {age:.0f} days ago")
 
 
 def cmd_put(args) -> None:
@@ -544,6 +569,19 @@ def cmd_should_stop_paging(args) -> None:
     # page is not a failure.
     if not stop:
         sys.exit(3)
+
+
+def sweep_age_days(man: dict) -> float | None:
+    """How long since the listing was last walked to its end, or None if never.
+
+    None also covers a marker that cannot be read: an unreadable timestamp is
+    not evidence of a recent sweep, and the honest answer to "when did this
+    last happen" is the same as if it never did.
+    """
+    when = _parse_api_time(man.get("full_sweep_at"))
+    if when is None:
+        return None
+    return (datetime.now(timezone.utc) - when).total_seconds() / 86400
 
 
 def cmd_mark_full_sweep(args) -> None:

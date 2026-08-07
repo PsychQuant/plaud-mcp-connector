@@ -34,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 # ---------------------------------------------------------------------------
@@ -1695,3 +1696,67 @@ class TestPagingCliLatchFlags(unittest.TestCase):
     def test_without_the_flags_behaviour_is_unchanged(self):
         out = self._run("2026-08-01T00:00:00\n")
         self.assertEqual(0, out.returncode, out.stdout)
+
+
+class TestSweepStaleness(CacheTestCase):
+    """`status` must say when the last full sweep was, and when it is old (#30).
+
+    The early exit buys speed by not looking at the older pages. What it costs
+    is that a recording which reached the cloud late — old `created_at`, deep
+    in the listing — gets stepped over with no error and no count. The only
+    remedy is a periodic `--all`, and a remedy nobody is reminded of is not a
+    remedy.
+
+    Note what `status` already printed and why it was not enough: `range` is
+    the span of what is CACHED. This is the span of what was SCANNED. They
+    look alike and differ by exactly the blind spot.
+
+    The threshold is not configurable. Applying `config.py`'s own test — can
+    you say who picks the other value, in what situation, and why they are
+    right? — nobody has an answer for "my blind spot should be allowed to grow
+    for 60 days rather than 30", so it is a decision nobody has made, not a
+    preference.
+    """
+
+    def _status(self, man: dict) -> str:
+        cache._save_manifest(man)
+        return self._capture_stdout(cache.cmd_status, argparse.Namespace(ids_only=False))
+
+    def _man(self, sweep=None) -> dict:
+        man = {"version": "1", "recordings": {
+            "a": {"created_at": "2026-08-05T09:00:00", "complete": True, "chars": 10}}}
+        if sweep:
+            man["full_sweep_at"] = sweep
+        return man
+
+    def test_never_swept_says_so_and_says_what_to_do(self):
+        out = self._status(self._man())
+        self.assertIn("never", out.lower())
+        self.assertIn("--all", out, "a warning without the command is half a warning")
+
+    def test_a_recent_sweep_is_reported_without_alarm(self):
+        recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+        out = self._status(self._man(recent))
+        self.assertIn("full sweep", out.lower())
+        self.assertNotIn("⚠", out)
+
+    def test_an_old_sweep_is_flagged(self):
+        old = (datetime.now(timezone.utc) - timedelta(days=cache.SWEEP_STALE_DAYS + 1)).isoformat()
+        out = self._status(self._man(old))
+        self.assertIn("⚠", out)
+        self.assertIn("--all", out)
+
+    def test_the_boundary_is_not_stale(self):
+        """Exactly at the threshold is not yet over it."""
+        edge = (datetime.now(timezone.utc) - timedelta(days=cache.SWEEP_STALE_DAYS)).isoformat()
+        out = self._status(self._man(edge))
+        self.assertNotIn("⚠", out)
+
+    def test_an_unreadable_sweep_timestamp_is_treated_as_never(self):
+        """Fail toward the loud answer: an unreadable marker is not reassurance."""
+        out = self._status(self._man("garbage"))
+        self.assertIn("never", out.lower())
+
+    def test_an_empty_cache_says_nothing_about_sweeps(self):
+        out = self._status({"version": "1", "recordings": {}})
+        self.assertNotIn("sweep", out.lower())
