@@ -125,6 +125,51 @@ import the file and start transcription. **macOS only.**
 transcribe ~/Recordings/interview.m4a
 ```
 
+
+### `plaud-audio` — get the original recording back
+
+Downloads the audio file itself, not its transcript. Useful for archiving, for
+editing, or for running a different ASR over it.
+
+The official CLI returns the link in one call; the MCP's `get_file` carries the
+same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link
+**expires in 24 hours**, so this downloads rather than handing you a URL to keep.
+
+```
+把那次會議的音檔抓下來
+download the audio from the Kubernetes migration meeting
+```
+
+### `plaud-outline` — the shape of a recording, cheaply
+
+Plaud's `outline` block is about a twentieth the size of the full transcript and
+still timestamped. Answers "what was this about, and where do I jump to" without
+pulling 53 KB through the model.
+
+It is AI-written structure, not speech — and it **skips things** (59 outline items
+against 94 transcript segments in one measured recording), so "the outline does
+not mention it" is not evidence it was not discussed.
+
+```
+這場在講什麼
+what was that meeting about
+```
+
+### `plaud-audit` — re-measure the official surface
+
+`docs/official-surface.md` is a snapshot of what Plaud's CLI and MCP actually do.
+This re-measures it and reports what changed, and what that means here.
+
+Its checklist is not generic — each item is a specific way this repo has been
+wrong about someone else's software: reading a tool list instead of opening the
+tarball, treating a present field as a cheap one, inferring behaviour from a
+missing flag. Run it before trusting the doc, not after being surprised by it.
+
+```
+官方有沒有改
+audit the official surface
+```
+
 ## How search works
 
 No embedding service, no vector database, no extra dependency. Transcripts are
