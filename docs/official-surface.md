@@ -193,6 +193,56 @@ pages × 100 = 500 recordings**, which the tool description states outright. The
 CLI says the same thing in its own words: `plaud search` "scans up to 500 most
 recent recordings".
 
+### `plaud recent` and `plaud today` are the same walk, not a recency endpoint
+
+Read from the installed CLI 0.3.7 source (`dist/index.js`, `src/commands/recent.ts`).
+This matters because the obvious reading — "the CLI has a cheap recency endpoint we
+are not using" — is wrong, and acting on it would have imported three defects.
+
+The client has no date-aware call at all: `async listFiles(page = 1, pageSize = 20)`
+is the whole surface. `recent` walks the same pages and filters locally:
+
+```js
+var MAX_PAGES2 = 3;
+var PAGE_SIZE2 = 100;
+const from = Date.now() - days * 24 * 60 * 60 * 1e3;
+for (let page = 1; page <= MAX_PAGES2; page++) {
+  const result = await client2.listFiles(page, PAGE_SIZE2);
+  ...
+  if (hasValidTimestamps && allOlder && result.data.length > 0) break;
+}
+```
+
+| What | Measured |
+|---|---|
+| Window | **Rolling `days × 24h` from now**, not calendar days |
+| Page cap | **3 × 100 = 300**, and **nothing is printed on hitting it** — unlike `search`, which prints `(Truncated at 5 pages…)` |
+| Filter field | `created_at`, not `start_at` |
+| Timestamp handling | `new Date(created_at)` on a string with **no timezone suffix** |
+| `plaud today` | `listFiles(1, 50)` — **one page**, compared against local midnight |
+
+That last row is a real defect for anyone east of UTC. The API's timestamps are
+UTC written without an offset (same recording: `created_at: 2026-08-07T03:10:35`,
+`start_at: …T02:01:34`, auto-generated name `2026-08-07 10:01:34` — the name is
+local, the fields are UTC). JavaScript parses an offset-less date-time as **local
+time**, so on UTC+8 every recording reads eight hours older than it is: `-d N`
+covers roughly `24N − 8` hours, and `plaud today` drops recordings made early
+this morning.
+
+**The window semantics cannot be measured from outside.** Five black-box probes
+(`-d 1..5` against a library spanning six days) fit *both* a calendar-day model
+and a rolling-24h model equally well — every recording in that library was made
+in the morning and the probe ran in the afternoon, so the two models' boundaries
+landed on the same side of every data point. Only `from = Date.now() - days*24h`
+settles it. **After a CLI upgrade, re-check both the source and the probes** —
+the probes alone will agree with whatever you already believe.
+
+None of this is a reason to avoid the CLI generally — `plaud transcript` and
+`plaud audio` remain the right tools. It is a reason not to use `recent` / `today`
+for incremental indexing, which instead walks `list_files` with its own early
+exit (`cache.py should-stop-paging`) and compares API timestamps only to other
+API timestamps.
+
 ### `get_transcript`
 
 ```jsonc

@@ -19,7 +19,8 @@ The official Plaud MCP matches `query` against **recording names only**, across 
 fetches transcript bodies once and caches them so `plaud-grep` can search them
 locally, forever, offline.
 
-Incremental by design: a re-run only fetches recordings that are not already cached.
+Incremental by design: a re-run only fetches recordings that are not already
+cached, and stops paging the listing once it is past everything it holds.
 
 ## Prerequisites
 
@@ -56,10 +57,10 @@ Call `list_files`. Honour the user's scope argument:
 
 | Argument | `list_files` params |
 |---|---|
-| *(none)* | `page_size: 100`, walk pages until a page returns fewer than `page_size` |
+| *(none)* | `page_size: 100`, walk pages — but stop early, see below |
 | `--days N` | `date_from` = today − N days |
 | `--since YYYY-MM-DD` | `date_from` = that date |
-| `--all` | walk every page |
+| `--all` | walk every page, **no early exit** |
 
 `list_files` returns `id`, `name`, `created_at`, `start_at`, `duration`,
 `serial_number`.
@@ -68,6 +69,54 @@ Call `list_files`. Honour the user's scope argument:
 > filters are set**. So when you pass `date_from` / `date_to`, do NOT assume you
 > can page through the filtered result — take what comes back and, if the count
 > looks suspiciously like a cap, narrow the date window instead of paging.
+
+#### Stop paging once a page is entirely older than what you have
+
+Walking the whole library to find three new recordings costs more every time
+the library grows. Ask where you are allowed to stop:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status --list-cutoff
+```
+
+| Exit | Meaning |
+|---|---|
+| `0` | stdout is one timestamp — the safety margin is **already applied**, do not adjust it |
+| `3` | nothing to stop at (first index, or every cached entry is half-fetched) — **walk every page** |
+
+Then, after each page, hand it the page's `created_at` values and do what it says:
+
+```bash
+printf '%s\n' <created_at of every entry on this page, in the order returned> \
+  | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" should-stop-paging --cutoff "<the cutoff>"
+```
+
+It prints `stop: …` or `continue: …`, always with the reason. **Report the reason
+in step 4** — "stopped after 1 page" and "walked 14 pages because the listing came
+back out of order" are different facts about the run, and only one of them is
+normal.
+
+The judgement lives in that command rather than in this file on purpose. Whether a
+page is "old enough to stop at" has three ways to be wrong that produce no symptom
+— an empty page (`all([])` is true), a page that is not sorted newest-first, and a
+timestamp that will not parse. Prose cannot be unit-tested; that command can, and
+is.
+
+`--all` and a re-index after clearing the cache skip this entirely and walk every
+page.
+
+**Do not switch this to `plaud recent` or `plaud today`.** They look like the
+right tool and are not — both are the same `list_files` walk with a client-side
+filter, and each carries a defect this path avoids. See
+`docs/official-surface.md` for what was measured and why.
+
+#### What this does not fix
+
+A recording that reaches the cloud long after it was made carries an old
+`created_at`, sits deep in the listing, and an early exit stops before reaching
+it — silently. Say so if the user expects the incremental run to be exhaustive:
+**it is a fast path, not a completeness guarantee.** A periodic `--all` is the
+only thing that finds those.
 
 ### 3. Diff, then fetch only what is new
 
@@ -356,6 +405,13 @@ skipped for having no transcript yet, and **how many finished incomplete** (page
 cap, stuck cursor, or an interrupted loop). Incomplete ones resume on the next
 run — say that, so nobody goes hunting for a rebuild flag. Then show
 `cache.py status`, which prints the same count.
+
+Also say **how many pages of `list_files` you walked and why you stopped** —
+quote the `stop:` / `continue:` reason verbatim. One page is the normal
+incremental case. Many pages means either a first index, `--all`, or that
+`should-stop-paging` refused to stop (out-of-order listing, unreadable
+timestamp) — and that last one is worth knowing about, because it is the
+listing behaving differently from how this skill assumes it behaves.
 
 ## Cost warning
 

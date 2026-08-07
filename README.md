@@ -73,6 +73,17 @@ Walks `list_files`, fetches `get_transcript` for anything not already cached, an
 writes one markdown file per recording to `~/.plaud-connector/cache/`. Incremental:
 a re-run only fetches what is new.
 
+It also stops **listing** early. Walking every page to find three new recordings
+costs more each time the library grows, so a re-run pages until it is past
+everything it already holds and then stops — normally one page. A first index,
+or `--all`, still walks the lot.
+
+The official CLI has a `plaud recent` that looks like the tool for this. It is
+not: it is the same `list_files` walk with a local filter, capped at 300
+recordings **without saying so**, and it compares the API's timezone-less
+timestamps against your local clock — eight hours of drift in UTC+8. Both sides
+of the comparison here come from the API, so that question never arises.
+
 On a first index it asks `plaud file` whether a recording has a transcript at all
 and skips the ones that do not — a recording can sit there with audio and no
 transcript for as long as it likes, and fetching it is a guaranteed wasted call.
@@ -207,6 +218,11 @@ python3 scripts/cache.py show <recording-id>
 - **Search covers what you indexed.** A recording made after your last
   `plaud-index` run is not searchable. `cache.py status` prints the covered date
   range; the skill is instructed to report it rather than answer "not found".
+- **An incremental run is a fast path, not a completeness guarantee.** It stops
+  listing once it is past everything it holds. A recording that reaches the
+  cloud long after it was made carries an old timestamp, sits deep in the
+  listing, and is stepped over — with no error and no count to notice it by.
+  Nothing in the API offers a change feed to fix this; run `--all` periodically.
 - **Upload is browser automation**, not an API. It works today and will break the
   day Plaud redesigns its import dialog. Failures are usually visible (a click
   does nothing) rather than silent, but verify the file landed.
