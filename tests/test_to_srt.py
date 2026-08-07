@@ -19,6 +19,30 @@ from unittest import mock
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = REPO / "scripts" / "to_srt.py"
 
+
+def cli_env(cache: pathlib.Path, **extra: str) -> dict:
+    """Environment for running to_srt.py under test.
+
+    Always pins PLAUD_CONFIG, not just PLAUD_CACHE_DIR. Once the CLI started
+    reading preferences (#29), every subprocess test silently inherited whatever
+    the developer had configured — and one #22 test, which asserts the polish is
+    used, fails outright for anyone who has chosen verbatim. It passed here only
+    because this machine had no config file.
+
+    Isolation lives in this one helper rather than in each test's env dict so
+    that forgetting it is not possible: the next person to add a CLI test gets
+    it by using the same door everyone else uses.
+    """
+    return {
+        **os.environ,
+        "PLAUD_CACHE_DIR": str(cache),
+        # Inside the per-test cache dir, which is a fresh tempdir — so it is
+        # both absent by default and impossible to share between tests.
+        "PLAUD_CONFIG": str(cache / "test-config.json"),
+        **extra,
+    }
+
+
 _spec = importlib.util.spec_from_file_location("to_srt", SCRIPT)
 to_srt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(to_srt)
@@ -143,6 +167,32 @@ class TestRender(unittest.TestCase):
         )
 
 
+class TestSuiteIsolation(unittest.TestCase):
+    """Guards the guard.
+
+    Before #29 the CLI read no preferences, so pinning only PLAUD_CACHE_DIR was
+    complete isolation. The moment it started reading a config file, every
+    subprocess test quietly began depending on the developer's own settings —
+    and #22's `test_the_cli_actually_uses_the_preference`, which asserts the
+    polish is used, fails for anyone who has chosen verbatim.
+
+    It passed review because the machine it ran on had no config file. That is
+    the shape worth guarding: a test that only passes because of something
+    absent from this particular machine.
+    """
+
+    def test_cli_env_pins_the_config_path(self) -> None:
+        env = cli_env(pathlib.Path("/tmp/whatever"))
+        self.assertIn("PLAUD_CONFIG", env)
+        self.assertTrue(env["PLAUD_CONFIG"].startswith("/tmp/whatever"),
+                        "config must land inside the per-test cache dir")
+
+    def test_cli_env_overrides_an_inherited_config(self) -> None:
+        with mock.patch.dict(os.environ, {"PLAUD_CONFIG": "/home/dev/real.json"}):
+            env = cli_env(pathlib.Path("/tmp/whatever"))
+        self.assertNotEqual("/home/dev/real.json", env["PLAUD_CONFIG"])
+
+
 class TestCli(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="srt-test-")
@@ -150,9 +200,9 @@ class TestCli(unittest.TestCase):
         self.cache = pathlib.Path(self._tmp.name)
 
     def _run(self, *args: str, cache=None) -> subprocess.CompletedProcess:
-        env = dict(os.environ, PLAUD_CACHE_DIR=str(cache or self.cache))
         return subprocess.run([sys.executable, str(SCRIPT), *args],
-                              capture_output=True, text=True, env=env)
+                              capture_output=True, text=True,
+                              env=cli_env(cache or self.cache))
 
     def _write(self, rec_id: str, body: str, front: str = "") -> None:
         (self.cache / f"{rec_id}.md").write_text(front + body)
@@ -345,8 +395,7 @@ class TestSubtitleSource(unittest.TestCase):
         self._write("polish/rec_e.md", "[00:00:01] Speaker 1: tidy wording\n")
         out = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "to_srt.py"), "rec_e"],
-            capture_output=True, text=True,
-            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache)},
+            capture_output=True, text=True, env=cli_env(self.cache),
         )
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertIn("tidy wording", out.stdout)
@@ -356,8 +405,7 @@ class TestSubtitleSource(unittest.TestCase):
         self._write("rec_f.md", "[00:00:01] Speaker 1: only the raw exists\n")
         out = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "to_srt.py"), "rec_f"],
-            capture_output=True, text=True,
-            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache)},
+            capture_output=True, text=True, env=cli_env(self.cache),
         )
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertIn("only the raw exists", out.stdout)
@@ -515,12 +563,9 @@ class TestSourcePreferenceCLI(unittest.TestCase):
         self._write(f"polish/{rec_id}.md", "[00:00:01] Speaker 1: tidy wording\n")
 
     def _run(self, *args: str, **env_extra: str) -> subprocess.CompletedProcess:
-        env = {**os.environ,
-               "PLAUD_CACHE_DIR": str(self.cache),
-               "PLAUD_CONFIG": str(self.config),
-               **env_extra}
-        return subprocess.run([sys.executable, str(SCRIPT), *args],
-                              capture_output=True, text=True, env=env)
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), *args], capture_output=True, text=True,
+            env=cli_env(self.cache, PLAUD_CONFIG=str(self.config), **env_extra))
 
     def _set_config(self, **keys) -> None:
         self.config.write_text(json.dumps(keys), encoding="utf-8")
