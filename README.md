@@ -213,7 +213,22 @@ audio.
 python3 scripts/cache.py status
 python3 scripts/cache.py search "預算|budget"
 python3 scripts/cache.py show <recording-id>
+python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish
 ```
+
+Three more commands exist for the incremental listing. They are called by
+`plaud-index`, not by hand, but they are the answer to "why did it stop
+paging there" when a run looks wrong:
+
+| Command | Answers |
+|---|---|
+| `status --list-cutoff` | how far back a listing may stop. Exit 3 means no cutoff is available — walk everything |
+| `should-stop-paging --cutoff X` | does this page end the walk? Page on stdin, one `created_at` per line. Exit 0 stop, 3 continue, always with the reason |
+| `mark-full-sweep` | records that a listing was walked to its end, unscoped. **The only thing that turns the cutoff on** |
+
+`status` also reports how long since that last full sweep, and says so when it
+is over 30 days — the early exit's blind spot grows with that number, and
+nothing else makes it visible.
 
 ## Limits — stated plainly
 
