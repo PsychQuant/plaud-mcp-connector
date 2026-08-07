@@ -1,8 +1,9 @@
 ---
-name: plaud-audit
+name: plaud-repo-audit
 description: |
-  Re-measure Plaud's official CLI and MCP against what `docs/official-surface.md`
-  records, and report what changed and what it means for this plugin. Use when
+  Audit THIS repo against Plaud's official CLI and MCP — re-measure the official
+  surface, compare it to what `docs/official-surface.md` records, and report what
+  changed and what it means for this plugin. Not an audit of your recordings. Use when
   the official packages have been updated, before relying on the surface doc for
   a design decision, when something that used to work stops working, or on a
   periodic check: "audit the official surface", "did Plaud change anything",
@@ -10,7 +11,11 @@ description: |
   Run it before trusting the doc, not after being surprised by it.
 ---
 
-# Plaud Audit — re-measure, don't re-assume
+# Plaud Repo Audit — re-measure, don't re-assume
+
+**Scope: this repository, measured against Plaud's official packages.** The
+subject is our documentation and our skills; Plaud's CLI and MCP are the ruler.
+Nothing here reads your recordings.
 
 `docs/official-surface.md` is a snapshot. It says so, and it names the versions it
 was taken against. What it cannot do is notice when it stops being true.

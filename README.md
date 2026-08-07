@@ -155,7 +155,7 @@ not mention it" is not evidence it was not discussed.
 what was that meeting about
 ```
 
-### `plaud-audit` — re-measure the official surface
+### `plaud-repo-audit` — re-measure this repo against the official surface
 
 `docs/official-surface.md` is a snapshot of what Plaud's CLI and MCP actually do.
 This re-measures it and reports what changed, and what that means here.

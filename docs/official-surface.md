@@ -9,7 +9,7 @@ Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
 published.
 
-**To re-measure, run `plaud-audit`.** It exists because "re-measure after a
+**To re-measure, run `plaud-repo-audit`.** It exists because "re-measure after a
 version bump" as a sentence in a file has never once caused anyone to re-measure —
 and because the *checklist* matters more than the reminder: that skill encodes the
 specific ways this repo has been wrong about someone else's software (reading a
