@@ -1045,7 +1045,11 @@ class TestListCutoff(CacheTestCase):
     """The timestamp a fresh listing may stop paging at."""
 
     def _manifest(self, recordings: dict) -> dict:
-        man = {"version": "1", "recordings": recordings}
+        # Every test in this class asks "given a cutoff is allowed, what is
+        # it?" — the separate question of whether one is allowed at all lives
+        # in TestFullSweepCoverage. So these fixtures carry the marker.
+        man = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00",
+               "recordings": recordings}
         cache._save_manifest(man)
         return man
 
@@ -1081,7 +1085,8 @@ class TestListCutoff(CacheTestCase):
 
     def test_cutoff_is_none_on_an_empty_cache(self):
         """A first index has nothing to stop at, so it must not stop."""
-        self.assertIsNone(cache.list_cutoff({"version": "1", "recordings": {}}))
+        self.assertIsNone(cache.list_cutoff(
+            {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00", "recordings": {}}))
 
     def test_cutoff_is_none_when_every_record_is_incomplete(self):
         man = self._manifest({
@@ -1179,7 +1184,7 @@ class TestPageVerdict(CacheTestCase):
             def now(cls, tz=None):
                 raise AssertionError("cutoff logic must not read the clock")
 
-        man = {"version": "1", "recordings": {
+        man = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00", "recordings": {
             "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}}
         with mock.patch.object(cache, "datetime", NoClock):
             cutoff = cache.list_cutoff(man)
@@ -1196,7 +1201,8 @@ class TestListCutoffCommandWiring(CacheTestCase):
     """
 
     def test_status_list_cutoff_goes_through_list_cutoff(self):
-        cache._save_manifest({"version": "1", "recordings": {
+        cache._save_manifest({"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00",
+                              "recordings": {
             "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}})
         ns = argparse.Namespace(ids_only=False, list_cutoff=True)
         with mock.patch.object(cache, "list_cutoff", return_value="SENTINEL") as spy:
@@ -1283,7 +1289,7 @@ class TestTimezoneMixing(CacheTestCase):
     """
 
     def test_manifest_mixing_offset_forms_does_not_crash(self):
-        man = {"version": "1", "recordings": {
+        man = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00", "recordings": {
             "naive": {"created_at": "2026-08-05T09:00:00", "complete": True},
             "aware": {"created_at": "2026-08-06T09:00:00Z", "complete": True},
         }}
@@ -1315,7 +1321,7 @@ class TestTimezoneMixing(CacheTestCase):
         The cutoff crosses a shell boundary as a string, so its shape is part
         of the contract, not an implementation detail.
         """
-        man = {"version": "1", "recordings": {
+        man = {"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00", "recordings": {
             "a": {"created_at": "2026-08-05T09:00:00Z", "complete": True}}}
         cutoff = cache.list_cutoff(man)
         self.assertNotIn("+", cutoff, "an offset would not match what list_files sends")
@@ -1372,7 +1378,8 @@ class TestListCutoffRealCliWiring(unittest.TestCase):
 
     def _write_manifest(self, recordings: dict) -> None:
         (self.cache_dir / "manifest.json").write_text(
-            json.dumps({"version": "1", "recordings": recordings}))
+            json.dumps({"version": "1", "full_sweep_at": "2026-08-06T00:00:00+00:00",
+                        "recordings": recordings}))
 
     def _cli(self, *args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -1397,3 +1404,85 @@ class TestListCutoffRealCliWiring(unittest.TestCase):
         out = self._cli("--ids-only", "--list-cutoff")
         self.assertNotEqual(0, out.returncode)
         self.assertIn("--ids-only", out.stderr)
+
+
+class TestFullSweepCoverage(CacheTestCase):
+    """A cutoff requires proof that a full listing was walked — not just that
+    some recording's transcript finished.
+
+    The distinction cost a CRITICAL in verify. `complete` says "this one's
+    transcript came down whole". It says nothing about whether the listing was
+    ever walked to its end, and the early exit was reading it as if it did.
+    Three reproduced ways that went wrong, all silent:
+
+    - Someone runs `--days 1` first. The cache now holds one recent recording,
+      so a cutoff exists, so the next unscoped run stops on the first old page
+      and the entire older library is never listed — every run after that stops
+      in the same place.
+    - A first index is interrupted after one `put`. Same shape: non-empty cache
+      is not a finished cache.
+    - `--all` was never run at all.
+
+    So the cutoff is gated on a marker that only a completed unscoped walk
+    writes. Absent marker means walk everything, which is what a tool that has
+    never proved its coverage should do.
+    """
+
+    def _man(self, extra: dict = None) -> dict:
+        man = {"version": "1", "recordings": {
+            "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}}
+        man.update(extra or {})
+        return man
+
+    def test_no_cutoff_without_a_recorded_full_sweep(self):
+        """The scoped-cache case: complete recordings, no proof of coverage."""
+        self.assertIsNone(cache.list_cutoff(self._man()))
+
+    def test_cutoff_once_a_full_sweep_is_recorded(self):
+        man = self._man({"full_sweep_at": "2026-08-06T00:00:00+00:00"})
+        self.assertEqual("2026-08-04T09:00:00", cache.list_cutoff(man))
+
+    def test_a_full_sweep_over_an_empty_library_still_yields_no_cutoff(self):
+        """Nothing to stop at, marker or not."""
+        man = {"version": "1", "recordings": {},
+               "full_sweep_at": "2026-08-06T00:00:00+00:00"}
+        self.assertIsNone(cache.list_cutoff(man))
+
+    def test_mark_full_sweep_writes_the_marker_and_keeps_the_recordings(self):
+        cache._save_manifest(self._man())
+        cache.cmd_mark_full_sweep(argparse.Namespace())
+        man = json.loads((cache.CACHE_DIR / "manifest.json").read_text())
+        self.assertIn("full_sweep_at", man)
+        self.assertIn("a", man["recordings"], "the marker must not disturb what is cached")
+
+    def test_marking_a_sweep_is_what_turns_the_cutoff_on(self):
+        """End to end: the same manifest answers differently either side of the mark."""
+        cache._save_manifest(self._man())
+        self.assertIsNone(cache.list_cutoff(cache._load_manifest()))
+        cache.cmd_mark_full_sweep(argparse.Namespace())
+        self.assertEqual("2026-08-04T09:00:00", cache.list_cutoff(cache._load_manifest()))
+
+
+class TestMarkFullSweepCli(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="plaud-sweep-")
+        self.addCleanup(self._tmp.cleanup)
+        self.cache_dir = pathlib.Path(self._tmp.name) / "cache"
+        self.cache_dir.mkdir(parents=True)
+        (self.cache_dir / "manifest.json").write_text(json.dumps(
+            {"version": "1", "recordings": {
+                "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}}))
+
+    def _cli(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CACHE_PY), *args], capture_output=True, text=True,
+            env={**os.environ, "PLAUD_CACHE_DIR": str(self.cache_dir)})
+
+    def test_the_subcommand_exists_and_flips_the_cutoff(self):
+        before = self._cli("status", "--list-cutoff")
+        self.assertEqual(3, before.returncode, "no sweep recorded yet")
+        marked = self._cli("mark-full-sweep")
+        self.assertEqual(0, marked.returncode, marked.stderr)
+        after = self._cli("status", "--list-cutoff")
+        self.assertEqual(0, after.returncode, after.stderr)
+        self.assertEqual("2026-08-04T09:00:00", after.stdout.strip())

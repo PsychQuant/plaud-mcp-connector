@@ -11,6 +11,7 @@ Subcommands
     search <pattern>  full-text search across cached transcripts
     show <id>         print one cached transcript
     should-stop-paging  may an incremental listing stop here? (page on stdin)
+    mark-full-sweep   record that a listing was walked to its end, unscoped
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
 """
@@ -164,7 +165,18 @@ def list_cutoff(man: dict) -> str | None:
     Only `complete` records count. A half-fetched one is the weakest possible
     evidence that everything up to its date was listed, and excluding it moves
     the cutoff older — which pages more, at a cost of one page.
+
+    And none of them count at all without `full_sweep_at`. `complete` says one
+    recording's transcript came down whole; it says nothing about whether the
+    listing was ever walked to its end. Reading the first as the second was a
+    CRITICAL found in verify, with three silent ways to lose recordings for
+    good — a cache built by `--days 1`, a first index interrupted after one
+    write, and a library that simply never had `--all` run over it. In each,
+    a cutoff existed, the next run stopped on the first old page, and every
+    run after that stopped in the same place.
     """
+    if not man.get("full_sweep_at"):
+        return None
     times = [
         t for rec in man.get("recordings", {}).values()
         if _is_complete(rec) and (t := _parse_api_time(rec.get("created_at"))) is not None
@@ -494,6 +506,20 @@ def cmd_should_stop_paging(args) -> None:
         sys.exit(3)
 
 
+def cmd_mark_full_sweep(args) -> None:
+    """Record that a listing was walked all the way to the end, unscoped.
+
+    This is the ONLY thing that lets `--list-cutoff` answer at all, so write it
+    only when every one of these held: no date scope, the walk reached the
+    listing's natural end, and no page came back out of order or unreadable.
+    Writing it optimistically re-creates exactly the bug it exists to prevent.
+    """
+    man = _load_manifest()
+    man["full_sweep_at"] = _now()
+    _save_manifest(man)
+    print(f"recorded a full listing sweep at {man['full_sweep_at']}")
+
+
 def cmd_show(args) -> None:
     path = CACHE_DIR / f"{_safe_id(args.id)}.md"
     if not path.exists():
@@ -530,6 +556,11 @@ def main() -> None:
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
     p.set_defaults(func=cmd_put)
+
+    p = sub.add_parser("mark-full-sweep",
+                       help="record that a listing was walked to its end, unscoped — "
+                            "the only thing that enables `status --list-cutoff`")
+    p.set_defaults(func=cmd_mark_full_sweep)
 
     p = sub.add_parser("should-stop-paging",
                        help="does this page of list_files end the walk? page on stdin, "
