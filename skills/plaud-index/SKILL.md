@@ -82,7 +82,12 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status --list-cutoff
 | Exit | Meaning |
 |---|---|
 | `0` | stdout is one timestamp — the safety margin is **already applied**, do not adjust it |
-| `3` | nothing to stop at (first index, or every cached entry is half-fetched) — **walk every page** |
+| `3` | **walk every page.** No cutoff is available |
+
+Exit 3 is the normal answer until this cache has proved its own coverage. It is
+what you get on a first index, on a cache built by `--days` / `--since`, and
+after an interrupted run — none of those has ever seen the end of the listing,
+so none of them knows what it is missing.
 
 Then, after each page, hand it the page's `created_at` values and do what it says:
 
@@ -119,6 +124,30 @@ exit at all**, and say so in the report.
 
 `--all` and a re-index after clearing the cache skip this entirely and walk every
 page.
+
+#### Record the sweep — or the early exit never turns on
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" mark-full-sweep
+```
+
+Run this **only** when all three held on the walk you just finished:
+
+1. **No date scope** — no `--days`, no `--since`. A scoped walk saw a slice.
+2. **It reached the listing's natural end** — a page came back shorter than
+   `page_size`. Stopping early does not count, and neither does an error.
+3. **No page was refused** — `should-stop-paging` never answered `continue:`
+   for being out of order or unreadable.
+
+Any one of them missing: **do not run it**, and say in the report that the
+cutoff stays off.
+
+Recording a sweep that did not happen re-creates the exact bug this exists to
+prevent. `complete` on a recording means its transcript came down whole; it says
+nothing about whether the listing was ever walked to its end. Reading the first
+as the second is how a cache built by `--days 1` ends up stopping on the first
+old page of every run afterwards, never listing the older library, with no error
+and no count to notice it by.
 
 **Do not switch this to `plaud recent` or `plaud today`.** They look like the
 right tool and are not — both are the same `list_files` walk with a client-side
