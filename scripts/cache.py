@@ -10,6 +10,7 @@ Subcommands
     put               write one recording's transcript (body on stdin)
     search <pattern>  full-text search across cached transcripts
     show <id>         print one cached transcript
+    should-stop-paging  may an incremental listing stop here? (page on stdin)
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
 """
@@ -21,7 +22,15 @@ import re
 import subprocess
 import sys
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# How far back a listing keeps paging past everything already cached. A
+# recording can reach the cloud later than the one before it, so "newer than
+# the newest we hold" is not the same as "not yet seen". The two costs are not
+# comparable: one extra page is one API call, while a missed recording is
+# never reported, never counted, and never findable again — so this is a day
+# rather than an hour, and it is subtracted, never added.
+LIST_SAFETY_MARGIN = timedelta(days=1)
 
 CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
@@ -110,9 +119,105 @@ def _is_complete(rec: dict) -> bool:
     return rec.get("complete", False) is True
 
 
+def _parse_api_time(raw) -> datetime | None:
+    """One `created_at` as the API wrote it, or None if it cannot be read.
+
+    Every timestamp compared here comes from `list_files` on both sides — the
+    one stored in the manifest and the one on the page being walked. That is
+    the whole reason no timezone handling appears in this module: the API's
+    timestamps carry no offset, and the moment one side of the comparison is a
+    local clock instead, a UTC+8 reader silently shifts every recording eight
+    hours older. The official CLI's `plaud recent` does exactly that
+    (`new Date(created_at)` against `Date.now()`), which is the defect this
+    code exists to not inherit.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        return datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def list_cutoff(man: dict) -> str | None:
+    """Where a fresh listing may stop paging, or None when it may not.
+
+    None is the honest answer for a first index and for a cache whose every
+    entry is half-fetched: there is no point to stop at, so the caller walks
+    the whole library. Returning some default timestamp instead would turn a
+    first index into "the most recent page only", which looks like success.
+
+    Only `complete` records count. A half-fetched one is the weakest possible
+    evidence that everything up to its date was listed, and excluding it moves
+    the cutoff older — which pages more, at a cost of one page.
+    """
+    times = [
+        t for rec in man.get("recordings", {}).values()
+        if _is_complete(rec) and (t := _parse_api_time(rec.get("created_at"))) is not None
+    ]
+    if not times:
+        return None
+    return (max(times) - LIST_SAFETY_MARGIN).isoformat()
+
+
+def page_verdict(dates: list, cutoff: str | None) -> tuple:
+    """Does this page of `list_files` end the walk? Returns (stop, reason).
+
+    Three separate ways to answer "keep going", each covering a case where
+    stopping would be wrong in a way nobody would notice:
+
+    - **An empty page.** `all([])` is True, so the naive test reads no results
+      as "everything here is old".
+    - **A page that is not sorted newest-first.** The early exit only works
+      because `list_files` returns descending `created_at`. That is observed,
+      not promised — if it ever sorted by `start_at` (a recording's own time
+      rather than its upload time) the walk would stop short in silence.
+    - **A timestamp that will not parse.** Unknown is not old.
+
+    Every uncertain case resolves to "keep paging": slower, and correct.
+    """
+    if cutoff is None:
+        return False, "continue: no cutoff — nothing cached to stop at, walk the whole library"
+    if not dates:
+        return False, "continue: empty page — no entries to judge, so nothing here says stop"
+
+    parsed = []
+    for raw in dates:
+        when = _parse_api_time(raw)
+        if when is None:
+            return False, f"continue: cannot read the timestamp {raw!r} — unknown is not old"
+        parsed.append(when)
+
+    if any(a < b for a, b in zip(parsed, parsed[1:])):
+        return False, ("continue: this page is not descending — list_files is expected to "
+                       "return newest-first, and an early exit is only safe if it does")
+
+    edge = _parse_api_time(cutoff)
+    if edge is None:
+        return False, f"continue: cannot read the cutoff {cutoff!r}"
+
+    newer = [raw for raw, when in zip(dates, parsed) if when >= edge]
+    if newer:
+        return False, f"continue: {newer[0]} is not older than {cutoff}"
+    return True, f"stop: all {len(dates)} entries on this page are older than {cutoff}"
+
+
 def cmd_status(args) -> None:
     man = _load_manifest()
     recs = man["recordings"]
+    # getattr, not args.list_cutoff: cmd_status has callers that build a
+    # Namespace by hand and predate this flag (the test helpers do, and so
+    # would any older caller). Reading the attribute directly would turn an
+    # unrelated status call into an AttributeError.
+    if getattr(args, "list_cutoff", False):
+        cutoff = list_cutoff(man)
+        if cutoff is None:
+            # Exit 3, not an empty line: "nothing to stop at" has to be
+            # distinguishable from "stop at the start of time", and a caller
+            # reading stdout cannot tell those apart.
+            sys.exit(3)
+        print(cutoff)
+        return
     incomplete = [k for k, v in recs.items() if not _is_complete(v)]
     if args.ids_only:
         # Only fully-fetched ids count as "already cached". Anything partial is
@@ -341,6 +446,19 @@ def cmd_search(args) -> None:
         print()
 
 
+def cmd_should_stop_paging(args) -> None:
+    """Answer for one page of `list_files`, read from stdin, one date per line.
+
+    A page is a list, so it arrives on stdin rather than as arguments. The
+    verdict is a word on stdout rather than an exit code because the reason
+    matters as much as the answer — a run that stopped early should be able to
+    say why, and a run that kept going should be able to say what it saw.
+    """
+    dates = [ln.strip() for ln in sys.stdin.read().splitlines() if ln.strip()]
+    _, reason = page_verdict(dates, args.cutoff)
+    print(reason)
+
+
 def cmd_show(args) -> None:
     path = CACHE_DIR / f"{_safe_id(args.id)}.md"
     if not path.exists():
@@ -354,6 +472,10 @@ def main() -> None:
 
     p = sub.add_parser("status", help="show what is cached")
     p.add_argument("--ids-only", action="store_true", help="print cached ids, one per line")
+    p.add_argument("--list-cutoff", action="store_true", dest="list_cutoff",
+                   help="print the timestamp a fresh listing may stop paging at, safety "
+                        "margin already applied; exit 3 when there is nothing to stop at "
+                        "(first index) and the whole library must be walked")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("put", help="cache one transcript (body on stdin)")
@@ -373,6 +495,13 @@ def main() -> None:
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
     p.set_defaults(func=cmd_put)
+
+    p = sub.add_parser("should-stop-paging",
+                       help="does this page of list_files end the walk? page on stdin, "
+                            "one created_at per line")
+    p.add_argument("--cutoff", required=True,
+                   help="the value from `status --list-cutoff`")
+    p.set_defaults(func=cmd_should_stop_paging)
 
     p = sub.add_parser("search", help="full-text search cached transcripts")
     p.add_argument("pattern")

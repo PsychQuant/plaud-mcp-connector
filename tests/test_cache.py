@@ -1017,3 +1017,222 @@ class TestPutPolish(CacheTestCase):
     def test_orphan_polish_is_refused(self):
         with self.assertRaises(SystemExit):
             self._put_kind("rec_ghost", "tidy with no transcript", "polish")
+
+
+# ===========================================================================
+# Incremental listing: where paging is allowed to stop (issue #27)
+# ===========================================================================
+#
+# `plaud-index` used to walk every page of `list_files` on every run, even when
+# three recordings were new. The saving is an early exit: stop paging once a
+# whole page is older than everything already cached.
+#
+# The official CLI's `plaud recent` does exactly this internally — and gets it
+# wrong in a way worth not copying. It compares an API timestamp
+# (`created_at`, which carries no timezone suffix) against the local clock
+# (`Date.now()`), so on UTC+8 every recording reads as eight hours older than
+# it is. Both sides of OUR comparison come from the API, so no timezone
+# question ever arises. `test_cutoff_comparison_never_reads_the_local_clock`
+# is what keeps it that way.
+#
+# The asymmetry that shapes every choice below: reading one page too many
+# costs one API call, and missing a recording costs silence — it is not
+# reported, does not appear in any count, and is simply never findable again.
+# Every uncertain case therefore resolves toward paging more.
+
+
+class TestListCutoff(CacheTestCase):
+    """The timestamp a fresh listing may stop paging at."""
+
+    def _manifest(self, recordings: dict) -> dict:
+        man = {"version": "1", "recordings": recordings}
+        cache._save_manifest(man)
+        return man
+
+    def test_cutoff_is_older_than_the_newest_cached_recording(self):
+        """The margin must be SUBTRACTED. Getting the sign wrong is silent.
+
+        A cutoff newer than what we hold stops paging before reaching the
+        recordings we have not seen — and nothing anywhere reports it. This
+        assertion is the only thing standing between that and a cache that
+        looks healthy while quietly missing entries.
+        """
+        man = self._manifest({
+            "a": {"created_at": "2026-08-01T00:00:00", "complete": True},
+            "b": {"created_at": "2026-08-05T09:00:00", "complete": True},
+        })
+        cutoff = cache.list_cutoff(man)
+        self.assertLess(cutoff, "2026-08-05T09:00:00", "the cutoff must reach back, not forward")
+        self.assertEqual("2026-08-04T09:00:00", cutoff)
+
+    def test_cutoff_ignores_incomplete_recordings(self):
+        """A half-fetched recording does not prove we have everything up to it.
+
+        `complete` describes the transcript, but a record that never finished
+        is the weakest possible evidence about what the listing contained.
+        Excluding it moves the cutoff older, which pages more — the safe
+        direction, and it costs at most one extra page.
+        """
+        man = self._manifest({
+            "done": {"created_at": "2026-08-01T00:00:00", "complete": True},
+            "partial": {"created_at": "2026-08-09T00:00:00", "complete": False},
+        })
+        self.assertEqual("2026-07-31T00:00:00", cache.list_cutoff(man))
+
+    def test_cutoff_is_none_on_an_empty_cache(self):
+        """A first index has nothing to stop at, so it must not stop."""
+        self.assertIsNone(cache.list_cutoff({"version": "1", "recordings": {}}))
+
+    def test_cutoff_is_none_when_every_record_is_incomplete(self):
+        man = self._manifest({
+            "p": {"created_at": "2026-08-09T00:00:00", "complete": False},
+        })
+        self.assertIsNone(cache.list_cutoff(man))
+
+    def test_cutoff_skips_a_timestamp_it_cannot_parse(self):
+        """One malformed entry must not decide where paging stops."""
+        man = self._manifest({
+            "good": {"created_at": "2026-08-05T09:00:00", "complete": True},
+            "junk": {"created_at": "not a date", "complete": True},
+        })
+        self.assertEqual("2026-08-04T09:00:00", cache.list_cutoff(man))
+
+    def test_cutoff_is_none_when_no_timestamp_parses(self):
+        man = self._manifest({"junk": {"created_at": "", "complete": True}})
+        self.assertIsNone(cache.list_cutoff(man))
+
+
+class TestPageVerdict(CacheTestCase):
+    """Whether a page of `list_files` results ends the walk."""
+
+    CUTOFF = "2026-08-05T00:00:00"
+
+    def test_stops_when_every_entry_is_older_than_the_cutoff(self):
+        stop, reason = cache.page_verdict(
+            ["2026-08-04T10:00:00", "2026-08-03T10:00:00", "2026-08-02T10:00:00"], self.CUTOFF
+        )
+        self.assertTrue(stop)
+        self.assertIn("3", reason, "the reason should say how much it looked at")
+
+    def test_continues_when_one_entry_is_newer(self):
+        """`all`, not `any`. One unseen recording is reason enough to keep going."""
+        stop, reason = cache.page_verdict(
+            ["2026-08-09T10:00:00", "2026-08-03T10:00:00"], self.CUTOFF
+        )
+        self.assertFalse(stop)
+        self.assertIn("2026-08-09T10:00:00", reason)
+
+    def test_continues_when_the_page_is_not_descending(self):
+        """Early exit assumes the listing is newest-first. That is observed, not promised.
+
+        If `list_files` ever sorted by `start_at` instead — a recording's own
+        time rather than its upload time — an early exit would stop short with
+        no symptom at all. Refusing to stop on a page that is not descending
+        degrades to a full walk: slower, and correct.
+        """
+        stop, reason = cache.page_verdict(
+            ["2026-08-04T10:00:00", "2026-08-04T11:00:00"], self.CUTOFF
+        )
+        self.assertFalse(stop)
+        self.assertIn("descending", reason)
+
+    def test_continues_on_an_empty_page(self):
+        """`all([])` is True, which would read an empty page as 'all older'."""
+        stop, reason = cache.page_verdict([], self.CUTOFF)
+        self.assertFalse(stop)
+        self.assertIn("empty", reason)
+
+    def test_continues_when_a_timestamp_cannot_be_parsed(self):
+        stop, reason = cache.page_verdict(["2026-08-04T10:00:00", "???"], self.CUTOFF)
+        self.assertFalse(stop)
+        self.assertIn("???", reason)
+
+    def test_equal_to_the_cutoff_is_not_older(self):
+        """Strictly older. The boundary entry stays in, which pages more."""
+        stop, _ = cache.page_verdict([self.CUTOFF], self.CUTOFF)
+        self.assertFalse(stop)
+
+    def test_cutoff_comparison_never_reads_the_local_clock(self):
+        """Both sides come from the API; a local clock has no business here.
+
+        This is the defect `plaud recent` has and we do not: it parses a
+        timezone-less API timestamp as local time and compares it to
+        `Date.now()`. Anyone who "simplifies" this by reaching for
+        `datetime.now()` reintroduces exactly that eight-hour skew.
+        """
+        class NoClock(cache.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                raise AssertionError("cutoff logic must not read the clock")
+
+        man = {"version": "1", "recordings": {
+            "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}}
+        with mock.patch.object(cache, "datetime", NoClock):
+            cutoff = cache.list_cutoff(man)
+            stop, _ = cache.page_verdict(["2026-08-01T00:00:00"], cutoff)
+        self.assertTrue(stop)
+
+
+class TestListCutoffCommandWiring(CacheTestCase):
+    """The flag has to reach the function — testing the function is not enough.
+
+    #22's lesson: `subtitle_source()` was tested and correct while `main()`
+    never called it, and every test stayed green. A command that recomputes
+    the cutoff its own way would pass every test in TestListCutoff.
+    """
+
+    def test_status_list_cutoff_goes_through_list_cutoff(self):
+        cache._save_manifest({"version": "1", "recordings": {
+            "a": {"created_at": "2026-08-05T09:00:00", "complete": True}}})
+        ns = argparse.Namespace(ids_only=False, list_cutoff=True)
+        with mock.patch.object(cache, "list_cutoff", return_value="SENTINEL") as spy:
+            out = self._capture_stdout(cache.cmd_status, ns)
+        spy.assert_called_once()
+        self.assertEqual("SENTINEL", out.strip())
+
+    def test_status_list_cutoff_exits_3_when_there_is_nothing_to_stop_at(self):
+        cache._save_manifest({"version": "1", "recordings": {}})
+        ns = argparse.Namespace(ids_only=False, list_cutoff=True)
+        with self.assertRaises(SystemExit) as ctx:
+            self._capture_stdout(cache.cmd_status, ns)
+        self.assertEqual(3, ctx.exception.code)
+
+    def test_status_default_output_is_unchanged_by_the_new_flag(self):
+        """`cmd_status` has callers that predate this flag and pass no such attribute."""
+        self._put("rec_x", name="a recording", body="words", created_at="2026-08-05T09:00:00")
+        legacy = argparse.Namespace(ids_only=False)  # no list_cutoff attribute at all
+        out = self._capture_stdout(cache.cmd_status, legacy)
+        self.assertIn("cached    : 1 recordings", out)
+        self.assertNotIn("2026-08-04", out, "the cutoff must not leak into normal status")
+
+
+class TestShouldStopPagingCli(unittest.TestCase):
+    """The page arrives on stdin, because a page is a list, not an argument."""
+
+    def _run(self, page: str, cutoff: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CACHE_PY), "should-stop-paging", "--cutoff", cutoff],
+            input=page, capture_output=True, text=True,
+        )
+
+    def test_prints_stop_for_a_page_that_is_entirely_older(self):
+        out = self._run("2026-08-04T10:00:00\n2026-08-03T10:00:00\n", "2026-08-05T00:00:00")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertTrue(out.stdout.startswith("stop:"), out.stdout)
+
+    def test_prints_continue_with_a_reason(self):
+        out = self._run("2026-08-09T10:00:00\n", "2026-08-05T00:00:00")
+        self.assertEqual(0, out.returncode, out.stderr)
+        self.assertTrue(out.stdout.startswith("continue:"), out.stdout)
+
+    def test_blank_lines_in_the_page_are_ignored_not_treated_as_junk(self):
+        out = self._run("\n2026-08-04T10:00:00\n\n", "2026-08-05T00:00:00")
+        self.assertTrue(out.stdout.startswith("stop:"), out.stdout)
+
+    def test_missing_cutoff_is_a_usage_error_not_a_silent_stop(self):
+        out = subprocess.run(
+            [sys.executable, str(CACHE_PY), "should-stop-paging"],
+            input="", capture_output=True, text=True,
+        )
+        self.assertNotEqual(0, out.returncode)
+        self.assertNotIn("stop", out.stdout)
