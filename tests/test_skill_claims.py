@@ -182,6 +182,13 @@ class TestTheRuleItself(unittest.TestCase):
         "This skill is the only way to upload to Plaud.",
         "This plugin is the only uploader in existence.",
         "This is the only way any tool can upload, despite being unofficial.",
+        # No comma, so clause-splitting cannot rescue this one — it is here to
+        # protect the word-boundary match specifically. Under the substring
+        # matching the first draft used, `unofficial` satisfied `official` and
+        # this passed. (Found when the acid run for the word-boundary fix came
+        # back green: the comma case above was already being caught by the
+        # splitter, so the guard it was meant to protect had no test of its own.)
+        "This is the only unofficial upload route.",
         "Only this skill can upload to Plaud.",
         "This is the sole upload route.",
         "Uploading is supported exclusively by this skill.",
