@@ -219,8 +219,9 @@ class CapabilityClaim(NamedTuple):
     """One measured claim, and the step that would make it true."""
 
     name: str
-    claim: re.Pattern      # matched against description clauses
-    action: re.Pattern     # matched against the body's steps
+    claim: re.Pattern           # matched against description clauses
+    action: re.Pattern          # the thing being pressed/invoked
+    driver: re.Pattern | None   # must appear in the SAME fence as `action`
     history: str
 
 
@@ -242,6 +243,12 @@ CAPABILITY_CLAIMS = (
         # Matching only the first would accept a skill that opens the dialog
         # and walks away.
         action=re.compile(r"立即產生|Generate now"),
+        # The skill drives the browser through `safari-browser` — that string
+        # is what separates a command this skill runs from a command it tells
+        # the reader to run. Without it, a fenced block saying "Open Plaud and
+        # click 立即產生" satisfies the rule, which is the prose hole one level
+        # down (verified reachable, kept as a REJECT case below).
+        driver=re.compile(r"safari-browser"),
         history=(
             "#36 — plaud-upload said it started transcription from v0.1.0 and "
             "no version ever contained the step. Measured 2026-08-08: Plaud's "
@@ -259,24 +266,52 @@ def _body(skill_md: pathlib.Path) -> str:
     return text[m.end():] if m else text
 
 
-FENCE = re.compile(r"(?ms)^[ \t]*```[^\n]*\n(.*?)^[ \t]*```")
+# Backtick and tilde fences both. Tilde is unused in this repo today (all
+# eight skills use backticks, all paired — measured), so this arm is latent;
+# it costs four characters and removes a false-positive class before anyone
+# trips it.
+FENCE = re.compile(r"(?ms)^[ \t]*(?:```|~~~)[^\n]*\n(.*?)^[ \t]*(?:```|~~~)")
 
 
-def executable_steps(body: str) -> str:
-    """Only the fenced code blocks — the part the skill actually runs.
+def code_fences(body: str) -> list[str]:
+    """Each fenced code block, kept separate.
+
+    Separate, not joined, because a rule may need two things to appear *in the
+    same block* — see `driver` on CapabilityClaim. Joining first would let a
+    driver in one block vouch for an action in another.
 
     Telling the *user* to press a button is not the skill pressing it, and
-    across a whole body those two read identically. This distinction is not
+    across a whole body those two read identically. That distinction is not
     hypothetical tidiness: the first version of this guard matched the whole
-    body, and the acid run for #36 caught it going **green on #36 itself**.
-    The remediation prose — "open it and press 產生, then 立即產生" — contains
-    the words a real step would contain, so restoring the false claim no
-    longer tripped anything.
+    body, and the acid run for #36 caught it going **green on #36 itself** —
+    the remediation prose ("open it and press 產生, then 立即產生") contains
+    the words a real step contains, so restoring the false claim tripped
+    nothing. A guard that its own fix disarms is worse than no guard, because
+    the green is now evidence for the wrong thing.
 
-    A guard that its own fix disarms is worse than no guard, because the
-    green is now evidence for the wrong thing.
+    Known blind spots, all in the false-positive direction (a skill that DOES
+    have the step gets flagged — loud, and one edit away): an unclosed fence
+    swallows everything after it, four-space indented blocks are not fences at
+    all, and a quad-backtick wrapper hides the inner block. Measured against
+    this repo: eight skills, all backtick, all paired, no indented code
+    blocks. Latent, not live.
     """
-    return "\n".join(FENCE.findall(body))
+    return FENCE.findall(body)
+
+
+def _performs(rule: CapabilityClaim, body: str) -> bool:
+    """Does some fenced block actually carry out `rule`?
+
+    Both the action and its driver must land in the SAME fence. A driver
+    somewhere else in the file says the skill drives a browser at some point,
+    not that it drives it *for this*.
+    """
+    for fence in code_fences(body):
+        if not rule.action.search(fence):
+            continue
+        if rule.driver is None or rule.driver.search(fence):
+            return True
+    return False
 
 
 def unbacked_claims(description: str, body: str) -> list[str]:
@@ -295,7 +330,7 @@ def unbacked_claims(description: str, body: str) -> list[str]:
                 continue
             if NEGATED.search(clause[: m.start()]):
                 continue
-            if not rule.action.search(executable_steps(body)):
+            if not _performs(rule, body):
                 bad.append(clause)
     return bad
 
@@ -384,10 +419,40 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
         "\n### The skill stops here\n"
         "Open it in Plaud and press 產生, then 立即產生. Nothing starts by itself.\n"
     )
+    # A fenced block, but it is what the *reader* is told to do — no driver,
+    # so the skill is not the one acting. One level below the prose hole and
+    # verified reachable before this case existed.
+    BODY_FENCED_USER_INSTRUCTION = BODY_WITHOUT_STEP + (
+        "\n### Tell the user to do this\n"
+        "```\n"
+        "Open web.plaud.ai and click 立即產生\n"
+        "```\n"
+    )
     BODY_WITH_STEP = BODY_WITHOUT_STEP + (
         "\n### Step 4 — start transcription\n"
         "```bash\n"
         "safari-browser js \"...t==='立即產生'...click()\" --url plaud\n"
+        "```\n"
+    )
+    # Same step, tilde-fenced. Unused in this repo today, which is exactly why
+    # it needs a case — an untested arm of the parser is a guess, and the arm
+    # fails in the direction that flags correct documentation.
+    BODY_WITH_TILDE_STEP = BODY_WITHOUT_STEP + (
+        "\n### Step 4 — start transcription\n"
+        "~~~bash\n"
+        "safari-browser js \"...t==='立即產生'...click()\" --url plaud\n"
+        "~~~\n"
+    )
+    # Driver present, action present, different blocks. Driving a browser
+    # somewhere in the file is not driving it for this.
+    BODY_DRIVER_IN_ANOTHER_FENCE = BODY_WITHOUT_STEP + (
+        "\n### Step 2 — upload\n"
+        "```bash\n"
+        "safari-browser upload --native \"input[type='file']\" \"<path>\"\n"
+        "```\n"
+        "\n### What happens next\n"
+        "```\n"
+        "Someone clicks 立即產生\n"
         "```\n"
     )
 
@@ -414,10 +479,32 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
             "remediate the claim, and goes green forever",
         )
 
+    def test_a_fenced_instruction_to_the_user_is_not_a_step(self):
+        """One level below the prose hole; verified reachable before this fix."""
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_FENCED_USER_INSTRUCTION),
+            "a code fence showing the reader what to click is not the skill "
+            "clicking it — without the driver requirement this passed",
+        )
+
+    def test_a_driver_in_a_different_fence_does_not_vouch(self):
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_DRIVER_IN_ANOTHER_FENCE),
+            "driving the browser elsewhere in the file is not driving it for "
+            "this action — the two must share a block",
+        )
+
     def test_a_claim_backed_by_a_step_is_accepted(self):
         self.assertEqual(
             [], unbacked_claims(self.CLAIMS, self.BODY_WITH_STEP),
             "a skill that really presses the button may say that it does",
+        )
+
+    def test_a_tilde_fenced_step_counts_too(self):
+        self.assertEqual(
+            [], unbacked_claims(self.CLAIMS, self.BODY_WITH_TILDE_STEP),
+            "~~~ is a markdown fence; a parser that only knows ``` would flag "
+            "a skill whose step is right there",
         )
 
 

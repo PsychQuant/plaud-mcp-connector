@@ -3,7 +3,8 @@ name: plaud-upload
 description: |
   Upload an audio or video file into your own Plaud library. It does not
   start transcription: Plaud transcribes nothing on its own, and the file
-  waits at 準備生成 until somebody presses 產生 in the web app. Use when the
+  waits at 準備生成 / Ready to generate until somebody presses 產生 /
+  Generate in the web app. Use when the
   user says "upload to Plaud", "上傳到 Plaud", "transcribe this recording",
   "把這個音檔丟去 Plaud 轉錄", or hands over a local audio/video file to be
   transcribed — uploading is the first step of that, so say plainly that the
@@ -161,16 +162,22 @@ visually, then confirm the recording appears in the library.
 
 Say so. The upload is done and nothing else is in motion — Plaud starts no
 transcription of its own, whether the audio came from a device or from here.
-The file sits at **準備生成** until somebody opens it and presses **產生**,
-then **立即產生** (measured 2026-08-08; the page's own words are 點擊「生成」
-選擇如何生成轉錄與總結 — it asks which transcript and summary to produce,
-which is not something an automatic pipeline would need).
+The file sits at **準備生成 / Ready to generate** until somebody opens it and
+presses **產生 / Generate**, then **立即產生 / Generate now**. Plaud localises
+its UI, so quote whichever pair matches what the user is looking at — the
+sibling automation keys off both (`t==='產生'||t==='Generate'`), and naming
+only the Chinese leaves an English-locale user hunting for a string that is
+not on their screen.
+
+Measured 2026-08-08 on a file uploaded through these steps: the page reads
+點擊「生成」選擇如何生成轉錄與總結 — it asks *which* transcript and summary to
+produce. An automatic pipeline would not need the user to choose.
 
 So tell the user the next step is theirs:
 
-> Uploaded. Open it at `web.plaud.ai` and press 產生 / Generate to transcribe
-> it — that will not happen on its own. Once it finishes, `plaud-index` can
-> pull the transcript into the local cache.
+> Uploaded. Open it at `web.plaud.ai` and press 產生 / Generate, then
+> 立即產生 / Generate now, to transcribe it — that will not happen on its own.
+> Once it finishes, `plaud-index` can pull the transcript into the local cache.
 
 Leaving this unsaid is the failure this section exists for: `plaud-index`
 reports an untranscribed recording under *skipped — no transcript*, which
