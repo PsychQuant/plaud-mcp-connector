@@ -5,10 +5,10 @@ description: |
   transcription. Use when the user says "upload to Plaud", "上傳到 Plaud",
   "transcribe this recording", "把這個音檔丟去 Plaud 轉錄", or hands over a local
   audio/video file to be transcribed. Both halves of the official Plaud surface
-  — the MCP and the CLI — are read-only, so this skill is what covers writing
-  into a library. It uploads and hands off: the transcript reaches your machine
-  later, when `plaud-index` fetches it into the local cache that `plaud-grep`
-  and `plaud-srt` read. macOS only (drives Safari).
+  — the MCP and the CLI — are read-only, so uploading needs something outside
+  them; this skill does it by driving Safari against web.plaud.ai, and is
+  macOS-only for that reason. It uploads and hands off — the transcript reaches
+  your machine later, when `plaud-index` fetches it into the local cache.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "zu Plaud hochladen", "subir a Plaud", "téléverser vers Plaud", "Plaudにアップロード", "carica su Plaud", "uploaden naar Plaud", "enviar para o Plaud", "tải lên Plaud", "อัปโหลดไปยัง Plaud", "muat naik ke Plaud", "رفع إلى بلود".
 argument-hint: "<file_path_or_glob>"
