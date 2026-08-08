@@ -1,14 +1,17 @@
 ---
 name: plaud-upload
 description: |
-  Upload an audio or video file into your own Plaud library and start
-  transcription. Use when the user says "upload to Plaud", "上傳到 Plaud",
-  "transcribe this recording", "把這個音檔丟去 Plaud 轉錄", or hands over a local
-  audio/video file to be transcribed. Both halves of the official Plaud surface
-  — the MCP and the CLI — are read-only, so uploading needs something outside
-  them; this skill does it by driving Safari against web.plaud.ai, and is
-  macOS-only for that reason. It uploads and hands off — the transcript reaches
-  your machine later, when `plaud-index` fetches it into the local cache.
+  Upload an audio or video file into your own Plaud library. It does not
+  start transcription: Plaud transcribes nothing on its own, and the file
+  waits at 準備生成 until somebody presses 產生 in the web app. Use when the
+  user says "upload to Plaud", "上傳到 Plaud", "transcribe this recording",
+  "把這個音檔丟去 Plaud 轉錄", or hands over a local audio/video file to be
+  transcribed — uploading is the first step of that, so say plainly that the
+  second one is theirs. Both halves of the official Plaud surface — the MCP
+  and the CLI — are read-only, so uploading needs something outside them;
+  this skill does it by driving Safari against web.plaud.ai, and is macOS-only
+  for that reason. `plaud-index` can fetch a transcript into the local cache
+  once one exists, which is after that press and not before.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "zu Plaud hochladen", "subir a Plaud", "téléverser vers Plaud", "Plaudにアップロード", "carica su Plaud", "uploaden naar Plaud", "enviar para o Plaud", "tải lên Plaud", "อัปโหลดไปยัง Plaud", "muat naik ke Plaud", "رفع إلى بلود".
 argument-hint: "<file_path_or_glob>"
@@ -16,7 +19,8 @@ argument-hint: "<file_path_or_glob>"
 
 # Plaud Upload
 
-Uploads a local audio/video file to `web.plaud.ai` and starts transcription.
+Uploads a local audio/video file to `web.plaud.ai`. **It does not start
+transcription** — that is a separate press, in the web app, by a person.
 
 ## Why this skill exists
 
@@ -153,7 +157,27 @@ out of the event and resets the input, so it reads `0` even on success. **The
 real check is the modal showing the filename with a success marker.** Confirm
 visually, then confirm the recording appears in the library.
 
-After it appears, `plaud-index` can pull its transcript once processing finishes.
+### The skill stops here, and the recording has no transcript
+
+Say so. The upload is done and nothing else is in motion — Plaud starts no
+transcription of its own, whether the audio came from a device or from here.
+The file sits at **準備生成** until somebody opens it and presses **產生**,
+then **立即產生** (measured 2026-08-08; the page's own words are 點擊「生成」
+選擇如何生成轉錄與總結 — it asks which transcript and summary to produce,
+which is not something an automatic pipeline would need).
+
+So tell the user the next step is theirs:
+
+> Uploaded. Open it at `web.plaud.ai` and press 產生 / Generate to transcribe
+> it — that will not happen on its own. Once it finishes, `plaud-index` can
+> pull the transcript into the local cache.
+
+Leaving this unsaid is the failure this section exists for: `plaud-index`
+reports an untranscribed recording under *skipped — no transcript*, which
+reads as "still processing". Plaud's API cannot distinguish never-requested
+from in-progress (`source_list` is an empty array in both cases), so nothing
+downstream will ever correct the impression. The wait would not end, and
+nothing would say so.
 
 ## Honesty about this path
 

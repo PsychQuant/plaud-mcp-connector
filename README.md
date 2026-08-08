@@ -149,7 +149,12 @@ proofread the research meeting transcript against these slides
 ### `plaud-upload` — put a file into your library
 
 Converts video to audio, checks the 500 MB / 5 h limits, and drives Safari to
-import the file and start transcription. **macOS only.**
+import the file. **macOS only.**
+
+It stops at the upload. Plaud transcribes nothing on its own — the recording
+waits until you open it and press 產生 / Generate, and `plaud-index` has
+nothing to fetch until you do. The skill says this when it finishes, because
+an untranscribed recording is indistinguishable from one still processing.
 
 ```
 上傳這個音檔到 Plaud 轉錄
