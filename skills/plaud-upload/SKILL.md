@@ -164,14 +164,22 @@ Say so. The upload is done and nothing else is in motion — Plaud starts no
 transcription of its own, whether the audio came from a device or from here.
 The file sits at **準備生成 / Ready to generate** until somebody opens it and
 presses **產生 / Generate**, then **立即產生 / Generate now**. Plaud localises
-its UI, so quote whichever pair matches what the user is looking at — the
-sibling automation keys off both (`t==='產生'||t==='Generate'`), and naming
-only the Chinese leaves an English-locale user hunting for a string that is
+its UI, so quote whichever pair matches what the user is looking at — naming
+only the Chinese leaves an English-locale reader hunting for a string that is
 not on their screen.
 
-Measured 2026-08-08 on a file uploaded through these steps: the page reads
-點擊「生成」選擇如何生成轉錄與總結 — it asks *which* transcript and summary to
-produce. An automatic pipeline would not need the user to choose.
+What was actually measured (2026-08-08), stated as narrowly as it was done: a
+recording **already in the library** was opened — one whose timestamps mark it
+as an upload rather than a device recording, since its `created_at` precedes
+the end of its own audio by seventeen minutes, which a record synced after
+recording cannot do. Its page showed 準備生成 with a 產生 button waiting, and
+read 點擊「生成」選擇如何生成轉錄與總結 — it asks *which* transcript and summary
+to produce. An automatic pipeline would not ask.
+
+No file was uploaded to check this, so "an upload behaves this way" rests on
+that timestamp inference. What does not rest on it: nothing in that account
+transcribes by itself. Nine of its ten most recent recordings have no
+transcript at all.
 
 So tell the user the next step is theirs:
 
