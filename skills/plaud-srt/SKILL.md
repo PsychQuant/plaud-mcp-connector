@@ -4,9 +4,11 @@ description: |
   Turn a Plaud recording into SubRip (.srt) subtitles for video editing,
   lecture captions, or class recordings. Use when the user asks for subtitles,
   captions, an SRT file, 字幕, 逐字稿轉字幕, "make subtitles from this
-  recording", or wants to caption a video whose audio is in Plaud. Neither the
-  official Plaud MCP nor the official CLI can produce timed subtitles — they
-  return transcript text only.
+  recording", or wants to caption a video whose audio is in Plaud. Generates the
+  cues from the locally cached transcript — it does not download a subtitle file
+  Plaud already produced, and needs no network. Neither the official Plaud MCP
+  nor the official CLI can produce timed subtitles — they return transcript text
+  only.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Untertitel erstellen", "crear subtítulos", "créer des sous-titres", "字幕を作成", "creare sottotitoli", "ondertitels maken", "criar legendas", "tạo phụ đề", "สร้างคำบรรยาย", "buat sari kata", "إنشاء ترجمة".
 argument-hint: "<recording name or id> [-o out.srt]"

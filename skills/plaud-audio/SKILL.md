@@ -5,9 +5,11 @@ description: |
   transcript. Use when the user wants the audio to archive, to edit, to feed to
   another tool, or to transcribe again with a different engine: "download the
   audio from that meeting", "get me the original recording", "把那次錄音的音檔抓下來",
-  "我要原始音檔", "export the audio so I can re-transcribe it". Reaches the audio
-  through the official CLI, which returns the link directly — and downloads the
-  file rather than handing over a link that expires.
+  "我要原始音檔", "export the audio so I can re-transcribe it". This is the
+  recording as captured, not any of the things Plaud derived from it — not the
+  subtitles, not a document, not a summary. Reaches the audio through the
+  official CLI, which returns the link directly, and downloads the file rather
+  than handing over a link that expires.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Originalaufnahme herunterladen", "descargar el audio original", "télécharger l'audio original", "元の音声をダウンロード", "scarica l'audio originale", "originele audio downloaden", "baixar o áudio original", "tải âm thanh gốc", "ดาวน์โหลดเสียงต้นฉบับ", "muat turun audio asal", "تنزيل الصوت الأصلي".
 ---

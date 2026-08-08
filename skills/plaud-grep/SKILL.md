@@ -5,8 +5,10 @@ description: |
   just recording names. Use whenever the user asks which recording mentioned a
   topic, person, decision or number: "哪次會議談到 X", "which meeting did we
   discuss the budget", "找出提到 Kubernetes 的錄音", "search my transcripts for
-  X", "Plaud 全文搜尋". The official Plaud MCP cannot answer these — its query
-  matches recording NAMES only, over the newest 500 recordings.
+  X", "Plaud 全文搜尋". Runs on the transcripts `plaud-index` has already put in
+  the local cache, so it matches what was said rather than what a file is
+  called, and it needs no network. The official Plaud MCP cannot answer these —
+  its query matches recording NAMES only, over the newest 500 recordings.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "welche Besprechung ging es ums Budget", "¿en qué reunión hablamos del presupuesto?", "quelle réunion parlait du budget", "どの録音で予算の話をしたか", "quale riunione parlava del budget", "welke opname ging over het budget", "qual gravação falou sobre o orçamento", "cuộc họp nào nói về ngân sách", "การประชุมไหนพูดถึงงบประมาณ", "mesyuarat mana yang bincang bajet", "أي اجتماع تحدث عن الميزانية".
 argument-hint: "<search terms>"

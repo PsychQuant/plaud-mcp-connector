@@ -4,9 +4,11 @@ description: |
   Upload an audio or video file into your own Plaud library and start
   transcription. Use when the user says "upload to Plaud", "上傳到 Plaud",
   "transcribe this recording", "把這個音檔丟去 Plaud 轉錄", or hands over a local
-  audio/video file to be transcribed. The official Plaud MCP and CLI are
-  read-only — this is the only path that writes into a personal library.
-  macOS only (drives Safari).
+  audio/video file to be transcribed. Both halves of the official Plaud surface
+  — the MCP and the CLI — are read-only, so this skill is what covers writing
+  into a library. It uploads and hands off: the transcript reaches your machine
+  later, when `plaud-index` fetches it into the local cache that `plaud-grep`
+  and `plaud-srt` read. macOS only (drives Safari).
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "zu Plaud hochladen", "subir a Plaud", "téléverser vers Plaud", "Plaudにアップロード", "carica su Plaud", "uploaden naar Plaud", "enviar para o Plaud", "tải lên Plaud", "อัปโหลดไปยัง Plaud", "muat naik ke Plaud", "رفع إلى بلود".
 argument-hint: "<file_path_or_glob>"
