@@ -1,5 +1,26 @@
 #!/usr/bin/env python3
-"""A skill description must not claim to be the only way to do something (#35).
+"""A skill description must not say things that are not true.
+
+Two rules live here, guarding two measured failures of the same kind. Both
+are about `description:` blocks, because that is the only thing a model reads
+when deciding whether a skill applies — a false sentence in there is a false
+premise inside a routing decision.
+
+1. **Exclusivity** (#35) — a claim to be the only way to do something must
+   name what it is exclusive against. Written below.
+2. **Capability** (#36) — a claim to perform an action must correspond to a
+   step that performs it. See `CAPABILITY_CLAIMS` further down.
+
+They failed differently, and the difference is worth keeping in mind. #35's
+sentence was **true when written** and went false when the world changed.
+#36's was **never true**: `plaud-upload` said it started transcription from
+its first commit, and no version of it ever contained the step that would.
+Nothing marks the moment a never-true sentence goes wrong, so nothing
+prompts anyone to re-read it.
+
+--- rule 1: exclusivity (#35) ---------------------------------------------
+
+A skill description must not claim to be the only way to do something.
 
 A `description:` block is the only thing a model reads when deciding whether a
 skill applies. A false sentence in there is a false premise inside the routing
@@ -45,12 +66,33 @@ servers) — the other half of #35. The only mechanical version is "does it
 contain the string `local cache`", which is a proxy, not the property:
 rewording trips it, and badly-written prose containing the magic words passes.
 A proxy that looks like a guard is worse than an acknowledged gap.
+
+The same sentence governs rule 2. "Every capability a description claims has
+a step performing it" is not checkable — it needs to read the prose and know
+what counts as performing. So rule 2 is a **closed list of one**, and its
+tests are named for the single claim they pin.
+
+Rule 2 also stops at the `description:` block, and does **not** scan body
+prose. #36's false sentence was in both, so this is a real gap, chosen with
+the reason stated: body prose has legitimate non-claiming uses of the same
+words ("To start transcription, press 產生" is correct documentation), and no
+regex separates those from a claim. Extending the rule there would fail
+correct writing and teach the next author to weaken the pattern. The stakes
+also differ — the description is what gets read when deciding whether to fire
+the skill and whether the job is done.
+
+A related structural idea was measured and rejected: treating each body's
+opening paragraph as a second description. Across these eight skills that
+paragraph is sometimes a summary, sometimes a correction notice, sometimes a
+scope note. Applying a claim rule to a location whose role varies is how
+false positives get manufactured.
 """
 from __future__ import annotations
 
 import pathlib
 import re
 import unittest
+from typing import NamedTuple
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SKILLS_DIR = REPO_ROOT / "skills"
@@ -170,6 +212,94 @@ def offending_claims(description: str) -> list[str]:
     return bad
 
 
+# --- rule 2: capability (#36) ----------------------------------------------
+
+
+class CapabilityClaim(NamedTuple):
+    """One measured claim, and the step that would make it true."""
+
+    name: str
+    claim: re.Pattern      # matched against description clauses
+    action: re.Pattern     # matched against the body's steps
+    history: str
+
+
+# A CLOSED LIST. There is exactly one entry, and **a second one may not be
+# added by analogy** — the bar for adding is "this claim has been measured
+# against the steps and found unbacked", not "this claim also looks worth
+# checking". A registry that grows by resemblance stops being a list of
+# measured facts and becomes a guess about which sentences feel risky.
+#
+# Each entry names its own boundary. `action` is what a step *doing the thing*
+# looks like, not what mentioning it looks like: `plaud-upload`'s body has
+# always contained the word transcription, which is exactly why prose-level
+# matching would have called this file green through four releases.
+CAPABILITY_CLAIMS = (
+    CapabilityClaim(
+        name="start-transcription",
+        claim=re.compile(r"start(?:s|ing)?\s+transcription|啟動轉錄", re.I),
+        # Plaud's generate flow is two presses; the second one is the commit.
+        # Matching only the first would accept a skill that opens the dialog
+        # and walks away.
+        action=re.compile(r"立即產生|Generate now"),
+        history=(
+            "#36 — plaud-upload said it started transcription from v0.1.0 and "
+            "no version ever contained the step. Measured 2026-08-08: Plaud's "
+            "own file page shows 準備生成 with a 產生 button waiting, and asks "
+            "the user to choose how to generate. Nothing starts on its own."
+        ),
+    ),
+)
+
+
+def _body(skill_md: pathlib.Path) -> str:
+    """Everything after the frontmatter — where the steps live."""
+    text = skill_md.read_text(encoding="utf-8")
+    m = re.match(r"^---\r?\n.*?\r?\n---\r?\n", text, re.S)
+    return text[m.end():] if m else text
+
+
+FENCE = re.compile(r"(?ms)^[ \t]*```[^\n]*\n(.*?)^[ \t]*```")
+
+
+def executable_steps(body: str) -> str:
+    """Only the fenced code blocks — the part the skill actually runs.
+
+    Telling the *user* to press a button is not the skill pressing it, and
+    across a whole body those two read identically. This distinction is not
+    hypothetical tidiness: the first version of this guard matched the whole
+    body, and the acid run for #36 caught it going **green on #36 itself**.
+    The remediation prose — "open it and press 產生, then 立即產生" — contains
+    the words a real step would contain, so restoring the false claim no
+    longer tripped anything.
+
+    A guard that its own fix disarms is worse than no guard, because the
+    green is now evidence for the wrong thing.
+    """
+    return "\n".join(FENCE.findall(body))
+
+
+def unbacked_claims(description: str, body: str) -> list[str]:
+    """Clauses claiming a capability no step in `body` performs.
+
+    Negation is checked the same way rule 1 checks it, and for a sharper
+    reason: the *fix* for #36 puts the words "start transcription" into the
+    description — inside "It does not start transcription". A guard that
+    flagged its own remedy would be uninstalled within the day.
+    """
+    bad = []
+    for rule in CAPABILITY_CLAIMS:
+        for clause in clauses(description):
+            m = rule.claim.search(clause)
+            if not m:
+                continue
+            if NEGATED.search(clause[: m.start()]):
+                continue
+            if not rule.action.search(executable_steps(body)):
+                bad.append(clause)
+    return bad
+
+
 def _skills() -> list[pathlib.Path]:
     return sorted(SKILLS_DIR.glob("*/SKILL.md"))
 
@@ -226,6 +356,71 @@ class TestTheRuleItself(unittest.TestCase):
             "an incidental 'official' must not qualify a claim about every tool")
 
 
+class TestTheCapabilityRuleItself(unittest.TestCase):
+    """Synthetic cases, because the live scan below passes *vacuously*.
+
+    Once #36 is fixed no description claims transcription, so the live test
+    would stay green with the rule deleted. These three cases are the only
+    thing standing between "the guard works" and "the guard is absent" — the
+    #31/#32 shape, one more time.
+    """
+
+    CLAIMS = "Upload a file into your own Plaud library and start transcription."
+    DENIES = "Upload a file into your own Plaud library. It does not start transcription."
+    BODY_WITHOUT_STEP = (
+        "### Step 2 — upload\n"
+        "safari-browser upload --native \"input[type='file']\" \"<path>\"\n\n"
+        "### Step 3 — verify\n"
+        "Confirm the recording appears in the library.\n"
+        # The word is present, and means nothing. This line is the reason the
+        # rule matches a keypress and not a mention.
+        "After it appears, plaud-index can pull its transcript.\n"
+    )
+    # Prose telling the *user* to press it. Reads almost identically to a real
+    # step, and is exactly what the fix for #36 had to say — which is how the
+    # first version of this guard ended up green on #36. Kept as a permanent
+    # case so that cannot happen twice.
+    BODY_INSTRUCTING_THE_USER = BODY_WITHOUT_STEP + (
+        "\n### The skill stops here\n"
+        "Open it in Plaud and press 產生, then 立即產生. Nothing starts by itself.\n"
+    )
+    BODY_WITH_STEP = BODY_WITHOUT_STEP + (
+        "\n### Step 4 — start transcription\n"
+        "```bash\n"
+        "safari-browser js \"...t==='立即產生'...click()\" --url plaud\n"
+        "```\n"
+    )
+
+    def test_a_claim_with_no_step_performing_it_is_flagged(self):
+        """Exactly the state plaud-upload shipped in for four releases."""
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_WITHOUT_STEP),
+            "a description claiming transcription over a body that never "
+            "triggers it must be flagged — that is #36",
+        )
+
+    def test_denying_the_capability_is_not_claiming_it(self):
+        self.assertEqual(
+            [], unbacked_claims(self.DENIES, self.BODY_WITHOUT_STEP),
+            "'It does not start transcription' is the fix, not the defect",
+        )
+
+    def test_telling_the_user_to_press_it_is_not_a_step(self):
+        """The case that caught this guard being green on its own defect."""
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_INSTRUCTING_THE_USER),
+            "instructions to the user are not the skill acting — if this "
+            "passes, the guard is satisfied by the very prose written to "
+            "remediate the claim, and goes green forever",
+        )
+
+    def test_a_claim_backed_by_a_step_is_accepted(self):
+        self.assertEqual(
+            [], unbacked_claims(self.CLAIMS, self.BODY_WITH_STEP),
+            "a skill that really presses the button may say that it does",
+        )
+
+
 class TestLiveDescriptions(unittest.TestCase):
     def test_the_scan_actually_reads_descriptions(self):
         """A scanner that finds nothing reports everything is fine.
@@ -243,6 +438,40 @@ class TestLiveDescriptions(unittest.TestCase):
             f"frontmatter parser has drifted from how these files are written, "
             f"and an empty scan passes every other test in this file",
         )
+
+    def test_the_scan_actually_reads_bodies(self):
+        """Same reasoning as above, for the half rule 2 depends on.
+
+        `unbacked_claims` only fires when the body lacks the action. An empty
+        body therefore makes every claim look unbacked — loud, so harmless.
+        The dangerous direction is the parser returning the *whole file*
+        including frontmatter, which would let a description satisfy its own
+        claim. Both are caught by checking the body is real and starts after
+        the frontmatter.
+        """
+        for skill_md in _skills():
+            with self.subTest(skill=skill_md.parent.name):
+                body = _body(skill_md)
+                self.assertGreater(len(body), 200, "body came back empty or near-empty")
+                self.assertNotIn(
+                    "description:", body.split("\n# ")[0],
+                    "frontmatter leaked into the body — a description could then "
+                    "satisfy its own capability claim",
+                )
+
+    def test_no_skill_claims_a_capability_no_step_performs(self):
+        for skill_md in _skills():
+            for clause in unbacked_claims(_description(skill_md), _body(skill_md)):
+                with self.subTest(skill=skill_md.parent.name):
+                    self.fail(
+                        f"\n{skill_md.parent.name} claims a capability its steps "
+                        f"never perform:\n\n    {clause}\n\n"
+                        f"Either add the step, or stop claiming it. A skill that "
+                        f"hands back silently after promising to start something "
+                        f"leaves the user waiting for an event that will not "
+                        f"happen, with nothing to notice it by (#36).\n"
+                        f"Registry entries: {[r.name for r in CAPABILITY_CLAIMS]}"
+                    )
 
     def test_no_unqualified_exclusivity_claim(self):
         for skill_md in _skills():
