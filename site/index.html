@@ -208,8 +208,9 @@ the one thing nobody can install for you.</p>
   <li data-i18n="li6"><strong>Upload is macOS-only, and it is browser automation, not an API.</strong>
     It drives Safari through AppleScript; there is no Linux or Windows equivalent and
     none is planned. It works today and will break the day Plaud redesigns its import
-    dialog. Neither the official MCP nor the official CLI has any upload command —
-    this is the only path that exists.</li>
+    dialog. Neither the official MCP nor the official CLI has any upload command,
+    which is why this drives the web app at all — anything else that drives a
+    browser can do the same.</li>
   <li data-i18n="li7"><strong>Proofreading has no accuracy figure.</strong> Without a ground-truth
     transcript there is nothing to measure against. You will notice you can find
     things; nobody can give you a number.</li>
@@ -284,7 +285,7 @@ the one thing nobody can install for you.</p>
     "h4": "Limits, stated plainly",
     "li4": "<strong>Search covers what you indexed.</strong> A recording made after your\n    last index run is not searchable. The tool reports the covered range instead of\n    answering “not found”.",
     "li5": "<strong>Completeness is tracked, not assumed.</strong> A recording whose fetch\n    was cut short is marked incomplete, re-fetched next run, and flagged in results.\n    This exists because v0.1.0 silently kept only each transcript's first page and\n    reported “no match” for words that were spoken.",
-    "li6": "<strong>Upload is macOS-only, and it is browser automation, not an API.</strong>\n    It drives Safari through AppleScript; there is no Linux or Windows equivalent and\n    none is planned. It works today and will break the day Plaud redesigns its import\n    dialog. Neither the official MCP nor the official CLI has any upload command —\n    this is the only path that exists.",
+    "li6": "<strong>Upload is macOS-only, and it is browser automation, not an API.</strong>\n    It drives Safari through AppleScript; there is no Linux or Windows equivalent and\n    none is planned. It works today and will break the day Plaud redesigns its import\n    dialog. Neither the official MCP nor the official CLI has any upload command,\n    which is why this drives the web app at all — anything else that drives a\n    browser can do the same.",
     "li7": "<strong>Proofreading has no accuracy figure.</strong> Without a ground-truth\n    transcript there is nothing to measure against. You will notice you can find\n    things; nobody can give you a number.",
     "p6": "<strong>Your recordings stay yours.</strong> Transcripts are cached on your own\n  machine and are never committed, uploaded, or sent anywhere except to the model\n  answering your question. Credentials live in your OAuth token store or the macOS\n  Keychain.",
     "p7": "<strong>plaud-mcp-connector</strong> is an independent, community-built plugin.\n      It is <strong>not affiliated with, endorsed by, or supported by Plaud Inc.</strong>\n      “Plaud” is used only to say what this works with.",
@@ -324,7 +325,7 @@ the one thing nobody can install for you.</p>
     "h4": "限制，直說",
     "li4": "<strong>搜尋只涵蓋你索引過的內容。</strong>上一次索引之後才錄的東西搜不到。工具會回報涵蓋的範圍，而不是回答「找不到」。",
     "li5": "<strong>完整性是被追蹤的，不是被假設的。</strong>抓到一半被中斷的錄音會標記為不完整、下次索引重抓，並在結果中標示。這個機制存在，是因為 v0.1.0 曾經只保留每份逐字稿的第一頁，然後對說過的話回報「找不到」。",
-    "li6": "<strong>上傳僅限 macOS，而且是瀏覽器自動化不是 API。</strong>它透過 AppleScript 驅動 Safari；沒有 Linux 或 Windows 的對應版本，也沒有計畫要做。它今天能用，而 Plaud 改版 import 對話框的那天它就會壞。官方 MCP 與官方 CLI 都沒有任何上傳指令 —— 這是唯一存在的路徑。",
+    "li6": "<strong>上傳僅限 macOS，而且是瀏覽器自動化不是 API。</strong>它透過 AppleScript 驅動 Safari；沒有 Linux 或 Windows 的對應版本，也沒有計畫要做。它今天能用，而 Plaud 改版 import 對話框的那天它就會壞。官方 MCP 與官方 CLI 都沒有任何上傳指令，這才是這裡改用驅動網頁版的原因 —— 任何同樣能驅動瀏覽器的工具都做得到。",
     "li7": "<strong>校對沒有準確率數字。</strong>沒有 ground truth 就沒有東西可以量。你會發現東西找得到了；但沒有人能給你一個數字。",
     "p6": "<strong>你的錄音仍然是你的。</strong>逐字稿快取在你自己的機器上，永遠不會被 commit、上傳或送到任何地方 —— 除了回答你問題的那個模型。憑證存在你的 OAuth token store 或 macOS Keychain。",
     "p7": "<strong>plaud-mcp-connector</strong> 是一個獨立的、社群做的 plugin。它<strong>與 Plaud Inc. 無關，未經其背書，也不受其支援</strong>。使用「Plaud」一詞只是為了說明它能跟什麼搭配。",
@@ -364,7 +365,7 @@ the one thing nobody can install for you.</p>
     "h4": "限界を、正直に",
     "li4": "<strong>検索が及ぶのはインデックスした範囲だけ。</strong>前回のインデックス以降に録ったものは検索できません。ツールは「見つかりません」ではなく、対象範囲を報告します。",
     "li5": "<strong>完全性は追跡されるもので、前提ではありません。</strong>途中で切れた取得は不完全と記録され、次回に再取得され、結果にも表示されます。この仕組みがあるのは、v0.1.0 が各文字起こしの最初のページだけを黙って保存し、話された言葉に対して「一致なし」と答えていたからです。",
-    "li6": "<strong>アップロードは macOS 限定で、API ではなくブラウザ自動化です。</strong>AppleScript で Safari を操作します。Linux や Windows 版はなく、予定もありません。今は動きますが、Plaud が取り込みダイアログを作り直した日に壊れます。公式 MCP にも公式 CLI にもアップロードのコマンドはありません —— これが存在する唯一の経路です。",
+    "li6": "<strong>アップロードは macOS 限定で、API ではなくブラウザ自動化です。</strong>AppleScript で Safari を操作します。Linux や Windows 版はなく、予定もありません。今は動きますが、Plaud が取り込みダイアログを作り直した日に壊れます。公式 MCP にも公式 CLI にもアップロードのコマンドがなく、それがここで Web 版を操作している理由です —— ブラウザを操作できる他のツールでも同じことができます。",
     "li7": "<strong>校正に精度の数字はありません。</strong>正解となる文字起こしがなければ、測る対象がありません。見つかるようになったことは分かりますが、数字を出せる人はいません。",
     "p6": "<strong>あなたの録音はあなたのものです。</strong>文字起こしはあなた自身のマシンにキャッシュされ、コミットも、アップロードも、どこかへの送信もされません —— あなたの質問に答えるモデル以外には。認証情報は OAuth トークンストアか macOS キーチェーンにあります。",
     "p7": "<strong>plaud-mcp-connector</strong> は独立した、コミュニティ製のプラグインです。<strong>Plaud Inc. とは提携しておらず、承認も、サポートも受けていません</strong>。「Plaud」の名は、何と組み合わせて使うものかを述べるためだけに使っています。",
