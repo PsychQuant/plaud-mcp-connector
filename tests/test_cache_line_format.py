@@ -44,7 +44,20 @@ def _load_to_srt():
     The contract is only real if the thing reading the cache honours it, so
     the assertions below run against `to_srt`'s own parser rather than a
     reimplementation. A copy of the regex here could agree with itself while
-    production disagreed — which is the shape of the bug this file exists for.
+    production disagreed.
+
+    **What that leaves uncovered, stated rather than implied (#42):** using
+    the production parser as the judge makes this file blind in the other
+    direction. If a producer starts writing a third shape and the parser is
+    widened to accept it, both sides are self-consistent and every assertion
+    here still passes. That is #40's own shape — `plaud-index`'s CLI path
+    wrote ranges, `to_srt` read points, and the suite was green for months.
+
+    So this file checks that the parser honours the two measured forms. It
+    does **not** check that producers still emit only those.
+    `tests/test_cache_line_format_live.py` is the half that does, by running
+    the real producer; it is opt-in, because the only non-circular check needs
+    the real thing.
     """
     spec = importlib.util.spec_from_file_location(
         "_to_srt_contract", REPO / "scripts" / "to_srt.py")
