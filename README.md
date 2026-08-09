@@ -115,6 +115,16 @@ Converts a cached transcript to `.srt`. Neither the official MCP nor the officia
 CLI produces timed subtitles — they return transcript text only. Runs on the local
 cache: no API call, no auth.
 
+How long each subtitle stays on screen depends on which way you indexed. The
+official CLI reports a start **and an end** for every segment, and those end
+times are used as given. The MCP reports only starts, so a cue has to run until
+the next one begins and the final cue gets a four-second guess. Installing the
+CLI (above) buys exact timing as well as a cheaper index.
+
+Before this was fixed, the CLI path produced **no subtitles at all** — the two
+paths write different timestamp shapes and only one was understood, so the
+recommended way to index was the one that could not be captioned (#40).
+
 Subtitles use Plaud's cleaned-up transcript by default, so the fillers stay off
 the screen — but that is a preference, not a verdict. Qualitative work measures
 disfluency: hesitation and restarts are the data, and polish deletes them. The
