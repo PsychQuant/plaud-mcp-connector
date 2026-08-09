@@ -24,5 +24,18 @@ __pycache__/
 .spectra/
 openspec/.vector-search.db*
 
-# IDD tree-lock (idd-tree-lock.sh #183) — per-machine session state, not tracked
-.claude/.idd/tree-lock
+# IDD scratch (#41). Everything the plugin writes here is per-machine state or
+# re-derivable — session locks, downloaded issue attachments — except local.json,
+# which is the repo's shared IDD config.
+#
+# Listed as a carve-out rather than file by file. The previous rule named
+# `tree-lock` alone, so `attachments/` — added later — was never covered, and
+# that directory receives whatever an issue carries: other people's documents.
+# Nothing leaked only because no issue here has had an attachment yet.
+#
+# `.claude/.idd/*` and not `.claude/.idd/`: git does not list the contents of an
+# excluded directory, so a `!` on anything inside one has no effect. Behaviour
+# is pinned in tests/test_gitignore.py, which asks `git check-ignore` rather
+# than reading this file.
+.claude/.idd/*
+!.claude/.idd/local.json
