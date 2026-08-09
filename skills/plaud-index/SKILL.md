@@ -452,17 +452,42 @@ the timestamp and speaker label inline, e.g. `[00:12:03] Speaker 1: ...`. One
 segment per line is what makes `plaud-grep`'s line-level hits map back to a point
 in the audio.
 
-If a recording has no transcript yet (still processing), skip it and say so —
-`cache.py put` refuses an empty body rather than caching a blank entry that would
-look indexed but match nothing.
+If a recording has no transcript, skip it and say so — `cache.py put` refuses an
+empty body rather than caching a blank entry that would look indexed but match
+nothing.
+
+**Do not call it "still processing".** Plaud's API cannot say which of three
+things it is: nobody ever asked for a transcript, one is being made, or one
+failed. The official CLI's own test is `sourceList.some(s => s.data_type ===
+"transaction")` — an existence check, and `list_files` returns six fields, none
+of them about transcription. Measured across this account's ten most recent
+recordings: nine had no transcript, because Plaud only transcribes when someone
+presses 產生 / Generate. **The state that needs an action is the common one**,
+and calling it "processing" turns it into a wait that never ends and produces
+no error to notice it by.
 
 ### 4. Report
 
 State how many were already cached, how many were newly fetched, how many were
-skipped for having no transcript yet, and **how many finished incomplete** (page
+skipped for having no transcript, and **how many finished incomplete** (page
 cap, stuck cursor, or an interrupted loop). Incomplete ones resume on the next
 run — say that, so nobody goes hunting for a rebuild flag. Then show
 `cache.py status`, which prints the same count.
+
+The no-transcript count needs its ambiguity said out loud, because the reader
+will otherwise supply the harmless reading. Say it in this shape:
+
+```
+skipped 9 — no transcript
+  Plaud's API cannot say which of these it is: never requested, still being
+  made, or failed. If a recording has sat here across several runs it is
+  almost certainly the first — open it in Plaud and press 產生 / Generate.
+```
+
+**Do not try to guess which one it is.** There is no field to read, and any
+heuristic (age, say) is a proxy that will tell a user to press Generate on a
+recording that was merely slow. Naming the ambiguity and the one action that
+can help is the whole of what is available here.
 
 Also say **how many pages of `list_files` you walked and why you stopped** —
 quote the `stop:` / `continue:` reason verbatim. One page is the normal
