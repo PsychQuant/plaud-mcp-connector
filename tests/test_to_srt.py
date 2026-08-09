@@ -115,6 +115,42 @@ class TestSegmentParsing(unittest.TestCase):
         self.assertEqual(segs[0]["speaker"], "講者一")
         self.assertEqual(segs[0]["text"], "我們把預算拆成兩期")
 
+    # --- ranged form (#40) ---------------------------------------------
+    #
+    # `plaud-index`'s CLI fast path writes `[start - end]`, and this parser
+    # accepted only `[start]`, so every recording indexed the cheap way — the
+    # way the README recommends — produced no subtitles at all. Every fixture
+    # in this file used the other producer's shape, so the suite stayed green
+    # through it.
+    #
+    # Fixtures here are synthetic: real shape, invented words. The recordings
+    # that exposed this are other people's speech.
+
+    def test_ranged_form_parses_and_keeps_the_end(self) -> None:
+        segs = to_srt.parse_segments("[01:01 - 01:55] Speaker 1: hello there\n")
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["start"], 61.0)
+        self.assertEqual(segs[0]["end"], 115.0)
+        self.assertEqual(segs[0]["speaker"], "Speaker 1")
+        self.assertEqual(segs[0]["text"], "hello there")
+
+    def test_ranged_form_in_full_hms(self) -> None:
+        segs = to_srt.parse_segments("[00:01:01 - 00:01:55] A: x\n")
+        self.assertEqual((segs[0]["start"], segs[0]["end"]), (61.0, 115.0))
+
+    def test_point_form_reports_no_end(self) -> None:
+        """The other producer's shape must keep behaving exactly as before."""
+        segs = to_srt.parse_segments("[00:00:05] Speaker 1: hello there\n")
+        self.assertIsNone(segs[0]["end"])
+
+    def test_an_unparseable_end_loses_the_end_not_the_line(self) -> None:
+        """Dropping the segment would lose speech over a timing detail."""
+        segs = to_srt.parse_segments("[01:01 - notatime] A: the words still matter\n")
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0]["start"], 61.0)
+        self.assertIsNone(segs[0]["end"])
+        self.assertEqual(segs[0]["text"], "the words still matter")
+
 
 class TestCueBuilding(unittest.TestCase):
     def _segs(self, *starts: float) -> list[dict]:
@@ -146,6 +182,58 @@ class TestCueBuilding(unittest.TestCase):
         without = to_srt.build_cues(self._segs(0.0), show_speaker=False)
         self.assertTrue(with_speaker[0]["text"].startswith("A: "))
         self.assertFalse(without[0]["text"].startswith("A: "))
+
+    # --- real end times (#40) ------------------------------------------
+    #
+    # Until a producer supplied end times there was nothing to use, and the
+    # docstring above says as much: the next segment's start is "the only
+    # honest signal the transcript carries", and the last cue gets a guess.
+    # The ranged form carries the real thing, so the guess can stop.
+
+    def _ranged(self, *pairs: tuple) -> list[dict]:
+        return [{"start": s, "end": e, "speaker": "A", "text": f"line {i}"}
+                for i, (s, e) in enumerate(pairs)]
+
+    def test_a_real_end_is_used_instead_of_the_next_start(self) -> None:
+        cues = to_srt.build_cues(self._ranged((0.0, 3.0), (5.0, 9.0)))
+        self.assertEqual(cues[0]["end"], 3.0)   # not 5.0
+
+    def test_the_last_cue_stops_being_a_guess(self) -> None:
+        """The tail estimate exists because nothing better was available."""
+        cues = to_srt.build_cues(self._ranged((0.0, 3.0), (5.0, 9.0)),
+                                 tail_seconds=4.0)
+        self.assertEqual(cues[-1]["end"], 9.0)  # not 5.0 + 4.0
+
+    def test_segments_without_an_end_still_use_the_old_rules(self) -> None:
+        mixed = [{"start": 0.0, "end": None, "speaker": "A", "text": "x"},
+                 {"start": 5.0, "end": 9.0, "speaker": "A", "text": "y"}]
+        cues = to_srt.build_cues(mixed)
+        self.assertEqual(cues[0]["end"], 5.0)   # inferred from the next start
+        self.assertEqual(cues[1]["end"], 9.0)   # real
+
+    def test_an_end_past_the_next_start_is_clamped(self) -> None:
+        """Overlapping cues are legal SRT and players disagree about them.
+
+        Accepting ranges should be a pure gain, not a change in how the
+        output behaves, so an overlap is pulled back to where the next cue
+        begins — exactly where the inferred value would have put it.
+        """
+        cues = to_srt.build_cues(self._ranged((0.0, 7.0), (5.0, 9.0)))
+        self.assertEqual(cues[0]["end"], 5.0)
+
+    def test_clamping_is_reported_rather_than_silent(self) -> None:
+        notes: list[str] = []
+        to_srt.build_cues(self._ranged((0.0, 7.0), (5.0, 9.0)), warnings=notes)
+        self.assertTrue(notes, "an overlap was corrected and nothing said so")
+
+    def test_nothing_is_reported_when_no_clamp_happens(self) -> None:
+        notes: list[str] = []
+        to_srt.build_cues(self._ranged((0.0, 3.0), (5.0, 9.0)), warnings=notes)
+        self.assertEqual([], notes)
+
+    def test_a_backwards_range_still_gets_a_positive_duration(self) -> None:
+        cues = to_srt.build_cues(self._ranged((10.0, 4.0)), min_duration=0.5)
+        self.assertEqual(cues[0]["end"], 10.5)
 
 
 class TestRender(unittest.TestCase):
@@ -227,10 +315,29 @@ class TestCli(unittest.TestCase):
     def test_transcript_without_timestamps_fails_loudly(self) -> None:
         # Emitting an empty .srt would look like success and produce a video with
         # no subtitles and no explanation.
+        #
+        # Asserts the properties the message must have, not its wording. The
+        # earlier version pinned the literal "no timestamped segments", so
+        # #40 — which found that exact phrasing sends people to debug the
+        # wrong thing — could not correct it without a test failing for a
+        # reason unrelated to behaviour.
         self._write("plain", "just prose, no timestamps at all\n")
         p = self._run("plain")
         self.assertNotEqual(p.returncode, 0)
-        self.assertIn("no timestamped segments", p.stderr)
+        self.assertIn("error", p.stderr.lower())
+        self.assertIn("plain", p.stderr)          # names the file it read
+        self.assertIn("[00:12:03]", p.stderr)     # shows an accepted shape
+
+    def test_the_failure_names_both_accepted_shapes(self) -> None:
+        """A reader who cached the ranged form must see it listed (#40).
+
+        Naming only the point form is what made this failure read as "your
+        recording has no timestamps" when the real cause was a second, equally
+        valid shape the parser did not yet accept.
+        """
+        self._write("plain2", "just prose, no timestamps at all\n")
+        p = self._run("plain2")
+        self.assertIn(" - ", p.stderr, "the ranged form is not shown as accepted")
 
     def test_incomplete_cache_warns_on_stderr_but_still_converts(self) -> None:
         self._write("part", "[00:00:01] A: half a transcript\n",

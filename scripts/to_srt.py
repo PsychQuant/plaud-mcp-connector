@@ -39,8 +39,19 @@ CACHE_DIR = pathlib.Path(
 )
 
 # [00:12:03] Speaker 1: text   /   [12:03.500] text
+_STAMP = r"\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?"
+
+# Two bracket forms, because two producers write into this cache and they do
+# not agree (#40): Plaud's MCP path emits `[start]`, its CLI emits
+# `[start - end]`. The end group is optional so the point form parses exactly
+# as it always did — `end` simply comes back None.
+#
+# The end is matched loosely (`[^\]]*`) rather than as another timestamp, so a
+# malformed end costs the timing and not the line. Requiring a well-formed end
+# here would make the whole segment stop matching, and losing somebody's words
+# over a timing detail is the worse trade.
 SEGMENT = re.compile(
-    r"^\[\s*(?P<ts>\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?)\s*\]\s*"
+    rf"^\[\s*(?P<ts>{_STAMP})\s*(?:-\s*(?P<end>[^\]]*?)\s*)?\]\s*"
     r"(?:(?P<speaker>[^:\[\]]{1,60}?)\s*:\s*)?"
     r"(?P<text>.*\S)\s*$"
 )
@@ -92,8 +103,16 @@ def parse_segments(body: str) -> list[dict]:
             start = parse_timestamp(m.group("ts"))
         except ValueError:
             continue
+        raw_end = m.group("end")
+        end: float | None = None
+        if raw_end:
+            try:
+                end = parse_timestamp(raw_end)
+            except ValueError:
+                end = None      # keep the words, lose only the timing
         out.append({
             "start": start,
+            "end": end,
             "speaker": (m.group("speaker") or "").strip(),
             "text": m.group("text").strip(),
         })
@@ -101,12 +120,21 @@ def parse_segments(body: str) -> list[dict]:
 
 
 def build_cues(segments: list[dict], *, show_speaker: bool = True,
-               tail_seconds: float = 4.0, min_duration: float = 0.5) -> list[dict]:
+               tail_seconds: float = 4.0, min_duration: float = 0.5,
+               warnings: list[str] | None = None) -> list[dict]:
     """Give every segment an end time.
 
-    A cue ends when the next one starts — that is the only honest signal the
-    transcript carries. The last cue has nothing after it, so it gets
-    `tail_seconds`, which is a guess and labelled as one.
+    When the segment carries its own end — the ranged cache form (#40) — that
+    is used. Otherwise a cue ends where the next one starts, which is the only
+    other signal available, and the last cue falls back to `tail_seconds`: a
+    guess, labelled as one. Before ranges reached this function every last cue
+    in every subtitle file was that guess.
+
+    A real end past the next segment's start is pulled back to it. Overlapping
+    cues are valid SRT but players disagree about them, so accepting ranges
+    stays a pure gain rather than a change in how output behaves. Those pulls
+    are appended to `warnings` when a list is passed — a correction nobody can
+    see is one nobody can judge.
 
     Out-of-order or duplicate timestamps would otherwise produce a negative-length
     cue that players reject outright; those get `min_duration` instead so the line
@@ -114,12 +142,22 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
     """
     cues = []
     for i, seg in enumerate(segments):
-        if i + 1 < len(segments):
-            end = segments[i + 1]["start"]
-            if end <= seg["start"]:
-                end = seg["start"] + min_duration
+        nxt = segments[i + 1]["start"] if i + 1 < len(segments) else None
+        own = seg.get("end")
+        if own is not None:
+            end = own
+            if nxt is not None and end > nxt:
+                if warnings is not None:
+                    warnings.append(
+                        f"segment at {format_timestamp(seg['start'])} ends after the "
+                        f"next one starts; trimmed to {format_timestamp(nxt)}")
+                end = nxt
+        elif nxt is not None:
+            end = nxt
         else:
             end = seg["start"] + tail_seconds
+        if end <= seg["start"]:
+            end = seg["start"] + min_duration
         text = seg["text"]
         if show_speaker and seg["speaker"]:
             text = f"{seg['speaker']}: {text}"
@@ -330,9 +368,12 @@ def main() -> None:
     segments = parse_segments(strip_frontmatter(raw))
     if not segments:
         sys.exit(
-            f"error: no timestamped segments in {path}.\n"
-            f"Expected lines like '[00:12:03] Speaker 1: ...'. A transcript cached "
-            f"without timestamps cannot become subtitles."
+            f"error: no lines in {path} looked like segments.\n"
+            f"Expected '[00:12:03] Speaker 1: ...' or '[01:01 - 01:55] Speaker 1: ...'.\n"
+            f"Either the recording genuinely has no timestamps, or it was cached in "
+            f"a third shape neither of those covers — see the line-format contract "
+            f"in scripts/cache.py. The earlier wording named only the first "
+            f"possibility and sent people looking at the wrong one (#40)."
         )
 
     # A truncated cache would yield subtitles that just stop mid-recording, with

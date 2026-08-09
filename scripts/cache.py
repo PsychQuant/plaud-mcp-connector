@@ -14,6 +14,35 @@ Subcommands
     mark-full-sweep   record that a listing was walked to its end, unscoped
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
+
+## The line format a producer must write (#40)
+
+`put` takes whatever is on stdin. It does not parse, validate, or normalise a
+single line — deliberately, so any source can land content here. That makes
+this the only place a producer is told what the shape has to be, and
+`tests/test_cache_line_format.py` the only place it is enforced.
+
+For `--kind transcript` and `--kind polish`, one segment per line, in exactly
+one of two forms:
+
+    [MM:SS] Speaker 1: text          [HH:MM:SS] Speaker 1: text
+    [MM:SS - MM:SS] Speaker 1: text  [HH:MM:SS - HH:MM:SS] Speaker 1: text
+
+The second carries a real end time. The first does not, and `to_srt` has to
+infer one from where the next segment starts — which leaves the last segment
+with a guess. Both forms are accepted; the ranged one produces better
+subtitles, so a producer that has end times should keep them.
+
+**Two forms, and only these two.** The list is closed, and closed on purpose:
+both entries are shapes that a shipped producer actually emits, measured
+2026-08-09 — Plaud's MCP path writes the first, its CLI writes the second. A
+third would go here only after something real emits it, never because it
+seems reasonable. `plaud-index` wrote both for months while `to_srt` accepted
+only one, and every test passed the whole time (#40).
+
+`--kind outline` and `--kind summary` are **not covered**. Their line shapes
+have not been measured, and writing down an unmeasured shape as if it were
+known is the mistake #36 was about.
 """
 import argparse
 import json
