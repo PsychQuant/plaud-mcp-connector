@@ -69,8 +69,31 @@ A proxy that looks like a guard is worse than an acknowledged gap.
 
 The same sentence governs rule 2. "Every capability a description claims has
 a step performing it" is not checkable — it needs to read the prose and know
-what counts as performing. So rule 2 is a **closed list of one**, and its
-tests are named for the single claim they pin.
+what counts as performing. So rule 2 is a **closed list of one**.
+
+## What actually protects #36, and what rule 2 adds (#39)
+
+`TestTheExactRegressionOf36` further down is the load-bearing guard: it names
+five files and five sentence shapes, so the exact edit that would undo #36
+fails. Rule 2 is the weaker, more general layer sitting above it — a pattern
+match, and a pattern match can be walked around.
+
+That difference is worth being blunt about, because the two are easy to
+confuse. The tests of rule 2 are named for the *rule* (`test_a_capability_
+the_body_never_performs_is_flagged`), not for the claim, and the mechanism —
+a registry keyed by name, with a `history` field — is shaped like something
+meant to grow. It is not. A second entry may be added only after that claim
+has been measured against the steps and found unbacked; the comment above
+`CAPABILITY_CLAIMS` states the bar, and it is the bar, not a preference.
+
+**Known limit, kept rather than papered over**: the claim pattern matches
+adjacent words, so `start the transcription` walks past it. A wider regex
+would move the bypass, not close it — the words admit unlimited variation
+and the property being checked is semantic. `test_a_known_bypass_of_the_
+capability_pattern` records it as a fact of the mechanism. What that costs is
+bounded and stated: rule 2 catches the sentence that was actually written,
+`TestTheExactRegressionOf36` catches the edit that would restore it, and
+neither claims to catch a rephrasing.
 
 Rule 2 also stops at the `description:` block, and does **not** scan body
 prose. #36's false sentence was in both, so this is a real gap, chosen with
@@ -275,11 +298,20 @@ def _body(skill_md: pathlib.Path) -> str:
     return text[m.end():] if m else text
 
 
-# Backtick and tilde fences both. Tilde is unused in this repo today (all
-# eight skills use backticks, all paired — measured), so this arm is latent;
-# it costs four characters and removes a false-positive class before anyone
-# trips it.
-FENCE = re.compile(r"(?ms)^[ \t]*(?:```|~~~)[^\n]*\n(.*?)^[ \t]*(?:```|~~~)")
+# A fence closes with the SAME delimiter, at least as long as the opener, on
+# a line holding nothing else. All three conditions were missing (#39 gap 3):
+# a ``` block could be closed by ~~~, a four-backtick wrapper by three, and
+# ```not-a-close counted as a closing line. Each one lets prose outside any
+# real fence be read as an executable step.
+#
+# `(?P=tick)` is the backreference that ties closer to opener; `{2,}` after it
+# allows a longer closer (CommonMark permits that) while the group's own
+# length sets the floor. `[ \t]*$` is what stops ```not-a-close.
+FENCE = re.compile(
+    r"(?ms)^[ \t]*(?P<tick>`{3,}|~{3,})[^\n`~]*\n"
+    r"(?P<body>.*?)"
+    r"^[ \t]*(?P=tick)(?:`|~)*[ \t]*$"
+)
 
 
 def code_fences(body: str) -> list[str]:
@@ -305,7 +337,7 @@ def code_fences(body: str) -> list[str]:
     this repo: eight skills, all backtick, all paired, no indented code
     blocks. Latent, not live.
     """
-    return FENCE.findall(body)
+    return [m.group("body") for m in FENCE.finditer(body)]
 
 
 # A line that only talks. `echo`/`print` emit text for the reader; `#` is a
@@ -349,13 +381,49 @@ def _performs(rule: CapabilityClaim, body: str) -> bool:
     return False
 
 
+# --- naming a capability without claiming it (#39 gap 2) -------------------
+#
+# This rule keeps its OWN negation check rather than reusing `NEGATED` /
+# `clauses()`. Those are tuned for rule 1's exclusivity claims and are shared
+# with #35's tests; widening them to fit this rule risks regressing #35 for a
+# problem that is not #35's. Two shapes, closed list — do NOT add a third by
+# analogy:
+#
+#   1. denial — the negation may sit on EITHER side of the named capability.
+#      `NEGATED` only looks leftward, so `"Start transcription" is not a
+#      capability of this skill.` was flagged: the guard punished a sentence
+#      whose whole point was to disclaim the thing.
+#   2. quoted speech — the capability is named as something the USER says, not
+#      something the skill does. Both the quotes and the speech verb are
+#      required; quotes alone are emphasis, and every skill here has trigger
+#      phrases in exactly this shape.
+_CAP_DENIAL = (r"\b(not|never|isn't|is not|aren't|are not|do not|don't"
+               r"|does not|doesn't)\b")
+_CAP_DENIED_AFTER = re.compile(
+    rf"^[\"'“”‘’」』]*[\s,]*(\w+[\s,]+){{0,3}}{_CAP_DENIAL}", re.I)
+_CAP_SPEECH = re.compile(r"\b(say|says|saying|ask|asks|asking|tell|tells"
+                         r"|request|requests)\b|說|問|要求", re.I)
+_QUOTES = "\"'“”‘’「」『』"
+
+
+def _named_but_not_claimed(clause: str, m: re.Match) -> bool:
+    """True when the clause names the capability without asserting it."""
+    if NEGATED.search(clause[: m.start()]):          # denial before
+        return True
+    if _CAP_DENIED_AFTER.search(clause[m.end():]):   # denial after
+        return True
+    before, after = clause[: m.start()], clause[m.end():]
+    quoted = before.rstrip()[-1:] in _QUOTES and after.lstrip()[:1] in _QUOTES
+    return quoted and bool(_CAP_SPEECH.search(before))
+
+
 def unbacked_claims(description: str, body: str) -> list[str]:
     """Clauses claiming a capability no step in `body` performs.
 
-    Negation is checked the same way rule 1 checks it, and for a sharper
-    reason: the *fix* for #36 puts the words "start transcription" into the
-    description — inside "It does not start transcription". A guard that
-    flagged its own remedy would be uninstalled within the day.
+    A named capability is not always a claimed one, and the sharpest case is
+    this guard's own remedy: the #36 fix puts the words "start transcription"
+    into the description — inside "It does not start transcription". A guard
+    that flagged its own fix would be uninstalled within the day.
     """
     bad = []
     for rule in CAPABILITY_CLAIMS:
@@ -363,7 +431,7 @@ def unbacked_claims(description: str, body: str) -> list[str]:
             m = rule.claim.search(clause)
             if not m:
                 continue
-            if NEGATED.search(clause[: m.start()]):
+            if _named_but_not_claimed(clause, m):
                 continue
             if not _performs(rule, body):
                 bad.append(clause)
@@ -417,6 +485,53 @@ class TestTheRuleItself(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual([], offending_claims(text),
                                  f"should NOT have been flagged: {text}")
+
+    def test_a_known_bypass_of_the_capability_pattern(self):
+        """An article between the words walks past the claim pattern (#39).
+
+        Asserted, not fixed. The pattern matches adjacent words; `start the
+        transcription` does not match. A wider regex moves the bypass rather
+        than closing it — the property is semantic and the phrasings are
+        unlimited, so the honest thing is to say where the edge is.
+
+        This is a fact about the mechanism, not a wish. If someone widens the
+        pattern later this test goes red, and the docstring above has to be
+        rewritten in the same change — which is the point.
+        """
+        self.assertEqual(
+            [], unbacked_claims("It will start the transcription for you.",
+                                "no steps here"),
+            "the pattern now catches this — update the limits in the module "
+            "docstring, do not just delete this test",
+        )
+
+    def test_denying_the_capability_after_naming_it_is_not_claiming_it(self):
+        """A disclaimer must not be flagged (#39 gap 2).
+
+        `NEGATED` only looks at text BEFORE the match, so a negation that
+        follows it is invisible: `"Start transcription" is not a capability
+        of this skill` was flagged as a claim. Punishing the exact sentence
+        that disowns the capability teaches people to delete disclaimers.
+        """
+        self.assertEqual(
+            [], unbacked_claims('"Start transcription" is not a capability '
+                                'of this skill.', "no steps here"),
+            "a sentence denying the capability was flagged as claiming it",
+        )
+
+    def test_a_capability_named_only_as_something_the_user_might_say(self):
+        """Trigger phrases are not claims (#39 gap 1b).
+
+        `description:` exists partly to hold what a user might type — this
+        repo's descriptions carry eleven languages of them. Treating quoted
+        user speech as a claim by the skill would flag correct routing
+        documentation.
+        """
+        self.assertEqual(
+            [], unbacked_claims('Use this when the user says '
+                                '"start transcription".', "no steps here"),
+            "a quoted trigger phrase was read as the skill claiming it",
+        )
 
     def test_a_qualifier_elsewhere_in_the_clause_does_not_bless_a_global_claim(self):
         """The precise hole the first draft had, kept as a permanent case."""
@@ -616,11 +731,95 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
             "a skill that really presses the button may say that it does",
         )
 
+    # --- fence pairing (#39 gap 3) -------------------------------------
+    #
+    # The fence regex matched any opener against any closer, so a block
+    # could be "closed" by a different delimiter, or by a line that merely
+    # starts with one. Both let prose be read as executable steps.
+
+    def test_a_backtick_fence_is_not_closed_by_a_tilde(self):
+        self.assertEqual(
+            [], code_fences("```bash\nsafari-browser click 立即產生\n~~~\n"),
+            "a ``` block was closed by ~~~, so unfenced prose after it "
+            "would be read as a step",
+        )
+
+    def test_a_closing_line_must_be_only_the_delimiter(self):
+        self.assertEqual(
+            [], code_fences("```bash\nsafari-browser click 立即產生\n```not-a-close\n"),
+            "```not-a-close was treated as a closing fence",
+        )
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self):
+        """Quad-backtick wrappers exist to contain triple-backtick examples."""
+        body = "````md\n```bash\nsafari-browser click 立即產生\n```\n````\n"
+        fences = code_fences(body)
+        self.assertEqual(1, len(fences), f"expected one outer fence, got {fences}")
+        self.assertIn("```bash", fences[0], "the inner example was lost")
+
     def test_a_tilde_fenced_step_counts_too(self):
         self.assertEqual(
             [], unbacked_claims(self.CLAIMS, self.BODY_WITH_TILDE_STEP),
             "~~~ is a markdown fence; a parser that only knows ``` would flag "
             "a skill whose step is right there",
+        )
+
+
+class TestTheRuleThroughTheFileFormat(unittest.TestCase):
+    """The same rule, reached the way production reaches it (#39 gap 4).
+
+    Every test above hands `unbacked_claims` two strings directly. That
+    checks the rule and nothing else — `_description` and `_body` are never
+    run, so a parser that silently dropped part of a description would leave
+    all of them green while the live scan quietly stopped seeing anything.
+
+    The live tests cover the empty case (`test_the_scan_actually_reads_*`),
+    but "not empty" is a weaker claim than "the part that carries the claim
+    survived". The hazard is positional: `_description` stops at the next
+    top-level YAML key, so the *last* line of the block is the one an
+    off-by-one drops. Both tests below put the capability there.
+    """
+
+    def _skill_file(self, body: str) -> pathlib.Path:
+        import tempfile
+        d = pathlib.Path(tempfile.mkdtemp())
+        p = d / "SKILL.md"
+        p.write_text(
+            "---\n"
+            "name: round-trip\n"
+            'description: "Upload a file to Plaud through the web app, and\n'
+            '  then start transcription for it."\n'
+            "metadata:\n"
+            "  requires:\n"
+            "    bins: []\n"
+            "---\n"
+            "\n# A skill\n\n" + body,
+            encoding="utf-8")
+        return p
+
+    BODY_WITHOUT_STEP = (
+        "Tell the user to press 產生 / Generate themselves.\n\n"
+        "```bash\nsafari-browser open https://app.plaud.ai\n```\n" + "x" * 300)
+
+    BODY_WITH_STEP = (
+        "```bash\nsafari-browser click '立即產生 / Generate now'\n```\n" + "x" * 300)
+
+    def test_a_claim_on_the_last_description_line_is_still_read(self):
+        p = self._skill_file(self.BODY_WITHOUT_STEP)
+        self.assertIn("start transcription", _description(p),
+                      "the last line of the description block was dropped — "
+                      "every synthetic test above would still pass")
+        self.assertTrue(
+            unbacked_claims(_description(p), _body(p)),
+            "an unbacked claim survived the round trip through SKILL.md",
+        )
+
+    def test_the_round_trip_still_clears_a_backed_claim(self):
+        """Otherwise the test above would pass on a parser that flags anything."""
+        p = self._skill_file(self.BODY_WITH_STEP)
+        self.assertEqual(
+            [], unbacked_claims(_description(p), _body(p)),
+            "a skill whose step is right there was flagged through the file",
         )
 
 
