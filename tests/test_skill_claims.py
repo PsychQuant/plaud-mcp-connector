@@ -298,20 +298,31 @@ def _body(skill_md: pathlib.Path) -> str:
     return text[m.end():] if m else text
 
 
-# A fence closes with the SAME delimiter, at least as long as the opener, on
-# a line holding nothing else. All three conditions were missing (#39 gap 3):
-# a ``` block could be closed by ~~~, a four-backtick wrapper by three, and
+# A fence closes with the SAME character, at least as long as the opener, on a
+# line holding nothing else. All three conditions were missing (#39 gap 3): a
+# ``` block could be closed by ~~~, a four-backtick wrapper by three, and
 # ```not-a-close counted as a closing line. Each one lets prose outside any
 # real fence be read as an executable step.
 #
-# `(?P=tick)` is the backreference that ties closer to opener; `{2,}` after it
-# allows a longer closer (CommonMark permits that) while the group's own
-# length sets the floor. `[ \t]*$` is what stops ```not-a-close.
+# `(?P=ch)` pins the character, `(?P=tick)` pins the length floor, and
+# `[ \t]*$` stops ```not-a-close. The first pass wrote the closer as
+# `(?P=tick)(?:`|~)*`, which let ```~ close a backtick fence — the comment
+# said "SAME delimiter" while the code accepted a mixed one (#39 R2 / F7).
+#
+# Indentation is at most three spaces, per CommonMark. `[ \t]*` accepted any,
+# so a four-space indented block — which CommonMark reads as literal text,
+# and which is how people show fence syntax — was executed as a step (F1).
 FENCE = re.compile(
-    r"(?ms)^[ \t]*(?P<tick>`{3,}|~{3,})[^\n`~]*\n"
-    r"(?P<body>.*?)"
-    r"^[ \t]*(?P=tick)(?:`|~)*[ \t]*$"
+    r"(?m)^ {0,3}(?P<tick>(?P<ch>[`~])(?P=ch){2,})[^\n`]*\n"
+    r"(?s:(?P<body>.*?))"
+    r"^ {0,3}(?P=tick)(?P=ch)*[ \t]*$"
 )
+
+# Markdown that is not live: an HTML comment is how a step gets retired, and a
+# fence inside one is not a step (F2). Stripped before any fence scanning,
+# because the alternative — noticing it afterwards — means knowing where each
+# fence came from.
+HTML_COMMENT = re.compile(r"(?s)<!--.*?-->")
 
 
 def code_fences(body: str) -> list[str]:
@@ -340,19 +351,31 @@ def code_fences(body: str) -> list[str]:
     Measured 2026-08-10, each by running the input:
 
         unclosed fence      → []   the block is dropped, not swallowed
-        four-space indent   → []   CommonMark calls it code; this does not
+        four-space indent   → []   literal text in CommonMark, and here too
         fence in blockquote → []   not seen
+        inside <!-- -->     → []   stripped before scanning; a retired step
 
-    All three are the false-positive direction: a real step goes unseen, the
-    claim is flagged, and someone notices. The quad-backtick case used to sit
-    here too and no longer does — see `_step_fences`, which drops wrappers
-    deliberately rather than by accident.
+    The first three are the false-positive direction: a real step goes unseen,
+    the claim is flagged, and someone notices. The fourth is deliberate.
 
-    Measured against this repo: eight skills, 49 fenced blocks, every one
-    closed by its own delimiter (`fences × 2 == delimiter lines` holds for
-    all eight), no indented and no nested blocks. Latent, not live.
+    Two cases used to sit in this list and no longer do. A quad-backtick
+    wrapper is now dropped on purpose — see `_step_fences` — rather than by
+    the accident of the inner fence closing the outer one. And a four-space
+    indented example used to be *executed*: `[ \\t]*` accepted any indentation
+    where CommonMark allows at most three spaces, so the way people show
+    fence syntax was read as a step (#39 R2).
+
+    Measured against this repo: across all eight skills, every fenced block is
+    closed by its own delimiter — `fences × 2 == delimiter lines` holds file by
+    file — and there are no indented and no nested blocks. So all of the above
+    is latent, not live.
+
+    No count is given on purpose. An earlier version of this paragraph carried
+    one, and the very next commit to a skill made it wrong: `plaud-index` grew
+    a fenced example for #37, and the number sat here describing a repo that
+    no longer existed. The invariant survives edits; the tally does not.
     """
-    return [m.group("body") for m in FENCE.finditer(body)]
+    return [m.group("body") for m in FENCE.finditer(HTML_COMMENT.sub("", body))]
 
 
 # A line that only talks. `echo`/`print` emit text for the reader; `#` is a
@@ -367,7 +390,10 @@ _TALKS = re.compile(
 _CLICKS = re.compile(r"\.click\s*\(|\bclick\b", re.I)
 
 
-_FENCE_OPENER = re.compile(r"(?m)^[ \t]*(?:`{3,}|~{3,})")
+# A fence opener inside a wrapper may carry a container prefix — `> ` in a
+# blockquote, `- ` in a list — and it is still an opener. Without those, a
+# blockquoted example inside a documentation wrapper was read as a step (F8).
+_FENCE_OPENER = re.compile(r"(?m)^[ \t]*(?:[>*+-][ \t]*|\d+[.)][ \t]*)*(?:`{3,}|~{3,})")
 
 
 def _step_fences(body: str) -> list[str]:
@@ -436,19 +462,33 @@ def _performs(rule: CapabilityClaim, body: str) -> bool:
 # starts transcription and does not need the app open.` — a live claim
 # excused by a denial of something else entirely. Nothing but the comma in
 # the variant with one saved that case.
-_CAP_DENIAL = (r"\b(not|never|isn't|is not|aren't|are not|do not|don't"
-               r"|does not|doesn't)\b")
+# Every window here is tight on purpose. The first pass used "a negation
+# somewhere within a few words", and that is not a relationship — it accepted
+# `It does not require setup and can start transcription.` (a live claim, let
+# through by a denial of something else) and `The description says the skill
+# can "start transcription".` (a claim, let through because a speech verb
+# happened to appear earlier). Both are the silent direction (#39 R2 / F4,F6).
+_CAP_DENIAL = (r"(not|never|isn't|is not|aren't|are not|do not|don't"
+               r"|does not|doesn't|cannot|can't|不會|不能|並非)")
+# Denial after: at most one word between the closing quote and the negation.
 _CAP_DENIED_AFTER = re.compile(
-    rf"^[\"'“”‘’」』]*[\s,]*(\w+[\s,]+){{0,3}}{_CAP_DENIAL}", re.I)
-_CAP_SPEECH = re.compile(r"\b(say|says|saying|ask|asks|asking|tell|tells"
-                         r"|request|requests)\b|說|問|要求", re.I)
+    rf"^[\"'“”‘’」』]*[\s,]*(\w+[\s,]+)?\b{_CAP_DENIAL}\b", re.I)
+# Denial in front: the negation must be the thing immediately governing the
+# capability. `NEGATED`'s five-word window belongs to rule 1 and stays there.
+_CAP_DENIED_BEFORE = re.compile(
+    rf"\b{_CAP_DENIAL}\b\s+(\w+\s+)?$", re.I)
+# Speech verb: immediately before the quote, not merely somewhere earlier.
 _QUOTES = "\"'“”‘’「」『』"
+_Q = re.escape(_QUOTES)
+_CAP_SPEECH = re.compile(
+    rf"(\b(say|says|saying|ask|asks|asking|tell|tells|request|requests)\b"
+    rf"|說|問|要求)[\s:,：、{_Q}]*$", re.I)
 
 
 def _named_but_not_claimed(clause: str, m: re.Match) -> bool:
     """True when the clause names the capability without asserting it."""
     before, after = clause[: m.start()], clause[m.end():]
-    if NEGATED.search(before):                       # arm 1: denial in front
+    if _CAP_DENIED_BEFORE.search(before):            # arm 1: denial in front
         return True
     if before.rstrip()[-1:] not in _QUOTES or after.lstrip()[:1] not in _QUOTES:
         return False                                 # arm 2 needs the quotes
@@ -524,6 +564,42 @@ class TestTheRuleItself(unittest.TestCase):
                 self.assertEqual([], offending_claims(text),
                                  f"should NOT have been flagged: {text}")
 
+    # --- limits kept as facts, not fixed (#39 R2) --------------------------
+    #
+    # Cross-model review reached four more shapes. All four fail in the LOUD
+    # direction — a real step goes unseen, or a genuine disclaimer is flagged,
+    # and either way somebody reads a red test and rewrites one sentence.
+    # None of them lets an unbacked claim through, which is the difference
+    # that decided whether to fix or to record.
+    #
+    # Recorded as tests rather than prose because the two drift apart. If a
+    # later change makes one of these pass, the test goes red and whoever did
+    # it has to say so here.
+
+    def test_limit_a_denial_more_than_two_words_after_is_flagged(self):
+        self.assertTrue(
+            unbacked_claims('"Start transcription" is a feature this skill '
+                            'does not provide.', "no steps here"),
+            "the window widened — say so in the docstring",
+        )
+
+    def test_limit_quoted_speech_must_be_exactly_the_capability(self):
+        """`says "please start transcription"` has a word inside the quotes."""
+        for text in ('Use this when the user says "please start transcription".',
+                     '"Start transcription" is what the user says.'):
+            with self.subTest(text=text):
+                self.assertTrue(unbacked_claims(text, "no steps here"),
+                                "the quoted-speech arm widened — say so above")
+
+    def test_limit_a_step_that_generates_markdown_is_read_as_documentation(self):
+        """A heredoc writing a fenced example trips the wrapper filter."""
+        body = ("````bash\ncat > r.md <<'EOF'\n```text\nx\n```\nEOF\n"
+                "safari-browser click '立即產生 / Generate now'\n````\n")
+        self.assertTrue(
+            unbacked_claims("Upload a file and start transcription.", body),
+            "`_step_fences` learned to tell data from markup — say so above",
+        )
+
     def test_a_known_bypass_of_the_capability_pattern(self):
         """An article between the words walks past the claim pattern (#39).
 
@@ -556,6 +632,45 @@ class TestTheRuleItself(unittest.TestCase):
                                 'of this skill.', "no steps here"),
             "a sentence denying the capability was flagged as claiming it",
         )
+
+    def test_a_denial_in_front_must_govern_the_capability(self):
+        """Arm 1, tightened for #39 R2 / F4.
+
+        `NEGATED`'s window is five words, which is right for rule 1 — "we do
+        not claim that this is the only path" needs the room. Reused here it
+        exempted `It does not require setup and can start transcription.`: a
+        live claim, excused because a denial of something else happened to be
+        four words upstream. Capability gets its own one-word window; rule 1's
+        `NEGATED` is untouched, which is the point of not sharing it.
+        """
+        self.assertTrue(
+            unbacked_claims("It does not require setup and can start "
+                            "transcription.", "no steps here"),
+            "a claim was exempted by a denial that was not about it",
+        )
+        self.assertEqual(
+            [], unbacked_claims("It does not start transcription.",
+                                "no steps here"),
+            "the #36 remedy's own sentence is now flagged",
+        )
+
+    def test_a_speech_verb_must_be_next_to_the_quote(self):
+        """Arm 2, tightened for #39 R2 / F6.
+
+        Searching all preceding text for a speech verb let two real claims
+        through: `The description says the skill can "start transcription".`
+        and `When the user asks for an upload this skill will "start
+        transcription".` In both the quoted words are the skill's, not the
+        user's — the verb was simply somewhere to the left.
+        """
+        for text in ('The description says the skill can "start transcription".',
+                     'When the user asks for an upload this skill will '
+                     '"start transcription".'):
+            with self.subTest(text=text):
+                self.assertTrue(
+                    unbacked_claims(text, "no steps here"),
+                    "a claim was read as the user's words",
+                )
 
     def test_a_real_claim_is_not_excused_by_an_unrelated_denial(self):
         """The denial has to be about the capability, not merely near it.
@@ -622,6 +737,7 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
     """
 
     CLAIMS = "Upload a file into your own Plaud library and start transcription."
+    STEP = "safari-browser click '立即產生 / Generate now'"
     DENIES = "Upload a file into your own Plaud library. It does not start transcription."
     BODY_WITHOUT_STEP = (
         "### Step 2 — upload\n"
@@ -846,6 +962,47 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
             unbacked_claims("Upload a file and start transcription.", doc),
             "a documentation example vouched for a step that does not exist",
         )
+
+    # --- what is not live markdown (#39 R2, cross-model) ------------------
+    #
+    # Four ways a body can *contain* a step without *having* one. All four
+    # were accepted, and all four are the silent direction — the claim
+    # passes and nothing looks wrong.
+
+    def test_a_four_space_indented_fence_is_literal_text(self):
+        """CommonMark allows at most three spaces before a fence."""
+        body = "The docs should contain:\n\n    ```bash\n    " + self.STEP + "\n    ```\n"
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, body),
+            "an indented literal example was executed as a step",
+        )
+
+    def test_a_step_inside_an_html_comment_is_retired(self):
+        """Commenting a step out is how it gets retired."""
+        body = "<!-- obsolete:\n```bash\n" + self.STEP + "\n```\n-->\n"
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, body),
+            "a commented-out step backed a live claim",
+        )
+
+    def test_a_blockquoted_example_inside_a_wrapper_is_documentation(self):
+        body = "````md\n> ```bash\n> " + self.STEP + "\n> ```\n````\n"
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, body),
+            "a blockquoted example inside a wrapper backed the claim",
+        )
+
+    def test_a_closer_must_be_the_same_character_as_its_opener(self):
+        """The comment said SAME delimiter; the code accepted a mixed one."""
+        self.assertEqual([], code_fences("```bash\n" + self.STEP + "\n```~\n"),
+                         "```~ closed a backtick fence")
+        self.assertEqual([], code_fences("~~~bash\n" + self.STEP + "\n~~~`\n"),
+                         "~~~` closed a tilde fence")
+
+    def test_a_tilde_in_the_info_string_does_not_lose_the_block(self):
+        """`~` is legal in a backtick fence's info string; a path has one."""
+        fences = code_fences('```bash title="~/start.sh"\n' + self.STEP + "\n```\n")
+        self.assertEqual(1, len(fences), "a real step was dropped over a tilde")
 
     def test_a_tilde_fenced_step_counts_too(self):
         self.assertEqual(
