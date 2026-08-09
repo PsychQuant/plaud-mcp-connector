@@ -330,12 +330,27 @@ def code_fences(body: str) -> list[str]:
     nothing. A guard that its own fix disarms is worse than no guard, because
     the green is now evidence for the wrong thing.
 
-    Known blind spots, all in the false-positive direction (a skill that DOES
-    have the step gets flagged — loud, and one edit away): an unclosed fence
-    swallows everything after it, four-space indented blocks are not fences at
-    all, and a quad-backtick wrapper hides the inner block. Measured against
-    this repo: eight skills, all backtick, all paired, no indented code
-    blocks. Latent, not live.
+    Known blind spots, re-measured for #39 because the previous list got its
+    own limits wrong — it said an unclosed fence "swallows everything after
+    it", and an unclosed fence in fact returns nothing at all. Describing a
+    blind spot incorrectly is worse than not listing it: it reads as due
+    diligence. Cross-model review caught that one; the author does not
+    re-examine a limitation he just wrote down.
+
+    Measured 2026-08-10, each by running the input:
+
+        unclosed fence      → []   the block is dropped, not swallowed
+        four-space indent   → []   CommonMark calls it code; this does not
+        fence in blockquote → []   not seen
+
+    All three are the false-positive direction: a real step goes unseen, the
+    claim is flagged, and someone notices. The quad-backtick case used to sit
+    here too and no longer does — see `_step_fences`, which drops wrappers
+    deliberately rather than by accident.
+
+    Measured against this repo: eight skills, 49 fenced blocks, every one
+    closed by its own delimiter (`fences × 2 == delimiter lines` holds for
+    all eight), no indented and no nested blocks. Latent, not live.
     """
     return [m.group("body") for m in FENCE.finditer(body)]
 
@@ -350,6 +365,26 @@ _TALKS = re.compile(
 )
 # What acting on a control looks like here.
 _CLICKS = re.compile(r"\.click\s*\(|\bclick\b", re.I)
+
+
+_FENCE_OPENER = re.compile(r"(?m)^[ \t]*(?:`{3,}|~{3,})")
+
+
+def _step_fences(body: str) -> list[str]:
+    """Fenced blocks that could be steps — documentation wrappers dropped.
+
+    A block containing a fence opener is markdown *about* markdown: the outer
+    wrapper exists so the inner example renders. Reading its contents as steps
+    would let an illustration vouch for a step the skill never performs, and
+    that failure is the silent one — the claim simply passes.
+
+    This exists because the delimiter-pairing fix (#39) created it. Before
+    that fix a quad-backtick wrapper was closed by the inner ``` and the
+    example escaped notice by accident; pairing correctly keeps the wrapper
+    whole, which means keeping its example too. Dropping the wrapper is the
+    strict direction: at worst a real step is missed, which is loud.
+    """
+    return [f for f in code_fences(body) if not _FENCE_OPENER.search(f)]
 
 
 def _performs(rule: CapabilityClaim, body: str) -> bool:
@@ -368,8 +403,8 @@ def _performs(rule: CapabilityClaim, body: str) -> bool:
     flagged because it never names the button.
     """
     if rule.driver is None:
-        return any(rule.action.search(f) for f in code_fences(body))
-    for fence in code_fences(body):
+        return any(rule.action.search(f) for f in _step_fences(body))
+    for fence in _step_fences(body):
         # Continuations first: a command wrapped with `\` is one logical line.
         for line in re.sub(r"\\\s*\n\s*", " ", fence).splitlines():
             if _TALKS.search(line):
@@ -756,6 +791,25 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
         fences = code_fences(body)
         self.assertEqual(1, len(fences), f"expected one outer fence, got {fences}")
         self.assertIn("```bash", fences[0], "the inner example was lost")
+
+    def test_a_block_that_wraps_another_fence_is_documentation(self):
+        """Introduced by the fix above, so pinned here (#39).
+
+        Keeping a quad-backtick wrapper intact means its inner example — which
+        exists to *show* what a step looks like — now sits inside a body the
+        step scan reads. That direction is the silent one: a skill with no
+        real step gets credited with one and the claim passes.
+
+        A fence containing a fence opener is markdown about markdown. Treating
+        it as illustration makes the guard stricter, which is the loud
+        direction if it is ever wrong.
+        """
+        doc = ("````md\n```bash\nsafari-browser click '立即產生'\n```\n````\n"
+               "The block above documents the format; nothing runs it.\n")
+        self.assertTrue(
+            unbacked_claims("Upload a file and start transcription.", doc),
+            "a documentation example vouched for a step that does not exist",
+        )
 
     def test_a_tilde_fenced_step_counts_too(self):
         self.assertEqual(
