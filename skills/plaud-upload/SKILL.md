@@ -2,9 +2,10 @@
 name: plaud-upload
 description: |
   Upload an audio or video file into your own Plaud library. It does not
-  start transcription: Plaud transcribes nothing on its own, and the file
+  start transcription: no step here asks Plaud to, and the uploaded file
   waits at 準備生成 / Ready to generate until somebody presses 產生 /
-  Generate in the web app. Use when the
+  Generate and then 立即產生 / Generate now in the web app — two presses, the
+  second one being the commit. Use when the
   user says "upload to Plaud", "上傳到 Plaud", "transcribe this recording",
   "把這個音檔丟去 Plaud 轉錄", or hands over a local audio/video file to be
   transcribed — uploading is the first step of that, so say plainly that the
@@ -12,7 +13,8 @@ description: |
   and the CLI — are read-only, so uploading needs something outside them;
   this skill does it by driving Safari against web.plaud.ai, and is macOS-only
   for that reason. `plaud-index` can fetch a transcript into the local cache
-  once one exists, which is after that press and not before.
+  once one exists, which is after both presses and after Plaud has finished
+  producing it — not before.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "zu Plaud hochladen", "subir a Plaud", "téléverser vers Plaud", "Plaudにアップロード", "carica su Plaud", "uploaden naar Plaud", "enviar para o Plaud", "tải lên Plaud", "อัปโหลดไปยัง Plaud", "muat naik ke Plaud", "رفع إلى بلود".
 argument-hint: "<file_path_or_glob>"
@@ -160,9 +162,10 @@ visually, then confirm the recording appears in the library.
 
 ### The skill stops here, and the recording has no transcript
 
-Say so. The upload is done and nothing else is in motion — Plaud starts no
-transcription of its own, whether the audio came from a device or from here.
-The file sits at **準備生成 / Ready to generate** until somebody opens it and
+Say so. The upload is done and nothing else is in motion: **this skill never
+asks Plaud to transcribe** — no step above does, which is the whole of what
+#36 established. The file sits at **準備生成 / Ready to generate** until
+somebody opens it and
 presses **產生 / Generate**, then **立即產生 / Generate now**. Plaud localises
 its UI, so quote whichever pair matches what the user is looking at — naming
 only the Chinese leaves an English-locale reader hunting for a string that is
@@ -177,9 +180,13 @@ read 點擊「生成」選擇如何生成轉錄與總結 — it asks *which* tra
 to produce. An automatic pipeline would not ask.
 
 No file was uploaded to check this, so "an upload behaves this way" rests on
-that timestamp inference. What does not rest on it: nothing in that account
-transcribes by itself. Nine of its ten most recent recordings have no
-transcript at all.
+that timestamp inference. A weaker but inference-free observation points the
+same way: nine of that account's ten most recent recordings have no transcript
+at all, which is hard to square with transcription starting by itself.
+
+Both are observations about **one account**, and neither is a statement about
+every Plaud plan or device. They do not need to be. What the skill promises is
+about the skill: it uploads, and it asks for nothing further.
 
 So tell the user the next step is theirs:
 

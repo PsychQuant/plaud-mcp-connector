@@ -242,12 +242,21 @@ CAPABILITY_CLAIMS = (
         # Plaud's generate flow is two presses; the second one is the commit.
         # Matching only the first would accept a skill that opens the dialog
         # and walks away.
-        action=re.compile(r"立即產生|Generate now"),
-        # The skill drives the browser through `safari-browser` — that string
-        # is what separates a command this skill runs from a command it tells
-        # the reader to run. Without it, a fenced block saying "Open Plaud and
-        # click 立即產生" satisfies the rule, which is the prose hole one level
-        # down (verified reachable, kept as a REJECT case below).
+        # Two ways a line can BE the commit press, rather than mention it:
+        # naming the confirm control by its label, or clicking a control whose
+        # selector says it confirms generation. Either counts; neither alone
+        # is required.
+        action=re.compile(
+            r"立即產生|Generate now"
+            r"|confirm[-_]?generation|generate[-_]?now",
+            re.I,
+        ),
+        # `safari-browser` is how this repo's skills act on a page. Required,
+        # but no longer sufficient — see `driver` usage in `_performs`, which
+        # also demands a click and rejects echo/comment/negated lines. Three
+        # inputs from cross-model review (#36 R3) broke the plain
+        # co-occurrence version in both directions; all three are pinned as
+        # cases above.
         driver=re.compile(r"safari-browser"),
         history=(
             "#36 — plaud-upload said it started transcription from v0.1.0 and "
@@ -299,18 +308,44 @@ def code_fences(body: str) -> list[str]:
     return FENCE.findall(body)
 
 
+# A line that only talks. `echo`/`print` emit text for the reader; `#` is a
+# comment; a negation says the opposite of doing it. None of them press
+# anything, and all three occurred in real review counterexamples.
+_TALKS = re.compile(
+    r"^\s*#|^\s*(?:echo|printf|print|cat)\b"
+    r"|\b(?:never|do not|don't|must not|instead of|rather than|tell the user)\b",
+    re.I,
+)
+# What acting on a control looks like here.
+_CLICKS = re.compile(r"\.click\s*\(|\bclick\b", re.I)
+
+
 def _performs(rule: CapabilityClaim, body: str) -> bool:
     """Does some fenced block actually carry out `rule`?
 
-    Both the action and its driver must land in the SAME fence. A driver
-    somewhere else in the file says the skill drives a browser at some point,
-    not that it drives it *for this*.
+    A line performs the action when all three hold *on that line*: the driver
+    is present, something is clicked, and the line is not merely talking about
+    it. Same-line rather than same-fence, because a fence that uploads and
+    then echoes advice satisfied same-fence while pressing nothing.
+
+    None of this makes the rule sound — a determined author can still write a
+    line that looks like a press and is not one. It closes the three holes
+    that cross-model review actually reached (#36 R3): a sentence saying the
+    skill must NOT click, a driver doing something else while the action sits
+    in an `echo`, and — the other direction — a genuine selector click being
+    flagged because it never names the button.
     """
+    if rule.driver is None:
+        return any(rule.action.search(f) for f in code_fences(body))
     for fence in code_fences(body):
-        if not rule.action.search(fence):
-            continue
-        if rule.driver is None or rule.driver.search(fence):
-            return True
+        # Continuations first: a command wrapped with `\` is one logical line.
+        for line in re.sub(r"\\\s*\n\s*", " ", fence).splitlines():
+            if _TALKS.search(line):
+                continue
+            if (rule.driver.search(line)
+                    and _CLICKS.search(line)
+                    and rule.action.search(line)):
+                return True
     return False
 
 
@@ -479,6 +514,87 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
             "remediate the claim, and goes green forever",
         )
 
+    # Cross-model review (#36 R3) broke the co-occurrence rule in both
+    # directions with three concrete inputs. All three are pinned here.
+    BODY_FENCE_SAYS_NOT_TO = (
+        "```text\n"
+        "Never use safari-browser to click Generate now; tell the user to do it.\n"
+        "```\n"
+    )
+    BODY_DRIVER_UPLOADS_ACTION_ECHOED = (
+        "```bash\n"
+        'safari-browser upload --native "input[type=file]" "$file"\n'
+        'echo "Tell the user to press Generate now"\n'
+        "```\n"
+    )
+    BODY_SELECTOR_CLICK_NO_UI_STRING = (
+        "```bash\n"
+        "safari-browser js \\\n"
+        "  \"document.querySelector('[data-testid=confirm-generation]').click()\"\n"
+        "```\n"
+    )
+
+    def test_a_fence_saying_not_to_do_it_is_not_doing_it(self):
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_FENCE_SAYS_NOT_TO),
+            "co-occurrence of the two strings inside a sentence that says the "
+            "skill must NOT do this counted as doing it",
+        )
+
+    def test_the_driver_must_be_driving_the_action_not_something_else(self):
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_DRIVER_UPLOADS_ACTION_ECHOED),
+            "the driver uploads and the action only appears inside an echo — "
+            "same block, but nothing presses anything",
+        )
+
+    # Reads the button's label; presses nothing. No echo, no negation, so
+    # only the click requirement stands between this and a false pass.
+    BODY_READS_LABEL_WITHOUT_CLICKING = (
+        "```bash\n"
+        "safari-browser js \"var ready = "
+        "document.querySelector('.btn').textContent === '立即產生'\"\n"
+        "```\n"
+    )
+    # Driver on one line, action on another, neither of them talking. Only the
+    # same-LINE requirement stands here — same-fence would let these vouch for
+    # each other.
+    BODY_SPLIT_ACROSS_LINES = (
+        "```bash\n"
+        'safari-browser js "document.querySelector(\'.upload\').click()"\n'
+        "STATUS_LABEL=立即產生\n"
+        "```\n"
+    )
+
+    def test_reading_the_label_is_not_pressing_the_button(self):
+        """Isolates the click requirement.
+
+        Without its own case this passed on the strength of the echo/negation
+        filter instead — a guard whose acid is satisfied by a different guard
+        has no test of its own. Same shape as the tilde arm earlier in #36.
+        """
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_READS_LABEL_WITHOUT_CLICKING),
+            "a command that only compares the label to a string is not the "
+            "skill pressing it",
+        )
+
+    def test_driver_and_action_must_share_a_line(self):
+        """Isolates the same-line requirement, for the same reason."""
+        self.assertTrue(
+            unbacked_claims(self.CLAIMS, self.BODY_SPLIT_ACROSS_LINES),
+            "clicking one control and assigning the other's label to a shell "
+            "variable is not pressing it, even in one block",
+        )
+
+    def test_a_selector_click_counts_even_without_the_ui_label(self):
+        """The false-positive half. A real step may not name the button."""
+        self.assertEqual(
+            [], unbacked_claims(self.CLAIMS, self.BODY_SELECTOR_CLICK_NO_UI_STRING),
+            "a skill that clicks the confirm control by selector is performing "
+            "the action; requiring the UI label as well flags correct work",
+        )
+
     def test_a_fenced_instruction_to_the_user_is_not_a_step(self):
         """One level below the prose hole; verified reachable before this fix."""
         self.assertTrue(
@@ -506,6 +622,107 @@ class TestTheCapabilityRuleItself(unittest.TestCase):
             "~~~ is a markdown fence; a parser that only knows ``` would flag "
             "a skill whose step is right there",
         )
+
+
+class TestTheExactRegressionOf36(unittest.TestCase):
+    """Pin the five sentences #36 removed, in the files they lived in.
+
+    The general rule above guards `description:` only, and that was a real
+    hole: of the five places #36 fixed, one was a description. Cross-model
+    review demonstrated that the other four could be reverted verbatim with
+    the whole suite still green — a guard written to stop #36 recurring that
+    would not have noticed #36 recurring.
+
+    The first instinct was to widen the general rule to body prose. That is
+    the wrong shape and this file already says why: body prose has legitimate
+    non-claiming uses of the same words, and no regex separates them. But the
+    requirement was never a general rule — it was *this measured regression*.
+    Naming the file and the phrasing sidesteps the false-positive problem
+    entirely, because there is nothing to generalise.
+
+    Brittleness is the point. A rewrite that touches these lines should have
+    to look at this list and decide, rather than sail past.
+    """
+
+    # (path, forbidden pattern, what it was)
+    REMOVED = (
+        ("skills/plaud-upload/SKILL.md", r"and\s+starts?\s+transcription",
+         "the description and body headline both claimed the upload starts it"),
+        ("README.md", r"and\s+starts?\s+transcription",
+         "the README's plaud-upload paragraph claimed the same"),
+        ("skills/plaud-upload/SKILL.md", r"transcript\s+reaches\s+your\s+machine",
+         "promised the transcript would arrive on its own"),
+        ("skills/plaud-upload/SKILL.md", r"once\s+processing\s+finishes",
+         "presupposed processing had started; it never does"),
+    )
+
+    # (path, required pattern, why)
+    KEPT = (
+        ("skills/plaud-upload/SKILL.md", r"does not\s*\n?\s*start transcription",
+         "the description must deny it outright — that denial is the fix"),
+        ("README.md", r"立即產生|Generate now",
+         "the README must name the SECOND press; the first only opens the "
+         "chooser, and a reader who stops after one is back in the silent wait"),
+    )
+
+    # File-wide "contains 立即產生" is not enough for the handoff: adding the
+    # second press to the *description* (a later fix) satisfied it on its own,
+    # and the acid run caught the whole handoff section becoming deletable
+    # again. Scope the assertion to the section it is about.
+    HANDOFF_HEADING = "### The skill stops here, and the recording has no transcript"
+
+    def _handoff_section(self) -> str:
+        text = (REPO_ROOT / "skills/plaud-upload/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn(self.HANDOFF_HEADING, text,
+                      "the handoff section is gone — without it the skill ends "
+                      "silently and the user waits for an event that never "
+                      "comes (#36)")
+        start = text.index(self.HANDOFF_HEADING)
+        nxt = text.find("\n## ", start)
+        return text[start:nxt if nxt != -1 else len(text)]
+
+    def test_the_handoff_section_names_both_presses(self):
+        section = self._handoff_section()
+        for pattern, which in ((r"產生 / Generate\b", "first"),
+                               (r"立即產生 / Generate now", "second (the commit)")):
+            with self.subTest(press=which):
+                self.assertRegex(
+                    section, pattern,
+                    f"the handoff no longer names the {which} press — a reader "
+                    f"who stops early is back in the silent wait (#36)",
+                )
+
+    def test_no_removed_sentence_came_back(self):
+        for rel, pattern, was in self.REMOVED:
+            with self.subTest(file=rel, pattern=pattern):
+                text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+                m = re.search(pattern, text, re.I)
+                self.assertIsNone(
+                    m,
+                    f"\n{rel} matched /{pattern}/ again — {was}.\n"
+                    f"Found: {m.group(0) if m else ''!r}\n"
+                    f"#36: the skill uploads and stops. Plaud transcribes "
+                    f"nothing until a person presses 產生 / Generate, then "
+                    f"立即產生 / Generate now.",
+                )
+
+    def test_the_corrections_are_still_there(self):
+        for rel, pattern, why in self.KEPT:
+            with self.subTest(file=rel, pattern=pattern):
+                text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+                self.assertRegex(
+                    text, pattern,
+                    f"\n{rel} no longer matches /{pattern}/ — {why} (#36).",
+                )
+
+    def test_the_files_this_pins_still_exist(self):
+        """A pin against a moved file passes by reading nothing."""
+        for rel in {r for r, _, _ in self.REMOVED} | {r for r, _, _ in self.KEPT}:
+            with self.subTest(file=rel):
+                p = REPO_ROOT / rel
+                self.assertTrue(p.is_file(), f"{rel} is gone — repoint this pin")
+                self.assertGreater(len(p.read_text(encoding="utf-8")), 500,
+                                   f"{rel} is suspiciously short")
 
 
 class TestLiveDescriptions(unittest.TestCase):

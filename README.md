@@ -151,11 +151,13 @@ proofread the research meeting transcript against these slides
 Converts video to audio, checks the 500 MB / 5 h limits, and drives Safari to
 import the file. **macOS only.**
 
-It stops at the upload. Plaud transcribes nothing on its own — the recording
+It stops at the upload, and does not ask Plaud to transcribe. The recording
 waits until you open it and press 產生 / Generate, then 立即產生 / Generate now
 to confirm, and `plaud-index` has nothing to fetch until you do. The skill says
-this when it finishes, because an untranscribed recording is indistinguishable
-from one still processing.
+so when it finishes, because the *page* shows the recording waiting but the
+*API* does not: a recording nobody ever asked to transcribe and one that is
+mid-transcription both come back with an empty `source_list`, so `plaud-index`
+cannot tell them apart and reports both as "no transcript".
 
 ```
 上傳這個音檔到 Plaud 轉錄
