@@ -424,14 +424,18 @@ def _performs(rule: CapabilityClaim, body: str) -> bool:
 # problem that is not #35's. Two shapes, closed list — do NOT add a third by
 # analogy:
 #
-#   1. denial — the negation may sit on EITHER side of the named capability.
-#      `NEGATED` only looks leftward, so `"Start transcription" is not a
-#      capability of this skill.` was flagged: the guard punished a sentence
-#      whose whole point was to disclaim the thing.
-#   2. quoted speech — the capability is named as something the USER says, not
-#      something the skill does. Both the quotes and the speech verb are
-#      required; quotes alone are emphasis, and every skill here has trigger
-#      phrases in exactly this shape.
+#   1. denial in front — `It does not start transcription`. This is the shape
+#      the #36 fix itself uses, and `NEGATED` already reads it.
+#   2. the capability in quotes, which is what turns an assertion into a
+#      mention, plus one of: a denial after it (`"Start transcription" is not
+#      a capability of this skill.`), or a speech verb in front of it (`when
+#      the user says "start transcription"`).
+#
+# The quotes are load-bearing on arm 2 and were not there at first. Asking
+# only whether a denial appeared a few words after the claim accepted `It
+# starts transcription and does not need the app open.` — a live claim
+# excused by a denial of something else entirely. Nothing but the comma in
+# the variant with one saved that case.
 _CAP_DENIAL = (r"\b(not|never|isn't|is not|aren't|are not|do not|don't"
                r"|does not|doesn't)\b")
 _CAP_DENIED_AFTER = re.compile(
@@ -443,13 +447,12 @@ _QUOTES = "\"'“”‘’「」『』"
 
 def _named_but_not_claimed(clause: str, m: re.Match) -> bool:
     """True when the clause names the capability without asserting it."""
-    if NEGATED.search(clause[: m.start()]):          # denial before
-        return True
-    if _CAP_DENIED_AFTER.search(clause[m.end():]):   # denial after
-        return True
     before, after = clause[: m.start()], clause[m.end():]
-    quoted = before.rstrip()[-1:] in _QUOTES and after.lstrip()[:1] in _QUOTES
-    return quoted and bool(_CAP_SPEECH.search(before))
+    if NEGATED.search(before):                       # arm 1: denial in front
+        return True
+    if before.rstrip()[-1:] not in _QUOTES or after.lstrip()[:1] not in _QUOTES:
+        return False                                 # arm 2 needs the quotes
+    return bool(_CAP_DENIED_AFTER.search(after)) or bool(_CAP_SPEECH.search(before))
 
 
 def unbacked_claims(description: str, body: str) -> list[str]:
@@ -552,6 +555,39 @@ class TestTheRuleItself(unittest.TestCase):
             [], unbacked_claims('"Start transcription" is not a capability '
                                 'of this skill.', "no steps here"),
             "a sentence denying the capability was flagged as claiming it",
+        )
+
+    def test_a_real_claim_is_not_excused_by_an_unrelated_denial(self):
+        """The denial has to be about the capability, not merely near it.
+
+        Self-review of the #39 fix: the first version asked only whether a
+        negation appeared within a few words after the claim, so `It starts
+        transcription and does not need the app open.` was accepted — a live
+        claim excused by a denial of something else. Only the comma in the
+        variant below saved it, because `clauses()` splits there; the
+        comma-less form is ordinary English and went straight through.
+        """
+        for text in ("It starts transcription and does not need the app open.",
+                     "It starts transcription, and does not need the app open."):
+            with self.subTest(text=text):
+                self.assertTrue(
+                    unbacked_claims(text, "no steps here"),
+                    "an unbacked claim was excused by an unrelated denial",
+                )
+
+    def test_quotes_alone_do_not_turn_a_claim_into_a_mention(self):
+        """Isolates the speech-verb half of arm 2.
+
+        Removing the speech verb from the condition left every other test
+        green — the mention tests are accepted either way, and nothing
+        asserted that a quoted claim standing on its own is still a claim.
+        A condition with no test of its own is a condition that will be
+        deleted by the next person simplifying this file.
+        """
+        self.assertTrue(
+            unbacked_claims('This skill will "start transcription" for you.',
+                            "no steps here"),
+            "quoting a capability for emphasis was read as merely naming it",
         )
 
     def test_a_capability_named_only_as_something_the_user_might_say(self):
@@ -835,9 +871,15 @@ class TestTheRuleThroughTheFileFormat(unittest.TestCase):
     """
 
     def _skill_file(self, body: str) -> pathlib.Path:
+        # TemporaryDirectory + addCleanup, not mkdtemp: mkdtemp leaves the
+        # directory behind, and these two tests run on every `make check`.
+        # Measured before this was changed: 36 stray SKILL.md directories in
+        # $TMPDIR. The repo's standing rule is that a round trip cleans up
+        # after itself.
         import tempfile
-        d = pathlib.Path(tempfile.mkdtemp())
-        p = d / "SKILL.md"
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        p = pathlib.Path(td.name) / "SKILL.md"
         p.write_text(
             "---\n"
             "name: round-trip\n"
