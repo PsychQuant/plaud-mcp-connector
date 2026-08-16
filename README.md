@@ -272,6 +272,18 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
+- **Only one session can be logging in at a time, machine-wide.** `login` binds
+  its OAuth callback to port 8199, which `@plaud-ai/mcp` hardcodes with no
+  environment override — while every session you open runs its own copy of the
+  server. Start a `login` while another session's two-minute authorisation window
+  is open and you get `port 8199 is in use — another plaud login may still be
+  running`. **The fix is to wait for the other window to close, not to kill
+  anything.** The message invites you to hunt for a stray process, but on a
+  machine with a dozen sessions every one of them shows the same `plaud-mcp`
+  command line, so you cannot tell which is which — and killing the wrong one
+  drops that session's MCP connection, which does not come back by itself. Full
+  measurements and the report we would send upstream:
+  [`docs/upstream-report-port-8199.md`](docs/upstream-report-port-8199.md).
 
 ## Privacy
 
