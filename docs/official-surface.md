@@ -211,6 +211,38 @@ listener still in LISTEN 40+ hours after a login timeout. Which of the five bind
 held it was not recorded, and `http` mode holding it indefinitely is consistent with
 the observation. Unreproduced.
 
+### `Not authenticated` does not mean refresh was skipped
+
+Measured 2026-08-17 against MCP 0.3.8 (0.3.7 identical on this path). Read from
+source, not executed — no failure was induced to watch it happen.
+
+`Not authenticated. Please login first.` has one origin: `PlaudClient.request`
+throws it when `getAccessToken()` returns falsy (`dist/chunk-5NWKLF3V.js:254-257`).
+
+`getAccessToken()` (`:179-194`) **does** refresh, starting 60 seconds before expiry:
+
+| State on disk | Returns | So the caller sees |
+|---|---|---|
+| no token file | `null` | `Not authenticated` |
+| valid, not near expiry | the access token | normal operation |
+| near/past expiry, refresh succeeds | the new access token | normal operation |
+| near/past expiry, refresh throws | `null` — `catch { return null }` at `:187-189` | `Not authenticated` |
+| near/past expiry, no `refresh_token` | `null` | `Not authenticated` |
+
+Rows 1, 4 and 5 are indistinguishable to the user. Row 4 covers a revoked refresh
+token, a 5xx, **and a plain network error** — `refresh()` (`:196-227`) rethrows on
+fetch failure at `:210-212`, and the `catch` above discards it.
+
+The reason is not lost, only unreported: `refresh()` calls
+`onTokenRefresh("error", <type>)` before each throw (`:210`, `:216`), wired to
+telemetry at `dist/chunk-EY5K2UXG.js:38`. The classification exists; it goes to the
+vendor, not to the user holding the failure.
+
+One adjacent path: `expires_at` is set only when the token response carried
+`expires_in` (`:174`, `:224`). Without it the expiry branch never runs, an expired
+token is sent as-is, and the symptom is a 401 rather than this message.
+
+Tracked as [`#46`](https://github.com/PsychQuant/plaud-mcp-connector/issues/46).
 
 ### `get_file` — carries a lot more than metadata
 
