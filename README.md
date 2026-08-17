@@ -272,19 +272,12 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
-- **Two sessions cannot authorise at the same time — but you only ever authorise
-  once.** The OAuth callback binds port 8199, hardcoded machine-wide, while every
-  session runs its own copy of the server. Two `login` calls at once and the second
-  gets `port 8199 is in use`. This bites during first-time setup and then stops
-  mattering: the token is one file for the whole machine, and `login` checks it
-  before touching the port, so once any session has authorised, every other one
-  answers `Already logged in.` Let the other login finish, then retry. If the port
-  stays busy with no login in flight, `lsof -nP -iTCP:8199 -sTCP:LISTEN` names the
-  holder — a `plaud-mcp http` server holds it for its whole life (stopping that one
-  costs nothing to your stdio sessions), the `plaud` CLI binds it too, and anything
-  else is the unexplained case worth reporting. What that report would say, and the
-  measurements behind it:
-  [`docs/upstream-report-port-8199.md`](docs/upstream-report-port-8199.md).
+- **`login` can fail with `port 8199 is in use`.** Five things bind that port —
+  three in the MCP, one in the CLI — so a second login while one is open loses.
+  `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and
+  clears within two minutes, `[::1]:8199` is an `http`-mode server that holds it
+  until stopped. Which binder does what, and what `login` does before it binds
+  anything: [`docs/official-surface.md`](docs/official-surface.md#the-oauth-callback-port-8199).
 
 ## Privacy
 

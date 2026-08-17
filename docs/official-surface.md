@@ -4,9 +4,9 @@ What the official CLI and MCP actually do — not what `--help` says they do.
 
 **Measured 2026-08-07 against `@plaud-ai/cli` 0.3.7 (commit `bacaae9`) and
 `@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** One later section
-carries its own stamp: [the callback-port
-finding](#login-binds-one-machine-wide-port-and-every-session-runs-its-own-server)
-was measured 2026-08-17 against 0.3.8. Everything else on this page is 0.3.7.
+carries its own stamp: [The OAuth callback port,
+8199](#the-oauth-callback-port-8199) was measured 2026-08-17 against MCP 0.3.8.
+Everything else on this page is 0.3.7.
 
 Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
@@ -152,66 +152,65 @@ the CLI". That was wrong: absence of a name was read as absence of a capability.
 
 What is true is a cost difference — see `get_file` below.
 
-### `login` binds one machine-wide port, and every session runs its own server
+### The OAuth callback port, 8199
 
-Measured 2026-08-17 against version 0.3.8 of the MCP package, cross-checked
-against 0.3.7. The `dist/` filenames below carry content hashes and change every
-build; reproduce with a pinned `npx -y @plaud-ai/mcp@0.3.8`.
+Measured 2026-08-17 against MCP 0.3.8 (`dist/` as published) and CLI 0.3.7. `dist/`
+filenames carry content hashes and change per build.
 
-`dist/index.js:36` sets `var CALLBACK_PORT = 8199;` and that file reads no
-environment variable at all — the stdio `login` path has no override for it.
-`dist/chunk-EY5K2UXG.js:28` pins the matching `redirectUri` to
-`http://localhost:8199/auth/callback`.
+**Five places bind or assume the port.** All hardcode 8199:
 
-**Four places in the package bind or assume that port**, not one: `dist/index.js:36`
-(stdio login), `dist/install-RTIXREYV.js:466` (the `install` subcommand's own login),
-`dist/server-VJAFEGJ6.js:1171` (HTTP mode), and the `redirectUri` above. The
-separately-installed `@plaud-ai/cli` makes a fifth, at its own
-`dist/index.js:20948`.
+| Where | Line | Binds when |
+|---|---|---|
+| MCP stdio `login` | `dist/index.js:36` | during a login, until it completes or times out (2 min, `:37`) |
+| MCP `install` | `dist/install-RTIXREYV.js:466` | same, via the same `runOAuthCallback` |
+| MCP `http` mode | `dist/server-VJAFEGJ6.js:1171` | at startup, for the life of the process — no close path (`:1547-1562`); skipped entirely if `PLAUD_CALLBACK_URL` is set |
+| MCP `redirectUri` | `dist/chunk-EY5K2UXG.js:28` | (not a binder — the URI the flow sends) |
+| CLI `plaud login` | `@plaud-ai/cli dist/index.js:20948` | during a login |
 
-HTTP mode is the one to know about, because it behaves differently from the other
-two. Its ports *are* configurable (`dist/server-VJAFEGJ6.js:1169` reads
-`PLAUD_HTTP_PORT`, `:1173` reads `PLAUD_CALLBACK_URL`) — but with
-`PLAUD_CALLBACK_URL` unset it binds 8199 at startup and never closes it
-(`:1547-1562`). A running `plaud-mcp http` is therefore a *permanent* holder of
-the port, not a two-minute one.
+**`lsof` tells them apart.** HTTP mode passes a host to `.listen()`, the others do
+not — which lands in the NAME column:
 
-That collides with how the server is launched. `npx -y @plaud-ai/mcp@latest` is
-one process per client session, and those processes are long-lived: measured on
-one machine, **20 concurrent MCP server processes, the oldest four days old**,
-none orphaned — each one's parent chain leads back to a distinct live client. One
-fixed port against a process population that grows with session count means two
-`login` calls whose two-minute windows overlap will collide, every time. No leak
-is required for this.
+```
+lsof -nP -iTCP:8199 -sTCP:LISTEN
+```
 
-Whether a leak *also* exists is unresolved, and worth stating plainly rather than
-asserting either way. The timeout path reads as closing its listener:
-`dist/chunk-5NWKLF3V.js:393-395` calls `finalize({status:"timeout"}, true)`, and
-`finalize` (`:407-428`) runs `closeAllConnections()` and `close()`. But the report
-that opened [`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44)
-recorded a listener still in LISTEN 40+ hours after a timeout, and we have not
-reproduced or explained it. Reading the code is not the same as watching it run,
-and we have not run the experiment that would settle it — start a login, let it
-time out, then check the *same* PID. (A snapshot showing 8199 free while many idle
-servers are running does not settle it either: an idle stdio server never binds the
-port in the first place, so finding it unbound tests nothing about the timeout
-path.)
+| NAME shows | Holder | Consequence |
+|---|---|---|
+| `*:8199` | a login in progress — MCP stdio, MCP `install`, or CLI | releases within 2 minutes |
+| `[::1]:8199` or `127.0.0.1:8199` | an `http`-mode server | never releases; stopping it does not affect stdio sessions |
+| neither | not a Plaud process | — |
 
-**What makes this mostly a first-run problem:** `login` calls
-`getAccessToken()` first and returns `Already logged in.` without binding anything
-(`dist/index.js:42-46`; the bind is at `:60`). The token store is
-`join(homedir(), ".plaud")` — one directory per machine, shared by every server
-process on it. So the machine needs exactly one successful authorisation; after
-that, a colliding `login` is not something you need to resolve, because you no
-longer need to run it.
+Measured directly: `.listen(p)` reports `TCP *:p`, `.listen(p,"localhost")` reports
+`TCP [::1]:p`, same process. Source of the split:
+`chunk-5NWKLF3V.js:396` and CLI `:20852` pass no host; `server-VJAFEGJ6.js:1559`
+passes `"localhost"`.
 
-Practical consequence, when 8199 is busy: if a login is in flight, let it finish
-and retry. Otherwise identify the holder — an HTTP-mode server never releases it,
-and stopping one does not disturb any stdio session; a listener held with no login
-in flight is the unexplained case above, and worth capturing before you clear it.
+**`login` has three exits before it binds anything** (`dist/index.js:42-57`) —
+relevant because only the third one takes the port:
 
-Report drafted for upstream, with the full evidence:
-[`upstream-report-port-8199.md`](upstream-report-port-8199.md).
+| Condition | Result |
+|---|---|
+| stored token valid *and* `getCurrentUser()` succeeds | `Already logged in.` — no bind |
+| `getCurrentUser()` throws non-401 (offline, 5xx) | `Failed to verify login state: …` — no bind |
+| no token, refresh failed, or 401 (which also calls `logout()`, clearing the token store) | falls through to `:60` — **binds 8199** |
+
+`getAccessToken()` (`chunk-5NWKLF3V.js:179-194`) starts refreshing 60s before expiry
+and returns `null` on any refresh failure, including a network error. The token store
+is `join(homedir(), ".plaud")` — per user account, shared by every server process
+that user runs.
+
+**The CLI already explains all of this on collision** (`@plaud-ai/cli
+dist/index.js:20990-20995`): it names `plaud-mcp http` and another `plaud login` as
+likely holders, prints the same `lsof` line, and states that `redirect_uri is fixed
+to localhost:8199`. The MCP's own message does not — it says "another `plaud login`
+may still be running. Wait a few seconds and retry."
+
+**Not established:** the report that opened
+[`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44) recorded a
+listener still in LISTEN 40+ hours after a login timeout. Which of the five binders
+held it was not recorded, and `http` mode holding it indefinitely is consistent with
+the observation. Unreproduced.
+
 
 ### `get_file` — carries a lot more than metadata
 
