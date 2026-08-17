@@ -82,12 +82,17 @@ opened `#44` recorded, after a real login timeout:
 > `lsof -nP -i :8199` still showed the same node process in LISTEN — still there
 > 40+ hours later.
 
-We have not reproduced that, and we cannot explain it from the code. Our own
-current measurement is the opposite: with 20 MCP server processes alive,
-`lsof -nP -iTCP:8199 -sTCP:LISTEN` returns empty. The honest state is **not
-"there is no leak"** — it is: *the code path we can read closes the listener; a
-single field observation says otherwise; the two are unreconciled.* A stuck
-listener would change the advice below completely, so it is worth resolving.
+We have not reproduced that, and we cannot explain it from the code we have read.
+Nor have we run the experiment that would settle it: start a login, let it time
+out, then re-check the *same* PID. (We do observe 8199 free while many idle
+servers run, but that tests nothing — an idle stdio server never binds the port,
+so finding it unbound is not evidence either way.)
+
+Two things we did not establish and would want your help with: which of the five
+binders was holding the port in that observation, and whether it was a stdio
+`login` at all. The honest state is **not "there is no leak"** — it is: *the code
+path we can read closes the listener; one field observation says otherwise; the
+two are unreconciled.*
 
 **2. We do not know whether the OAuth client registration pins the port.**
 `redirectUri` is hardcoded in the source, but that only tells us what the client
@@ -160,12 +165,28 @@ That sends the user back to a window whose flow is already gone.
 
 Asks 2 and 3 are self-contained and do not depend on ask 1.
 
+## How much this actually costs, so you can weigh the asks
+
+Less than the above may suggest, and we would rather say so than overstate a bug
+report. `login` calls `getAccessToken()` first and returns `Already logged in.`
+without binding anything (`dist/index.js:42-46`; the bind is at `:60`), and the
+token store is `join(homedir(), ".plaud")` — one directory per machine, shared by
+every server process. A machine therefore needs exactly **one** successful
+authorisation; after that, a colliding `login` is not a problem anyone needs to
+solve, because nobody needs to run it.
+
+So the collision is a first-run race, not a recurring tax. What remains is that
+the first run is where a new user meets the product, and the message they get at
+that moment does not tell them what to do.
+
 ## What this costs users today
 
 The workaround that circulates is to find the process holding the port and kill
-it. `lsof -nP -iTCP:8199 -sTCP:LISTEN` does identify the holder unambiguously, so
-this is doable — but killing an MCP server drops that client session's connection,
-and it does not reconnect on its own. Waiting out the other session's window is
-better *when the holder is a login flow*; it does not help at all when the holder
-is an HTTP-mode server, because that one never lets go. Nothing in the current
-message lets the user tell those cases apart.
+it. `lsof -nP -iTCP:8199 -sTCP:LISTEN` gives the holder's PID, though not much
+more: every binder is a `node` process, so the command line alone does not say
+which of them it is. Killing a stdio MCP server drops that client session's
+connection and it does not reconnect on its own — a real cost, and usually an
+unnecessary one, since letting the other login finish is enough. Stopping an
+HTTP-mode server costs nothing to stdio sessions, and is the only case where
+waiting genuinely does not help. Nothing in the current message lets a user tell
+those apart.

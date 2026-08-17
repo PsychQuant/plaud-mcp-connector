@@ -272,18 +272,18 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
-- **Only one session can be logging in at a time, machine-wide.** `login` binds its
-  OAuth callback to port 8199, which the MCP package hardcodes with no environment
-  override on this path, while every session you open runs its own copy of the
-  server. Start a `login` while another holder has the port and you get
-  `Failed to start callback server: port 8199 is in use — another plaud login may
-  still be running. Wait a few seconds and retry.` Who the holder is decides what
-  works: another session's login window frees it within two minutes, `plaud-mcp
-  http` never frees it, and the `plaud` CLI binds the same port too. Find out
-  rather than guess — `lsof -nP -iTCP:8199 -sTCP:LISTEN` names the process — then
-  wait it out, finish the other login, or stop that specific holder. Killing an MCP
-  server does free the port, but it drops that session's connection and it will not
-  come back on its own. Measurements and the report drafted for upstream:
+- **Two sessions cannot authorise at the same time — but you only ever authorise
+  once.** The OAuth callback binds port 8199, hardcoded machine-wide, while every
+  session runs its own copy of the server. Two `login` calls at once and the second
+  gets `port 8199 is in use`. This bites during first-time setup and then stops
+  mattering: the token is one file for the whole machine, and `login` checks it
+  before touching the port, so once any session has authorised, every other one
+  answers `Already logged in.` Let the other login finish, then retry. If the port
+  stays busy with no login in flight, `lsof -nP -iTCP:8199 -sTCP:LISTEN` names the
+  holder — a `plaud-mcp http` server holds it for its whole life (stopping that one
+  costs nothing to your stdio sessions), the `plaud` CLI binds it too, and anything
+  else is the unexplained case worth reporting. What that report would say, and the
+  measurements behind it:
   [`docs/upstream-report-port-8199.md`](docs/upstream-report-port-8199.md).
 
 ## Privacy

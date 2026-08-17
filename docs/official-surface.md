@@ -3,7 +3,10 @@
 What the official CLI and MCP actually do — not what `--help` says they do.
 
 **Measured 2026-08-07 against `@plaud-ai/cli` 0.3.7 (commit `bacaae9`) and
-`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.**
+`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** One later section
+carries its own stamp: [the callback-port
+finding](#login-binds-one-machine-wide-port-and-every-session-runs-its-own-server)
+was measured 2026-08-17 against 0.3.8. Everything else on this page is 0.3.7.
 
 Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
@@ -184,16 +187,28 @@ is required for this.
 Whether a leak *also* exists is unresolved, and worth stating plainly rather than
 asserting either way. The timeout path reads as closing its listener:
 `dist/chunk-5NWKLF3V.js:393-395` calls `finalize({status:"timeout"}, true)`, and
-`finalize` (`:407-428`) runs `closeAllConnections()` and `close()`. Our own
-measurement agrees — with 20 server processes alive, `lsof -nP -iTCP:8199
--sTCP:LISTEN` returns empty. But the report that opened
-[`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44) recorded a
-listener still in LISTEN 40+ hours after a timeout, and we have not reproduced or
-explained that. Reading the code is not the same as watching it run.
+`finalize` (`:407-428`) runs `closeAllConnections()` and `close()`. But the report
+that opened [`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44)
+recorded a listener still in LISTEN 40+ hours after a timeout, and we have not
+reproduced or explained it. Reading the code is not the same as watching it run,
+and we have not run the experiment that would settle it — start a login, let it
+time out, then check the *same* PID. (A snapshot showing 8199 free while many idle
+servers are running does not settle it either: an idle stdio server never binds the
+port in the first place, so finding it unbound tests nothing about the timeout
+path.)
 
-Practical consequence: when 8199 is taken, identify the holder
-(`lsof -nP -iTCP:8199 -sTCP:LISTEN`) before deciding what to do. A login window
-frees itself; an HTTP-mode server does not.
+**What makes this mostly a first-run problem:** `login` calls
+`getAccessToken()` first and returns `Already logged in.` without binding anything
+(`dist/index.js:42-46`; the bind is at `:60`). The token store is
+`join(homedir(), ".plaud")` — one directory per machine, shared by every server
+process on it. So the machine needs exactly one successful authorisation; after
+that, a colliding `login` is not something you need to resolve, because you no
+longer need to run it.
+
+Practical consequence, when 8199 is busy: if a login is in flight, let it finish
+and retry. Otherwise identify the holder — an HTTP-mode server never releases it,
+and stopping one does not disturb any stdio session; a listener held with no login
+in flight is the unexplained case above, and worth capturing before you clear it.
 
 Report drafted for upstream, with the full evidence:
 [`upstream-report-port-8199.md`](upstream-report-port-8199.md).
