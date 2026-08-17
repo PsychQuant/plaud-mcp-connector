@@ -3,7 +3,10 @@
 What the official CLI and MCP actually do — not what `--help` says they do.
 
 **Measured 2026-08-07 against `@plaud-ai/cli` 0.3.7 (commit `bacaae9`) and
-`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.**
+`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** One later section
+carries its own stamp: [The OAuth callback port,
+8199](#the-oauth-callback-port-8199) was measured 2026-08-17 against MCP 0.3.8.
+Everything else on this page is 0.3.7.
 
 Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
@@ -148,6 +151,98 @@ An earlier version of this file said the recording was "reachable only through
 the CLI". That was wrong: absence of a name was read as absence of a capability.
 
 What is true is a cost difference — see `get_file` below.
+
+### The OAuth callback port, 8199
+
+Measured 2026-08-17 against MCP 0.3.8 (`dist/` as published) and CLI 0.3.7. `dist/`
+filenames carry content hashes and change per build.
+
+**Five places bind or assume the port.** All hardcode 8199:
+
+| Where | Line | Binds when |
+|---|---|---|
+| MCP stdio `login` | `dist/index.js:36` | during a login, until it completes or times out (2 min, `:37`) |
+| MCP `install` | `dist/install-RTIXREYV.js:466` | same, via the same `runOAuthCallback` |
+| MCP `http` mode | `dist/server-VJAFEGJ6.js:1171` | at startup, for the life of the process — no close path (`:1547-1562`); skipped entirely if `PLAUD_CALLBACK_URL` is set |
+| MCP `redirectUri` | `dist/chunk-EY5K2UXG.js:28` | (not a binder — the URI the flow sends) |
+| CLI `plaud login` | `@plaud-ai/cli dist/index.js:20948` | during a login |
+
+**`lsof` tells them apart.** HTTP mode passes a host to `.listen()`, the others do
+not — which lands in the NAME column:
+
+```
+lsof -nP -iTCP:8199 -sTCP:LISTEN
+```
+
+| NAME shows | Holder | Consequence |
+|---|---|---|
+| `*:8199` | a login in progress — MCP stdio, MCP `install`, or CLI | releases within 2 minutes |
+| `[::1]:8199` or `127.0.0.1:8199` | an `http`-mode server | never releases; stopping it does not affect stdio sessions |
+| neither | not a Plaud process | — |
+
+Measured directly: `.listen(p)` reports `TCP *:p`, `.listen(p,"localhost")` reports
+`TCP [::1]:p`, same process. Source of the split:
+`chunk-5NWKLF3V.js:396` and CLI `:20852` pass no host; `server-VJAFEGJ6.js:1559`
+passes `"localhost"`.
+
+**`login` has three exits before it binds anything** (`dist/index.js:42-57`) —
+relevant because only the third one takes the port:
+
+| Condition | Result |
+|---|---|
+| stored token valid *and* `getCurrentUser()` succeeds | `Already logged in.` — no bind |
+| `getCurrentUser()` throws non-401 (offline, 5xx) | `Failed to verify login state: …` — no bind |
+| no token, refresh failed, or 401 (which also calls `logout()`, clearing the token store) | falls through to `:60` — **binds 8199** |
+
+`getAccessToken()` (`chunk-5NWKLF3V.js:179-194`) starts refreshing 60s before expiry
+and returns `null` on any refresh failure, including a network error. The token store
+is `join(homedir(), ".plaud")` — per user account, shared by every server process
+that user runs.
+
+**The CLI already explains all of this on collision** (`@plaud-ai/cli
+dist/index.js:20990-20995`): it names `plaud-mcp http` and another `plaud login` as
+likely holders, prints the same `lsof` line, and states that `redirect_uri is fixed
+to localhost:8199`. The MCP's own message does not — it says "another `plaud login`
+may still be running. Wait a few seconds and retry."
+
+**Not established:** the report that opened
+[`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44) recorded a
+listener still in LISTEN 40+ hours after a login timeout. Which of the five binders
+held it was not recorded, and `http` mode holding it indefinitely is consistent with
+the observation. Unreproduced.
+
+### `Not authenticated` does not mean refresh was skipped
+
+Measured 2026-08-17 against MCP 0.3.8 (0.3.7 identical on this path). Read from
+source, not executed — no failure was induced to watch it happen.
+
+`Not authenticated. Please login first.` has one origin: `PlaudClient.request`
+throws it when `getAccessToken()` returns falsy (`dist/chunk-5NWKLF3V.js:254-257`).
+
+`getAccessToken()` (`:179-194`) **does** refresh, starting 60 seconds before expiry:
+
+| State on disk | Returns | So the caller sees |
+|---|---|---|
+| no token file | `null` | `Not authenticated` |
+| valid, not near expiry | the access token | normal operation |
+| near/past expiry, refresh succeeds | the new access token | normal operation |
+| near/past expiry, refresh throws | `null` — `catch { return null }` at `:187-189` | `Not authenticated` |
+| near/past expiry, no `refresh_token` | `null` | `Not authenticated` |
+
+Rows 1, 4 and 5 are indistinguishable to the user. Row 4 covers a revoked refresh
+token, a 5xx, **and a plain network error** — `refresh()` (`:196-227`) rethrows on
+fetch failure at `:210-212`, and the `catch` above discards it.
+
+The reason is not lost, only unreported: `refresh()` calls
+`onTokenRefresh("error", <type>)` before each throw (`:210`, `:216`), wired to
+telemetry at `dist/chunk-EY5K2UXG.js:38`. The classification exists; it goes to the
+vendor, not to the user holding the failure.
+
+One adjacent path: `expires_at` is set only when the token response carried
+`expires_in` (`:174`, `:224`). Without it the expiry branch never runs, an expired
+token is sent as-is, and the symptom is a 401 rather than this message.
+
+Tracked as [`#46`](https://github.com/PsychQuant/plaud-mcp-connector/issues/46).
 
 ### `get_file` — carries a lot more than metadata
 

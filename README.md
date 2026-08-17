@@ -272,6 +272,12 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
+- **`login` can fail with `port 8199 is in use`.** Five things bind that port —
+  three in the MCP, one in the CLI — so a second login while one is open loses.
+  `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and
+  clears within two minutes, `[::1]:8199` is an `http`-mode server that holds it
+  until stopped. Which binder does what, and what `login` does before it binds
+  anything: [`docs/official-surface.md`](docs/official-surface.md#the-oauth-callback-port-8199).
 
 ## Privacy
 
