@@ -151,39 +151,52 @@ What is true is a cost difference — see `get_file` below.
 
 ### `login` binds one machine-wide port, and every session runs its own server
 
-Measured against `@plaud-ai/mcp` 0.3.8 (`0.3.7` identical on this path).
+Measured 2026-08-17 against version 0.3.8 of the MCP package, cross-checked
+against 0.3.7. The `dist/` filenames below carry content hashes and change every
+build; reproduce with a pinned `npx -y @plaud-ai/mcp@0.3.8`.
 
 `dist/index.js:36` sets `var CALLBACK_PORT = 8199;` and that file reads no
 environment variable at all — the stdio `login` path has no override for it.
 `dist/chunk-EY5K2UXG.js:28` pins the matching `redirectUri` to
-`http://localhost:8199/auth/callback`, and it is the **only** field in that
-`CONFIG` object without a `process.env` fallback (`clientId`, `clientSecret`,
-`apiBase`, `authorizationUrl`, `tokenUrl`, `refreshUrl` all have one). The
-asymmetry is the tell: an OAuth provider matches `redirect_uri` verbatim, so the
-port is fixed at the client registration rather than in the code.
+`http://localhost:8199/auth/callback`.
 
-The same package does allow its **HTTP** mode to move ports —
-`dist/server-VJAFEGJ6.js:1169` reads `PLAUD_HTTP_PORT`, `:1173` reads
-`PLAUD_CALLBACK_URL`. The stdio path simply never grew the equivalent.
+**Four places in the package bind or assume that port**, not one: `dist/index.js:36`
+(stdio login), `dist/install-RTIXREYV.js:466` (the `install` subcommand's own login),
+`dist/server-VJAFEGJ6.js:1171` (HTTP mode), and the `redirectUri` above. The
+separately-installed `@plaud-ai/cli` makes a fifth, at its own
+`dist/index.js:20948`.
+
+HTTP mode is the one to know about, because it behaves differently from the other
+two. Its ports *are* configurable (`dist/server-VJAFEGJ6.js:1169` reads
+`PLAUD_HTTP_PORT`, `:1173` reads `PLAUD_CALLBACK_URL`) — but with
+`PLAUD_CALLBACK_URL` unset it binds 8199 at startup and never closes it
+(`:1547-1562`). A running `plaud-mcp http` is therefore a *permanent* holder of
+the port, not a two-minute one.
 
 That collides with how the server is launched. `npx -y @plaud-ai/mcp@latest` is
 one process per client session, and those processes are long-lived: measured on
-one machine, **20 concurrent `plaud-mcp` processes, the oldest four days old**,
-all of them live children of running clients rather than orphans. One fixed port
-against a process population that grows with session count means two `login`
-calls whose two-minute windows overlap will collide, every time. No leak is
-required for this.
+one machine, **20 concurrent MCP server processes, the oldest four days old**,
+none orphaned — each one's parent chain leads back to a distinct live client. One
+fixed port against a process population that grows with session count means two
+`login` calls whose two-minute windows overlap will collide, every time. No leak
+is required for this.
 
-It is worth recording what this is *not*. The timeout path does close its
-listener: `dist/chunk-5NWKLF3V.js:393-395` calls `finalize({status:"timeout"},
-true)`, and with that `immediate` flag `finalize` (`:407-427`) runs
-`closeAllConnections()` and `close()` right away. We checked because the obvious
-first guess — a leaked listener — is wrong, and the wrong guess leads to killing
-processes for no reason.
+Whether a leak *also* exists is unresolved, and worth stating plainly rather than
+asserting either way. The timeout path reads as closing its listener:
+`dist/chunk-5NWKLF3V.js:393-395` calls `finalize({status:"timeout"}, true)`, and
+`finalize` (`:407-428`) runs `closeAllConnections()` and `close()`. Our own
+measurement agrees — with 20 server processes alive, `lsof -nP -iTCP:8199
+-sTCP:LISTEN` returns empty. But the report that opened
+[`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44) recorded a
+listener still in LISTEN 40+ hours after a timeout, and we have not reproduced or
+explained that. Reading the code is not the same as watching it run.
+
+Practical consequence: when 8199 is taken, identify the holder
+(`lsof -nP -iTCP:8199 -sTCP:LISTEN`) before deciding what to do. A login window
+frees itself; an HTTP-mode server does not.
 
 Report drafted for upstream, with the full evidence:
-[`upstream-report-port-8199.md`](upstream-report-port-8199.md). Tracked locally as
-[`#44`](https://github.com/PsychQuant/plaud-mcp-connector/issues/44).
+[`upstream-report-port-8199.md`](upstream-report-port-8199.md).
 
 ### `get_file` — carries a lot more than metadata
 
