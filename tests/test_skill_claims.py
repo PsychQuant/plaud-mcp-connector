@@ -525,15 +525,22 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     # the archived copy is the artifact anyone would restore from, and the five
     # sentences #36 removed must not ride back in with it.
     #
-    # The README pins were reconsidered rather than repointed, because the
-    # README's subject changed. `REMOVED` keeps its README entry — the README
-    # must never claim upload starts transcription, and that stays true whether
-    # or not it documents upload at all. `KEPT`'s README entry was RETIRED: it
-    # required the README to name the second press (立即產生 / Generate now),
-    # which only made sense while the README had an upload handoff paragraph to
-    # protect. The README no longer documents upload, so the requirement would
-    # force it to keep a sentence about a capability it does not ship — the #38
-    # failure inverted.
+    # `REMOVED` keeps its README entry — the README must never claim upload
+    # starts transcription, and that stays true whether or not it documents
+    # upload at all.
+    #
+    # `KEPT`'s README entry was first RETIRED here, on the reasoning that it
+    # "required the README to name the second press, which only made sense while
+    # the README had an upload handoff paragraph to protect." **That reasoning
+    # was wrong about what the pin protected** (#47). The requirement was never
+    # "the README documents upload" — it was "a user learns there are TWO
+    # presses, because the first only opens the chooser." That outlived the
+    # upload skill. Retiring the guard let the last shipping mention of the
+    # second press leave with #48, and nothing went red.
+    #
+    # Repointed at `plaud-index` instead: that is where a user now meets the
+    # gap (its report template is what they read when a recording has no
+    # transcript), so that is where the requirement lives.
 
     # (path, forbidden pattern, what it was)
     REMOVED = (
@@ -551,6 +558,11 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     KEPT = (
         ("archive/skills/plaud-upload/SKILL.md", r"does not\s*\n?\s*start transcription",
          "the description must deny it outright — that denial is the fix"),
+        ("skills/plaud-index/SKILL.md", r"立即產生 / Generate now",
+         "the shipping surface must name the SECOND press; the first only opens "
+         "the chooser, and a reader who stops after one is back in the silent "
+         "wait (#36 finding, re-homed here by #47 after #48 archived the README "
+         "paragraph that used to carry it)"),
     )
 
     # File-wide "contains 立即產生" is not enough for the handoff: adding the
