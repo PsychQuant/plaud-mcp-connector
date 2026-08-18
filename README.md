@@ -1,8 +1,7 @@
 # plaud-mcp-connector
 
 A Claude Code plugin that runs the **official Plaud MCP** — fetched from npm at
-launch, not vendored here — and adds the two things it cannot do: **full-text transcript search** and **uploading audio into
-your own library**.
+launch, not vendored here — and adds the one thing it cannot do: **full-text transcript search**.
 
 📄 **[plaud-mcp-connector.vercel.app](https://plaud-mcp-connector.vercel.app)** — what it does, and when not to install it.
 
@@ -23,7 +22,6 @@ runs it unmodified. But its surface is deliberately narrow:
 |---|---|---|
 | Tools | 7, all read-only: `login`, `logout`, `get_current_user`, `list_files`, `get_file`, `get_note`, `get_transcript` | — |
 | Search | `query` matches **recording names only**, across the **newest 500** recordings | Full-text search over transcript **bodies**, across everything you have indexed |
-| Upload | none — the REST upload endpoints belong to the partner/Embedded surface and do not write into a consumer library | Drives the web app to put a local file in your library |
 
 So the official server can tell you a recording is called *"Weekly sync"*. It
 cannot tell you **which** recording is the one where somebody actually said
@@ -52,8 +50,7 @@ Then authorise once — ask Claude to *"log me into Plaud"*, or call the `login`
 tool directly. It opens a browser for OAuth and stores the token in
 `~/.plaud/tokens-mcp.json`.
 
-Requirements: **Node.js ≥ 20**, a Plaud account with Cloud Sync (PCS) enabled,
-and — for uploads only — macOS with Safari.
+Requirements: **Node.js ≥ 20** and a Plaud account with Cloud Sync (PCS) enabled.
 
 **Strongly recommended for large libraries**: `npm install -g @plaud-ai/cli`.
 With the CLI present, `plaud-index` writes transcripts straight to disk instead of
@@ -156,25 +153,6 @@ plugin.
 proofread the research meeting transcript against these slides
 ```
 
-### `plaud-upload` — put a file into your library
-
-Converts video to audio, checks the 500 MB / 5 h limits, and drives Safari to
-import the file. **macOS only.**
-
-It stops at the upload, and does not ask Plaud to transcribe. The recording
-waits until you open it and press 產生 / Generate, then 立即產生 / Generate now
-to confirm, and `plaud-index` has nothing to fetch until you do. The skill says
-so when it finishes, because the *page* shows the recording waiting but the
-*API* does not: a recording nobody ever asked to transcribe and one that is
-mid-transcription both come back with an empty `source_list`, so `plaud-index`
-cannot tell them apart and reports both as "no transcript".
-
-```
-上傳這個音檔到 Plaud 轉錄
-transcribe ~/Recordings/interview.m4a
-```
-
-
 ### `plaud-audio` — get the original recording back
 
 Downloads the audio file itself, not its transcript. Useful for archiving, for
@@ -258,11 +236,6 @@ nothing else makes it visible.
   cloud long after it was made carries an old timestamp, sits deep in the
   listing, and is stepped over — with no error and no count to notice it by.
   Nothing in the API offers a change feed to fix this; run `--all` periodically.
-- **Upload is browser automation**, not an API. It works today and will break the
-  day Plaud redesigns its import dialog. Failures are usually visible (a click
-  does nothing) rather than silent, but verify the file landed.
-- **Upload is macOS-only.** It drives Safari via AppleScript. There is no Linux
-  or Windows path, and none is planned.
 - **First index of a large library is slow.** Transcripts are paginated, so a long
   recording takes several fetches. Without the CLI installed, every page also
   passes through the model context. Install `@plaud-ai/cli` (above) and scope with

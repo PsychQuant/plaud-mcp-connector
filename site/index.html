@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>plaud-mcp-connector — search what was actually said</title>
-<meta name="description" content="An independent Claude Code plugin. Full-text search across Plaud transcript bodies, subtitle export, and audio upload — the things the official Plaud MCP cannot do.">
+<meta name="description" content="An independent Claude Code plugin. Full-text search across Plaud transcript bodies and subtitle export — the things the official Plaud MCP cannot do.">
 <meta name="color-scheme" content="light dark">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔎</text></svg>">
 <style>
@@ -180,8 +180,8 @@ for something that needs them.</p>
 </div>
 
 <p data-i18n="p5">Optional, and only when you need it: the official <code>@plaud-ai/cli</code> keeps
-transcripts out of the model context on libraries of hundreds, and <code>ffmpeg</code>
-is for uploading. Ask Claude and it installs them. A Plaud account with Cloud Sync is
+transcripts out of the model context on libraries of hundreds. Ask Claude and it
+installs it. A Plaud account with Cloud Sync is
 the one thing nobody can install for you.</p>
 
 <h2 data-i18n="h3">You want this if&hellip;</h2>
@@ -205,12 +205,6 @@ the one thing nobody can install for you.</p>
     was cut short is marked incomplete, re-fetched next run, and flagged in results.
     This exists because v0.1.0 silently kept only each transcript's first page and
     reported “no match” for words that were spoken.</li>
-  <li data-i18n="li6"><strong>Upload is macOS-only, and it is browser automation, not an API.</strong>
-    It drives Safari through AppleScript; there is no Linux or Windows equivalent and
-    none is planned. It works today and will break the day Plaud redesigns its import
-    dialog. Neither the official MCP nor the official CLI has any upload command,
-    which is why this drives the web app at all — anything else that drives a
-    browser can do the same.</li>
   <li data-i18n="li7"><strong>Proofreading has no accuracy figure.</strong> Without a ground-truth
     transcript there is nothing to measure against. You will notice you can find
     things; nobody can give you a number.</li>
@@ -277,7 +271,7 @@ the one thing nobody can install for you.</p>
     "h2": "Install",
     "p3": "Tell Claude Code: <em>&ldquo;install plaud-mcp-connector&rdquo;</em>. It runs both\ncommands, turns on auto-update, and installs the optional pieces only if you ask\nfor something that needs them.",
     "p4": "<strong>Auto-update does not come on by itself.</strong> Claude Code ships\n  third-party marketplaces with auto-update <em>disabled</em>, so an install left\n  alone stays on the version it was installed at — including versions with the\n  search bugs we have since fixed. Ask Claude to enable it, or do it yourself:\n  <code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update.",
-    "p5": "Optional, and only when you need it: the official <code>@plaud-ai/cli</code> keeps\ntranscripts out of the model context on libraries of hundreds, and <code>ffmpeg</code>\nis for uploading. Ask Claude and it installs them. A Plaud account with Cloud Sync is\nthe one thing nobody can install for you.",
+    "p5": "Optional, and only when you need it: the official <code>@plaud-ai/cli</code> keeps\ntranscripts out of the model context on libraries of hundreds. Ask Claude and it\ninstalls it. A Plaud account with Cloud Sync is\nthe one thing nobody can install for you.",
     "h3": "You want this if&hellip;",
     "li1": "<strong>You have more recordings than you can remember.</strong> The moment you\n    think &ldquo;someone definitely said that&rdquo; and cannot place which recording,\n    name search has already failed you.",
     "li2": "<strong>You put recordings into video.</strong> Lectures, talks, interviews —\n    anything that needs captions rather than a wall of text.",
@@ -285,7 +279,6 @@ the one thing nobody can install for you.</p>
     "h4": "Limits, stated plainly",
     "li4": "<strong>Search covers what you indexed.</strong> A recording made after your\n    last index run is not searchable. The tool reports the covered range instead of\n    answering “not found”.",
     "li5": "<strong>Completeness is tracked, not assumed.</strong> A recording whose fetch\n    was cut short is marked incomplete, re-fetched next run, and flagged in results.\n    This exists because v0.1.0 silently kept only each transcript's first page and\n    reported “no match” for words that were spoken.",
-    "li6": "<strong>Upload is macOS-only, and it is browser automation, not an API.</strong>\n    It drives Safari through AppleScript; there is no Linux or Windows equivalent and\n    none is planned. It works today and will break the day Plaud redesigns its import\n    dialog. Neither the official MCP nor the official CLI has any upload command,\n    which is why this drives the web app at all — anything else that drives a\n    browser can do the same.",
     "li7": "<strong>Proofreading has no accuracy figure.</strong> Without a ground-truth\n    transcript there is nothing to measure against. You will notice you can find\n    things; nobody can give you a number.",
     "p6": "<strong>Your recordings stay yours.</strong> Transcripts are cached on your own\n  machine and are never committed, uploaded, or sent anywhere except to the model\n  answering your question. Credentials live in your OAuth token store or the macOS\n  Keychain.",
     "p7": "<strong>plaud-mcp-connector</strong> is an independent, community-built plugin.\n      It is <strong>not affiliated with, endorsed by, or supported by Plaud Inc.</strong>\n      “Plaud” is used only to say what this works with.",
@@ -317,7 +310,7 @@ the one thing nobody can install for you.</p>
     "h2": "安裝",
     "p3": "對 Claude Code 說：<em>「幫我裝 plaud-mcp-connector」</em>。它會跑完兩條指令、打開自動更新，並且只在你真的需要時才裝選配的部分。",
     "p4": "<strong>自動更新不會自己打開。</strong>Claude Code 對第三方 marketplace 預設<em>關閉</em>自動更新，所以裝完放著不管的話，你會一直停在安裝當下的版本 —— 包括那些搜尋有 bug、後來才修掉的版本。請 Claude 幫你打開，或自己來：<code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update。",
-    "p5": "選配，只在你需要時才裝：官方的 <code>@plaud-ai/cli</code> 讓數百筆錄音的逐字稿不必經過 model context；<code>ffmpeg</code> 是上傳用的。跟 Claude 說一聲它就會裝。唯一沒人能幫你裝的，是一個開了 Cloud Sync 的 Plaud 帳號。",
+    "p5": "選配，只在你需要時才裝：官方的 <code>@plaud-ai/cli</code> 讓數百筆錄音的逐字稿不必經過 model context。跟 Claude 說一聲它就會裝。唯一沒人能幫你裝的，是一個開了 Cloud Sync 的 Plaud 帳號。",
     "h3": "你會想要它，如果……",
     "li1": "<strong>你的錄音多到自己記不住。</strong>當你心想「一定有人講過那句話」卻想不起是哪一筆的那一刻，檔名搜尋就已經幫不上忙了。",
     "li2": "<strong>你會把錄音放進影片。</strong>講座、演講、訪談 —— 任何需要字幕而不是一整面文字的東西。",
@@ -325,7 +318,6 @@ the one thing nobody can install for you.</p>
     "h4": "限制，直說",
     "li4": "<strong>搜尋只涵蓋你索引過的內容。</strong>上一次索引之後才錄的東西搜不到。工具會回報涵蓋的範圍，而不是回答「找不到」。",
     "li5": "<strong>完整性是被追蹤的，不是被假設的。</strong>抓到一半被中斷的錄音會標記為不完整、下次索引重抓，並在結果中標示。這個機制存在，是因為 v0.1.0 曾經只保留每份逐字稿的第一頁，然後對說過的話回報「找不到」。",
-    "li6": "<strong>上傳僅限 macOS，而且是瀏覽器自動化不是 API。</strong>它透過 AppleScript 驅動 Safari；沒有 Linux 或 Windows 的對應版本，也沒有計畫要做。它今天能用，而 Plaud 改版 import 對話框的那天它就會壞。官方 MCP 與官方 CLI 都沒有任何上傳指令，這才是這裡改用驅動網頁版的原因 —— 任何同樣能驅動瀏覽器的工具都做得到。",
     "li7": "<strong>校對沒有準確率數字。</strong>沒有 ground truth 就沒有東西可以量。你會發現東西找得到了；但沒有人能給你一個數字。",
     "p6": "<strong>你的錄音仍然是你的。</strong>逐字稿快取在你自己的機器上，永遠不會被 commit、上傳或送到任何地方 —— 除了回答你問題的那個模型。憑證存在你的 OAuth token store 或 macOS Keychain。",
     "p7": "<strong>plaud-mcp-connector</strong> 是一個獨立的、社群做的 plugin。它<strong>與 Plaud Inc. 無關，未經其背書，也不受其支援</strong>。使用「Plaud」一詞只是為了說明它能跟什麼搭配。",
@@ -357,7 +349,7 @@ the one thing nobody can install for you.</p>
     "h2": "インストール",
     "p3": "Claude Code にこう言うだけです：<em>「plaud-mcp-connector を入れて」</em>。両方のコマンドを実行し、自動更新を有効にし、必要になったときだけ任意の追加分を入れます。",
     "p4": "<strong>自動更新は勝手には有効になりません。</strong>Claude Code はサードパーティのマーケットプレイスの自動更新を既定で<em>無効</em>にします。放っておくとインストール時のバージョンのまま —— 検索に不具合があり、その後修正されたバージョンも含めて —— 留まります。Claude に頼むか、自分で：<code>/plugin</code> → Marketplaces → plaud-mcp-connector → Enable auto-update。",
-    "p5": "任意、必要なときだけ：公式の <code>@plaud-ai/cli</code> は数百件規模のライブラリで文字起こしをモデルのコンテキストの外に保ちます。<code>ffmpeg</code> はアップロード用です。Claude に言えば入れてくれます。誰も代わりに用意できないのは、Cloud Sync を有効にした Plaud アカウントだけです。",
+    "p5": "任意、必要なときだけ：公式の <code>@plaud-ai/cli</code> は数百件規模のライブラリで文字起こしをモデルのコンテキストの外に保ちます。Claude に言えば入れてくれます。誰も代わりに用意できないのは、Cloud Sync を有効にした Plaud アカウントだけです。",
     "h3": "こういう人に向いています",
     "li1": "<strong>録音が多すぎて覚えていられない。</strong>「誰かが確かにそう言った」と思うのに、それがどの録音か思い出せない —— その時点で、名前の検索はもう役に立っていません。",
     "li2": "<strong>録音を動画にする。</strong>講義、講演、インタビュー —— 文字の壁ではなく字幕が要るもの。",
@@ -365,7 +357,6 @@ the one thing nobody can install for you.</p>
     "h4": "限界を、正直に",
     "li4": "<strong>検索が及ぶのはインデックスした範囲だけ。</strong>前回のインデックス以降に録ったものは検索できません。ツールは「見つかりません」ではなく、対象範囲を報告します。",
     "li5": "<strong>完全性は追跡されるもので、前提ではありません。</strong>途中で切れた取得は不完全と記録され、次回に再取得され、結果にも表示されます。この仕組みがあるのは、v0.1.0 が各文字起こしの最初のページだけを黙って保存し、話された言葉に対して「一致なし」と答えていたからです。",
-    "li6": "<strong>アップロードは macOS 限定で、API ではなくブラウザ自動化です。</strong>AppleScript で Safari を操作します。Linux や Windows 版はなく、予定もありません。今は動きますが、Plaud が取り込みダイアログを作り直した日に壊れます。公式 MCP にも公式 CLI にもアップロードのコマンドがなく、それがここで Web 版を操作している理由です —— ブラウザを操作できる他のツールでも同じことができます。",
     "li7": "<strong>校正に精度の数字はありません。</strong>正解となる文字起こしがなければ、測る対象がありません。見つかるようになったことは分かりますが、数字を出せる人はいません。",
     "p6": "<strong>あなたの録音はあなたのものです。</strong>文字起こしはあなた自身のマシンにキャッシュされ、コミットも、アップロードも、どこかへの送信もされません —— あなたの質問に答えるモデル以外には。認証情報は OAuth トークンストアか macOS キーチェーンにあります。",
     "p7": "<strong>plaud-mcp-connector</strong> は独立した、コミュニティ製のプラグインです。<strong>Plaud Inc. とは提携しておらず、承認も、サポートも受けていません</strong>。「Plaud」の名は、何と組み合わせて使うものかを述べるためだけに使っています。",
