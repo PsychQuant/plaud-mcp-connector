@@ -52,6 +52,12 @@ MUST_MENTION = (
      "the state that needs the user to act is not named"),
     (re.compile(r"press\s+產生\s*/\s*Generate"),
      "the report never says what to press"),
+    (re.compile(r"立即產生\s*/\s*Generate now"),
+     "the report names only the FIRST press. The first opens the chooser; the "
+     "second is what starts transcription, and a reader who stops after one is "
+     "back in the wait that never ends (#36, re-homed here by #47 — it was "
+     "briefly pinned file-wide in test_skill_claims.py, which this file's own "
+     "header warns is not enough)"),
     (re.compile(r"cannot say|can't say|無法分辨|no way to tell", re.I),
      "the report does not admit the API cannot distinguish the three"),
 )

@@ -538,9 +538,15 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     # upload skill. Retiring the guard let the last shipping mention of the
     # second press leave with #48, and nothing went red.
     #
-    # Repointed at `plaud-index` instead: that is where a user now meets the
-    # gap (its report template is what they read when a recording has no
-    # transcript), so that is where the requirement lives.
+    # Re-homed to `tests/test_index_reporting.py`'s MUST_MENTION, which is
+    # scoped to `### 4. Report` and has a liveness test against vacuity.
+    #
+    # It was first added HERE as a file-wide KEPT pin, and that was wrong in the
+    # way this very file warns about four lines below: the phrase also appears
+    # in an explanatory paragraph outside the report section, so reverting the
+    # user-facing template alone kept the suite green. Verified by mutation.
+    # That is instance four of the shape #37 called a pattern — file-wide
+    # assertions stop guarding the place they were written for.
 
     # (path, forbidden pattern, what it was)
     REMOVED = (
@@ -558,11 +564,6 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     KEPT = (
         ("archive/skills/plaud-upload/SKILL.md", r"does not\s*\n?\s*start transcription",
          "the description must deny it outright — that denial is the fix"),
-        ("skills/plaud-index/SKILL.md", r"立即產生 / Generate now",
-         "the shipping surface must name the SECOND press; the first only opens "
-         "the chooser, and a reader who stops after one is back in the silent "
-         "wait (#36 finding, re-homed here by #47 after #48 archived the README "
-         "paragraph that used to carry it)"),
     )
 
     # File-wide "contains 立即產生" is not enough for the handoff: adding the

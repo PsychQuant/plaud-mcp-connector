@@ -462,9 +462,9 @@ failed. The official CLI's own test is `sourceList.some(s => s.data_type ===
 "transaction")` — an existence check, and `list_files` returns six fields, none
 of them about transcription. Measured across this account's ten most recent
 recordings: nine had no transcript, because Plaud only transcribes when someone
-presses 產生 / Generate and then confirms with 立即產生 / Generate now. **The state that needs an action is the common one**,
-and calling it "processing" turns it into a wait that never ends and produces
-no error to notice it by.
+presses 產生 / Generate and then confirms with 立即產生 / Generate now. **The
+state that needs an action is the common one**, and calling it "processing"
+turns it into a wait that never ends and produces no error to notice it by.
 
 ### 4. Report
 

@@ -17,8 +17,8 @@ find the script it tests without being rewritten.
 ## `skills/plaud-upload` — archived 2026-08-18
 
 Drove Safari via AppleScript to import a local audio file into a Plaud library.
-macOS-only. Archived with its two tests (`tests/upload_verify_logic.test.mjs` and
-its Python wrapper).
+macOS-only. Archived with its two tests, now at
+`archive/tests/upload_verify_logic.test.mjs` and its Python wrapper.
 
 **Why.** The official surface is read-only in both forms — the MCP exposes 7 tools
 (`login`, `logout`, `get_current_user`, `list_files`, `get_file`, `get_transcript`,
