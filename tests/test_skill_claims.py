@@ -100,9 +100,12 @@ Both halves of that trade are asserted, not described:
 `test_the_old_one_word_bypass_is_closed` and
 `test_a_step_in_the_body_no_longer_excuses_anything`.
 
-`TestTheExactRegressionOf36` is unchanged and remains the load-bearing guard
-for #36 itself: it names five files and five sentence shapes, so the exact
-edit that would undo the fix fails.
+`TestTheExactRegressionOf36` remains the load-bearing guard for #36 itself:
+five pins across two files (`archive/skills/plaud-upload/SKILL.md` and
+`README.md`), each naming a sentence shape, so the exact edit that would undo
+the fix fails. It was described here as "unchanged … five files" until #47
+noticed both halves had stopped being true: #48 repointed the pins at the
+archived copy and retired one, leaving two distinct files, not five.
 
 Rule 2 still stops at the `description:` block and does not scan body prose.
 Body prose has legitimate non-claiming uses of the same words ("To start
