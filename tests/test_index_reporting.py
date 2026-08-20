@@ -73,9 +73,25 @@ MUST_MENTION = (
 REPORT_SECTION = re.compile(r"(?ms)^### 4\. Report\b(.*?)(?=^#{1,3}[ \t]|\Z)")
 
 
+# A fenced block, tag or no tag. Used only to hide its contents from the
+# terminator above — SKILL.md uses ```bash ten times and `# comment` lines
+# inside them are ordinary, so a line-prefix terminator would stop there.
+_FENCED = re.compile(r"(?ms)^```.*?^```[ \t]*$")
+
+
+def _mask_fences(text: str) -> str:
+    """Blank line-leading `#` inside fenced blocks, preserving every offset.
+
+    One character in, one character out, so a span found in the masked copy
+    slices the ORIGINAL text correctly. Masking rather than deleting is the
+    whole point: deleting would shift every offset after the first fence.
+    """
+    return _FENCED.sub(lambda m: re.sub(r"(?m)^#", " ", m.group(0)), text)
+
+
 def report_section(text: str) -> str:
-    m = REPORT_SECTION.search(text)
-    return m.group(1) if m else ""
+    m = REPORT_SECTION.search(_mask_fences(text))
+    return text[m.start(1):m.end(1)] if m else ""
 
 
 class TestTheSkillFileIsReadable(unittest.TestCase):
@@ -116,32 +132,43 @@ class TestAbsentTranscriptsAreNotReportedAsPending(unittest.TestCase):
 
 
 class TestTheSectionBoundaryIsWhereTheCommentSaysItIs(unittest.TestCase):
-    """The scope claim is itself pinned, because last time it was only prose.
+    """The scope claim is itself pinned, because prose kept not being enough.
 
-    `#47` re-homed the second-press requirement here from a file-wide pin in
-    test_skill_claims.py, and the commit message said it was now "scoped to
-    `### 4. Report`". It was not: the lookahead stopped at `^### ` or EOF and
-    never at `^## `, and `### 4. Report` is the last H3 in the file — so the
-    capture ran to the end, swallowing `## Cost warning` and `## Where the
-    cache lives`. Every check above was really asking about the last tenth of
-    the file. Mutation-proved twice: the phrase could be deleted from the
-    report template and re-added under `## Cost warning` with the suite green,
-    and the liveness check above passed on a Report section gutted to `TBD.`,
+    `#47` re-homed the second-press requirement here from a file-wide pin, and
+    `3cb09f5`'s message said it was now "scoped to `### 4. Report`". It was
+    not: the lookahead stopped at `^### ` or EOF and never at `^## `, and
+    `### 4. Report` is the last H3 in the file — so the capture ran to EOF,
+    swallowing two H2 sections. Mutation-proved twice: the phrase could be
+    deleted from the template and re-added under `## Cost warning` with the
+    suite green, and the liveness check passed on a Report gutted to `TBD.`
     because the swallowed tail supplied 834 chars against its 400 threshold.
 
-    That is the fourth time this repo has shipped an assertion wider than the
-    thing it guards (#36, #37, `eb7b610`, then the fix for `eb7b610`). The
-    lesson that keeps not sticking is that a comment saying "scoped to X" is
-    not a scope; only a test is. So these use synthetic fixtures rather than
-    the live file — they pin the FUNCTION's boundary behaviour, and stay
-    meaningful when SKILL.md is next rearranged.
+    Synthetic fixtures, not the live file: these pin the FUNCTION's boundary
+    behaviour, so they stay meaningful when SKILL.md is next rearranged. The
+    live file supplies only a lower bound (it must contain the requirement);
+    the upper bound — that the capture stops where it should — is only
+    checkable against documents built to probe it.
     """
 
     FIXTURE = (
         "## Earlier\n\nbefore\n\n"
         "### 4. Report\n\nINSIDE the report\n\n"
         "## Cost warning\n\nOUTSIDE, one heading level up\n\n"
+    )
+
+    # An H3 terminator needs its own fixture. The combined one above puts an H2
+    # first, so it truncates there and an H2-only terminator would pass an
+    # "does it stop at H3" assertion without ever exercising H3 — which is
+    # exactly what the first version of this class did.
+    FIXTURE_H3_FIRST = (
+        "### 4. Report\n\nINSIDE the report\n\n"
         "### 9. Later H3\n\nOUTSIDE, same level\n"
+    )
+
+    FIXTURE_H4 = (
+        "### 4. Report\n\nintro\n\n"
+        "#### 4a. A subsection\n\nstill the report\n\n"
+        "## Next\n\nout\n"
     )
 
     def test_the_section_stops_at_the_next_h2(self):
@@ -151,11 +178,32 @@ class TestTheSectionBoundaryIsWhereTheCommentSaysItIs(unittest.TestCase):
             "OUTSIDE, one heading level up", section,
             "report_section() ran past `## Cost warning`. Anything the checks "
             "above require can then be satisfied from a section the user never "
-            "reads, which is exactly how the phrase survived deletion from the "
-            "report template")
+            "reads, which is how the phrase survived deletion from the template")
 
     def test_the_section_stops_at_the_next_h3(self):
-        self.assertNotIn("OUTSIDE, same level", report_section(self.FIXTURE))
+        section = report_section(self.FIXTURE_H3_FIRST)
+        self.assertIn("INSIDE the report", section)
+        self.assertNotIn("OUTSIDE, same level", section)
+
+    def test_an_h4_subsection_stays_inside_the_report(self):
+        """`#### ` has no space after the third #, so the terminator skips it."""
+        self.assertIn("still the report", report_section(self.FIXTURE_H4))
+
+    def test_a_hash_inside_a_fenced_block_does_not_end_the_section(self):
+        """A `# comment` in a fence is an idiom this file uses ten times over.
+
+        The terminator is a line-prefix match, so without fence awareness a
+        shell comment inside the report's own example truncates the section.
+        That direction is fail-LOUD — the liveness check below fires — so it
+        is a misleading false red rather than a hole a regression can walk
+        through. Closed anyway: a guard whose failure message misdiagnoses the
+        cause costs the next reader the same hour it cost this one.
+        """
+        doc = ("### 4. Report\n\n```bash\n# a shell comment\ncache.py status\n```\n\n"
+               "trailing prose that must survive\n\n## Next\n\nout\n")
+        section = report_section(doc)
+        self.assertIn("trailing prose that must survive", section)
+        self.assertNotIn("out", section)
 
     def test_a_gutted_report_cannot_borrow_length_from_what_follows(self):
         """The liveness check must fail on an empty report, not pass on a long tail."""
@@ -163,34 +211,95 @@ class TestTheSectionBoundaryIsWhereTheCommentSaysItIs(unittest.TestCase):
                   "## Where the cache lives\n\n" + ("filler. " * 200) + "\n")
         self.assertLess(
             len(report_section(gutted)), 400,
-            "a Report section gutted to `TBD.` still measured over the liveness "
-            "threshold, because the capture reached content that is not the report")
+            "a Report gutted to `TBD.` still measured over the liveness threshold, "
+            "because the capture reached content that is not the report")
 
 
 class TestTheRequirementIsPinnedToWhatTheUserReads(unittest.TestCase):
-    """The requirement is about the emitted report, so pin the emitted report.
+    """Pin the emitted report, and pin how the emitted report is located.
 
-    `#47` requires that the REPORT names both presses. Satisfying that from
-    prose elsewhere in the section is the same class of miss as satisfying it
-    from elsewhere in the file, one radius smaller.
+    `009e0f7` moved the requirement off section prose and onto "the fenced
+    block", which was the right direction and the wrong implementation: it
+    took the FIRST block matching `^```\n`, and the CLOSING line of a ```bash
+    block is exactly that. So in a section containing any tagged fence, the
+    locator returned the prose BETWEEN two code blocks and called it the
+    template. Three ordinary edits — add a ```bash example (the section's own
+    prose invites one), add a sentence naming both presses, revert the real
+    template — left 475 tests green while the report a user reads lost the
+    second press entirely.
+
+    That was instance five of one shape: file-wide, then section-wide, then
+    template-scoped-with-an-unpinned-template. The lesson that finally has to
+    stick is that "the first fence is the template" is an assumption, and an
+    assumption is not a scope. So the template is now located by its CONTENT,
+    that content anchor is asserted to be unique, and the locator itself is
+    tested against a document built to hijack it.
     """
 
-    FENCE = re.compile(r"(?ms)^```\n(.*?)^```")
+    # Opening fence may carry a language tag; closing fence is bare.
+    FENCE_BLOCK = re.compile(r"(?ms)^```[^\n]*\n(.*?)^```[ \t]*$")
+
+    # The report template is identified by what it IS, not by where it sits.
+    REPORT_SHAPE = re.compile(r"^\s*skipped \d+ — no transcript", re.M)
+
+    # `產生 / Generate` is a SUBSTRING of `立即產生 / Generate now`, so a naive
+    # pattern for the first press can never fail while the second press is
+    # present. Both guards are load-bearing.
+    FIRST_PRESS = re.compile(r"(?<!立即)產生\s*/\s*Generate(?!\s*now)")
+    SECOND_PRESS = re.compile(r"立即產生\s*/\s*Generate now")
+
+    @classmethod
+    def _locate(cls, section: str) -> list[str]:
+        return [m.group(1) for m in cls.FENCE_BLOCK.finditer(section)
+                if cls.REPORT_SHAPE.search(m.group(1))]
 
     def _report_template(self) -> str:
-        section = report_section(SKILL.read_text(encoding="utf-8"))
-        m = self.FENCE.search(section)
+        blocks = self._locate(report_section(SKILL.read_text(encoding="utf-8")))
+        self.assertEqual(
+            1, len(blocks),
+            f"expected exactly one fenced block inside `### 4. Report` shaped like "
+            f"the report (`skipped N — no transcript`), found {len(blocks)}. Zero "
+            f"means the template moved or changed shape and these checks would be "
+            f"asserting about nothing; more than one means the anchor no longer "
+            f"identifies it uniquely and this class would be pinning an arbitrary one")
+        return blocks[0]
+
+    def test_the_locator_is_not_fooled_by_a_tagged_fence(self):
+        """The exact hijack that made 009e0f7's version vacuous."""
+        section = (
+            "\n\nThen show `cache.py status`:\n\n"
+            "```bash\ncache.py status\n```\n\n"
+            "In the web app press 產生 / Generate and then 立即產生 / Generate now.\n\n"
+            "Say it in this shape:\n\n"
+            "```\nskipped 9 — no transcript\n  open it in Plaud and press 產生 / Generate.\n```\n\n")
+        blocks = self._locate(section)
+        self.assertEqual(1, len(blocks), "the content anchor did not isolate the template")
+        self.assertIn("skipped 9", blocks[0])
+        self.assertNotIn("In the web app", blocks[0],
+                         "the locator returned prose between two code blocks — the "
+                         "closing ``` of the tagged block was read as an opening")
+
+    def test_the_first_press_pattern_cannot_be_satisfied_by_the_second(self):
+        """If this ever passes trivially, the first-press check is dead weight."""
+        self.assertIsNone(
+            self.FIRST_PRESS.search("press 立即產生 / Generate now."),
+            "`產生 / Generate` matched inside `立即產生 / Generate now` — the "
+            "first-press assertion is vacuous and the template can drop the "
+            "chooser step with the suite green")
+
+    def test_the_template_names_both_presses_in_order(self):
+        body = self._report_template()
+        first = self.FIRST_PRESS.search(body)
+        second = self.SECOND_PRESS.search(body)
         self.assertIsNotNone(
-            m, "no fenced block inside `### 4. Report` — the report template is "
-               "what this pins, and it is gone or no longer fenced")
-        return m.group(1)
-
-    def test_the_template_names_the_second_press(self):
-        self.assertRegex(
-            self._report_template(), r"立即產生\s*/\s*Generate now",
-            "the report template names only the FIRST press. The first opens the "
-            "chooser; the second is what starts transcription, and a reader who "
-            "stops after one is back in the wait that never ends")
-
-    def test_the_template_names_the_first_press_too(self):
-        self.assertRegex(self._report_template(), r"產生\s*/\s*Generate")
+            first, "the report template does not name 產生 / Generate — the press "
+                   "that opens the chooser. Naming only the second sends the reader "
+                   "hunting a button that is not on screen yet")
+        self.assertIsNotNone(
+            second, "the report template names only the FIRST press. The first opens "
+                    "the chooser; the second is what starts transcription, and a "
+                    "reader who stops after one is back in the wait that never ends")
+        self.assertLess(
+            first.start(), second.start(),
+            "the two presses are named out of order. 產生 opens the chooser and "
+            "立即產生 is inside it; reversed, the instruction cannot be followed")
