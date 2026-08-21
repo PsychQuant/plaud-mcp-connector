@@ -152,6 +152,85 @@ class TestSegmentParsing(unittest.TestCase):
         self.assertEqual(segs[0]["text"], "the words still matter")
 
 
+class TestEveryBracketLineBecomesACue(unittest.TestCase):
+    """The comparison test: parsed cue count MUST equal `[`-leading line count.
+
+    This is deliberately not a test for one regex. #40 was "the CLI's bracket
+    shape does not parse"; #50 was "the same shape parses until the minute
+    field passes 99". Both are instances of one thing — the cache grew a line
+    shape the parser did not follow — and both produced a syntactically valid
+    SRT that was silently short. A test written against either specific shape
+    would not have caught the other.
+
+    An independent oracle matters here. Counting lines that start with `[` does
+    not reuse `to_srt`'s parser, so this does not have the circularity #42
+    raises about the cache contract test judging itself.
+    """
+
+    def _fixture(self, *lines: str) -> str:
+        return "Subject: t\n\n---\n\n" + "\n".join(lines) + "\n"
+
+    def test_no_bracket_line_is_silently_dropped(self) -> None:
+        body = self._fixture(
+            "[00:00 - 00:12] Speaker 1: first minute",
+            "[99:58 - 99:59] Speaker 1: the last line under the 100-minute mark",
+            "[100:05 - 100:31] Speaker 1: the first line past 99 minutes",
+            "[446:12 - 446:40] Speaker 1: seven hours in",
+        )
+        stripped = to_srt.strip_frontmatter(body)
+        bracket_lines = sum(1 for line in stripped.splitlines() if line.startswith("["))
+        segments = to_srt.parse_segments(stripped)
+        self.assertEqual(
+            bracket_lines, len(segments),
+            f"{bracket_lines - len(segments)} line(s) starting with '[' produced no cue. "
+            f"A file can lose most of its transcript this way and still emit a "
+            f"syntactically valid SRT — #50 lost 86% of a 7.4-hour recording with "
+            f"no error, no warning, and continuous timecodes.")
+
+    def test_the_point_form_counts_too(self) -> None:
+        """The MCP producer writes `[start]` with no end (#40). Same rule."""
+        body = self._fixture(
+            "[00:30] Speaker 1: point form, two-digit",
+            "[132:07] Speaker 1: point form, three-digit",
+        )
+        stripped = to_srt.strip_frontmatter(body)
+        bracket_lines = sum(1 for line in stripped.splitlines() if line.startswith("["))
+        self.assertEqual(bracket_lines, len(to_srt.parse_segments(stripped)))
+
+
+class TestMinutesPastNinetyNine(unittest.TestCase):
+    """Plaud's CLI writes TOTAL minutes, so 100 minutes in the field is `100:05`.
+
+    `parse_timestamp` already computed `int(minutes) * 60` with no width
+    assumption — the arithmetic was never wrong. `_STAMP` was the only gate.
+    """
+
+    def test_three_digit_minutes_parse(self) -> None:
+        segs = to_srt.parse_segments("[100:05 - 100:31] Speaker 1: past the hour and a half")
+        self.assertEqual(1, len(segs), "a three-digit minute field was dropped")
+        self.assertAlmostEqual(6005.0, segs[0]["start"])
+        self.assertAlmostEqual(6031.0, segs[0]["end"])
+
+    def test_seven_hours_in(self) -> None:
+        segs = to_srt.parse_segments("[446:12] Speaker 1: 7.4 hours")
+        self.assertEqual(1, len(segs))
+        self.assertAlmostEqual(446 * 60 + 12, segs[0]["start"])
+
+    def test_two_digit_minutes_still_parse(self) -> None:
+        """The widening must not cost the common case."""
+        segs = to_srt.parse_segments("[07:25 - 07:31] Speaker 1: normal")
+        self.assertEqual(1, len(segs))
+        self.assertAlmostEqual(445.0, segs[0]["start"])
+
+    def test_the_widening_is_bounded(self) -> None:
+        """`\\d{1,4}` not `\\d+` — an unbounded class trades one silent bug for another.
+
+        9999:59 is about seven days, past any real recording. Five digits is not
+        a long meeting, it is a malformed line, and it should stay rejected.
+        """
+        self.assertEqual([], to_srt.parse_segments("[99999:00] Speaker 1: not a recording"))
+
+
 class TestCueBuilding(unittest.TestCase):
     def _segs(self, *starts: float) -> list[dict]:
         return [{"start": s, "speaker": "A", "text": f"line {i}"}

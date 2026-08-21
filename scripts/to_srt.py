@@ -38,8 +38,22 @@ CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
 )
 
-# [00:12:03] Speaker 1: text   /   [12:03.500] text
-_STAMP = r"\d{1,2}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?"
+# [00:12:03] Speaker 1: text   /   [12:03.500] text   /   [446:12] text
+#
+# The minute field takes up to FOUR digits, because Plaud's CLI writes TOTAL
+# minutes: a recording passes 99 minutes and the field becomes `100:05`, then
+# `446:12` at seven hours. `\d{1,2}` here cost #50 — 86% of a 7.4-hour
+# transcript, dropped silently, into an SRT that was syntactically perfect.
+#
+# `parse_timestamp` never had the problem: it does `int(minutes) * 60` with no
+# width assumption, and the END of a ranged line goes straight there without
+# passing through this pattern — which is why ends already accepted three
+# digits while starts did not. This was the only gate.
+#
+# Bounded at four, not `\d+`. Total-minute stamps are bounded by how long a
+# recording can be (`9999:59` is about seven days); an unbounded class would
+# swap a silent-drop bug for a silent-accept one at the same line.
+_STAMP = r"\d{1,4}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?"
 
 # Two bracket forms, because two producers write into this cache and they do
 # not agree (#40): Plaud's MCP path emits `[start]`, its CLI emits

@@ -42,3 +42,6 @@ openspec/.vector-search.db*
 
 # Local codex-pro run artifacts — never part of the shipped plugin
 .codex-pro/
+
+# IDD tree-lock (idd-tree-lock.sh #183) — per-machine session state, not tracked
+.claude/.idd/tree-lock
