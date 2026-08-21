@@ -118,6 +118,14 @@ times are used as given. The MCP reports only starts, so a cue has to run until
 the next one begins and the final cue gets a four-second guess. Installing the
 CLI (above) buys exact timing as well as a cheaper index.
 
+**Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
+silently truncated at the 100-minute mark and the `.srt` gave no sign of it —
+valid syntax, continuous timecodes, and 86% of a 7.4-hour transcript missing.
+The CLI writes *total* minutes, so the field passes two digits at 100 (`100:05`,
+then `446:12` at seven hours) and the parser had been built for two. If you
+produced subtitles from a long recording before v0.10.1, redo them: the old file
+looks complete and is not. See #50.
+
 Before this was fixed, the CLI path produced **no subtitles at all** — the two
 paths write different timestamp shapes and only one was understood, so the
 recommended way to index was the one that could not be captioned (#40).
@@ -245,6 +253,15 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
+- **A transcript line the parser does not recognise is dropped, but no longer
+  quietly.** Any line that looks like a cue and fails to parse is now counted and
+  named on stderr. This exists because two defences that were each individually
+  reasonable left a gap between them: dropping unrecognised lines is deliberate
+  (cache files carry a header and blank lines), and the guard against a broken
+  file fires only when *nothing* parsed. Neither covered *partly* — 20% parsed is
+  not zero, so #50 lost most of a transcript in silence. Treat the warning as a
+  contract gap rather than a bad file: the shape probably needs adding to
+  `scripts/cache.py`.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —
   three in the MCP, one in the CLI — so a second login while one is open loses.
   `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and
