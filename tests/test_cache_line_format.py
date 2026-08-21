@@ -76,6 +76,13 @@ IN_CONTRACT = [
     ("point, hh:mm:ss",    "[00:01:01] Speaker 1: a line of words",     61.0, None),
     ("range, mm:ss",       "[01:01 - 01:55] Speaker 1: a line",         61.0, 115.0),
     ("range, hh:mm:ss",    "[00:01:01 - 00:01:55] Speaker 1: a line",   61.0, 115.0),
+    # The minute field is TOTAL minutes, so it leaves two digits at 100 (#50).
+    # This was in the cache and shipping for as long as the CLI has written
+    # long recordings — the contract simply never said so, which is why the
+    # table above could look complete while a 7.4-hour transcript lost 86%.
+    ("point, mmm:ss",      "[100:05] Speaker 1: a line",              6005.0, None),
+    ("range, mmm:ss",      "[100:05 - 100:31] Speaker 1: a line",     6005.0, 6031.0),
+    ("range, four-digit",  "[1440:00 - 1440:30] Speaker 1: a day in", 86400.0, 86430.0),
 ]
 
 # Shapes no producer emits. Listed so that "the contract is two forms" is a
@@ -85,6 +92,10 @@ OUT_OF_CONTRACT = [
     ("parenthesised",      "(01:01) Speaker 1: a line"),
     ("trailing timestamp", "Speaker 1: a line [01:01]"),
     ("prose",              "Speaker 1 said something at one minute in"),
+    # Five digits is not a long meeting, it is a malformed line. The widening
+    # in #50 is bounded at four on purpose — an unbounded minute field would
+    # trade a silent-drop bug for a silent-accept one at the same site.
+    ("five-digit minutes", "[99999:00] Speaker 1: not a recording"),
 ]
 
 
@@ -103,10 +114,19 @@ class TestTheTwoAcceptedForms(unittest.TestCase):
         A range gives `to_srt` a real end; a point leaves it inferring one
         from the next segment and guessing outright for the last.
         """
-        ends = {label: to_srt.parse_segments(line + "\n")[0]["end"]
-                for label, line, _, _ in IN_CONTRACT}
-        self.assertEqual([e for k, e in ends.items() if "range" in k], [115.0, 115.0])
-        self.assertEqual([e for k, e in ends.items() if "point" in k], [None, None])
+        # Derived from IN_CONTRACT rather than hardcoded, so adding a row to the
+        # table does not require editing an assertion that has nothing to do
+        # with it. The hardcoded `[115.0, 115.0]` broke the moment #50 added
+        # the total-minute rows — a table-driven test whose expectations were
+        # not table-driven.
+        for label, line, _, expected_end in IN_CONTRACT:
+            with self.subTest(form=label):
+                end = to_srt.parse_segments(line + "\n")[0]["end"]
+                if "range" in label:
+                    self.assertIsNotNone(end, f"{label} is a range but carries no end")
+                    self.assertEqual(expected_end, end)
+                else:
+                    self.assertIsNone(end, f"{label} is a point but carries an end")
 
 
 class TestTheListIsClosed(unittest.TestCase):
@@ -141,6 +161,20 @@ class TestTheContractIsWrittenDownWhereProducersLook(unittest.TestCase):
                 self.assertIn(needed, head.lower(),
                               "cache.py's module docstring no longer states the "
                               "line format a producer must write (#40)")
+
+        # #50: the docstring showed `MM:SS` and `HH:MM:SS` and nothing else, so
+        # a reader concluded — correctly, from what was written — that two
+        # digits was the whole story. The producer had been writing three for
+        # as long as recordings ran past 99 minutes. An incomplete contract is
+        # not a smaller contract; it is a wrong one, and it made the parser
+        # look right while it dropped 86% of a transcript.
+        self.assertIn("total minutes", head.lower(),
+                      "cache.py does not say the minute field is TOTAL minutes, so "
+                      "nothing tells a reader it can exceed two digits (#50)")
+        self.assertIn("446:12", head,
+                      "cache.py has no worked example of a minute field past 99 — the "
+                      "shape is the one that silently truncated real transcripts, and "
+                      "prose without the example is what let it stay invisible (#50)")
 
     def test_the_out_of_scope_kinds_are_named_as_such(self):
         """Silence would read as coverage."""

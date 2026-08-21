@@ -33,6 +33,24 @@ infer one from where the next segment starts — which leaves the last segment
 with a guess. Both forms are accepted; the ranged one produces better
 subtitles, so a producer that has end times should keep them.
 
+`MM` is **total minutes**, not minutes-within-an-hour, so it leaves two digits
+once a recording passes 99 minutes:
+
+    [100:05] Speaker 1: text
+    [446:12 - 446:40] Speaker 1: text        # 7.4 hours in
+
+Up to four digits (`9999:59` is about seven days, past any real recording);
+five is a malformed line and stays rejected.
+
+This paragraph is #50, and it is worth saying why it was missing. The two-form
+table above was written from short recordings, so `MM` looked like it meant two
+digits, and `to_srt` was built to match. The producer had been writing three
+digits for as long as anyone recorded past 99 minutes. **An incomplete contract
+is not a smaller contract, it is a wrong one** — the parser was correct by these
+words while it silently dropped 86% of a 7.4-hour transcript into an SRT with
+continuous timecodes and no error. If you are adding a producer and its shape is
+not written here, that is this bug again, not a small omission.
+
 **Two forms, and only these two.** The list is closed, and closed on purpose:
 both entries are shapes that a shipped producer actually emits, measured
 2026-08-09 — Plaud's MCP path writes the first, its CLI writes the second. A
