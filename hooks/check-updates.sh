@@ -86,7 +86,13 @@ try:
 except Exception:
     pass" 2>/dev/null)
     plugin_latest=$(gh release view --repo "$REPO" --json tagName --jq '.tagName' 2>/dev/null | sed 's/^v//')
-    if [ -n "$plugin_local" ] && [ -n "$plugin_latest" ] && [ "$plugin_local" != "$plugin_latest" ]; then
+    # Version ORDER, not string inequality. `!=` told the user to "update"
+    # from a local 0.9.0 to a published 0.8.1 — the local copy was ahead
+    # because a release had not been cut yet. sort -V puts the older first,
+    # so a notice fires only when local really is behind (#47 verify R3).
+    plugin_older=$(printf '%s\n%s\n' "$plugin_local" "$plugin_latest" | sort -V | head -1)
+    if [ -n "$plugin_local" ] && [ -n "$plugin_latest" ] \
+       && [ "$plugin_local" != "$plugin_latest" ] && [ "$plugin_older" = "$plugin_local" ]; then
         notices+=("plaud-mcp-connector  $plugin_local → $plugin_latest    /plugin update plaud-mcp-connector@plaud-mcp-connector")
     fi
 fi
