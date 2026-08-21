@@ -85,9 +85,11 @@ allowed only when that exact sentence is on `ALLOWED_SENTENCES` with a reason.
 No body parsing, no negation heuristics, nothing to walk around.
 
 **What that gives up**: the rule no longer notices that a claim is backed by a
-real step. Every mention stops a human, including the honest ones — of which
-this repo has one, `plaud-upload`'s denial, and it is allow-listed by its full
-text so that editing it takes the exemption away.
+real step. Every mention stops a human, including the honest ones. This repo
+had exactly one, `plaud-upload`'s denial, allow-listed by its full text so that
+editing it takes the exemption away. `plaud-upload` was archived on 2026-08-18,
+so no shipping skill exercises the exemption today; the entry is kept against a
+restore rather than deleted.
 
 **What it buys**: the escape hatch is gone, so the phrase pattern can be as
 wide as it needs to be. `start the transcription` — a bypass #39 had to keep
@@ -98,9 +100,12 @@ Both halves of that trade are asserted, not described:
 `test_the_old_one_word_bypass_is_closed` and
 `test_a_step_in_the_body_no_longer_excuses_anything`.
 
-`TestTheExactRegressionOf36` is unchanged and remains the load-bearing guard
-for #36 itself: it names five files and five sentence shapes, so the exact
-edit that would undo the fix fails.
+`TestTheExactRegressionOf36` remains the load-bearing guard for #36 itself:
+five pins across two files (`archive/skills/plaud-upload/SKILL.md` and
+`README.md`), each naming a sentence shape, so the exact edit that would undo
+the fix fails. It was described here as "unchanged … five files" until #47
+noticed both halves had stopped being true: #48 repointed the pins at the
+archived copy and retired one, leaving two distinct files, not five.
 
 Rule 2 still stops at the `description:` block and does not scan body prose.
 Body prose has legitimate non-claiming uses of the same words ("To start
@@ -298,6 +303,10 @@ CAPABILITY_PHRASES = (
 ALLOWED_SENTENCES = {
     # plaud-upload's #36 fix. It denies the capability in order to hand the
     # job back to the user, and naming the thing is how it does that.
+    #
+    # plaud-upload was archived 2026-08-18, so nothing live matches this today.
+    # Kept, not deleted: a restore from archive/ must not trip the guard on the
+    # very sentence that fixed #36. Delete it only if the skill is deleted.
     "It does not start transcription: no step here asks Plaud to, and the "
     "uploaded file waits at 準備生成 / Ready to generate until somebody "
     "presses 產生 / Generate and then 立即產生 / Generate now in the web app "
@@ -489,7 +498,7 @@ class TestSentenceSplitting(unittest.TestCase):
         loud. The dangerous direction is the reverse only if a key were a
         substring; it is not. This keeps the splitter honest either way.
         """
-        p = SKILLS_DIR / "plaud-upload" / "SKILL.md"
+        p = SKILLS_DIR / "plaud-grep" / "SKILL.md"
         self.assertGreater(len(sentences(_description(p))), 3,
                            "the description came back as one blob")
 
@@ -514,25 +523,50 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     to look at this list and decide, rather than sail past.
     """
 
+    # Repointed when `plaud-upload` was archived. The skill left the shipping
+    # surface, so these pins now guard `archive/skills/plaud-upload/SKILL.md`:
+    # the archived copy is the artifact anyone would restore from, and the five
+    # sentences #36 removed must not ride back in with it.
+    #
+    # `REMOVED` keeps its README entry — the README must never claim upload
+    # starts transcription, and that stays true whether or not it documents
+    # upload at all.
+    #
+    # `KEPT`'s README entry was first RETIRED here, on the reasoning that it
+    # "required the README to name the second press, which only made sense while
+    # the README had an upload handoff paragraph to protect." **That reasoning
+    # was wrong about what the pin protected** (#47). The requirement was never
+    # "the README documents upload" — it was "a user learns there are TWO
+    # presses, because the first only opens the chooser." That outlived the
+    # upload skill. Retiring the guard let the last shipping mention of the
+    # second press leave with #48, and nothing went red.
+    #
+    # Re-homed to `tests/test_index_reporting.py`'s MUST_MENTION, which is
+    # scoped to `### 4. Report` and has a liveness test against vacuity.
+    #
+    # It was first added HERE as a file-wide KEPT pin, and that was wrong in the
+    # way this very file warns about four lines below: the phrase also appears
+    # in an explanatory paragraph outside the report section, so reverting the
+    # user-facing template alone kept the suite green. Verified by mutation.
+    # That is instance four of the shape #37 called a pattern — file-wide
+    # assertions stop guarding the place they were written for.
+
     # (path, forbidden pattern, what it was)
     REMOVED = (
-        ("skills/plaud-upload/SKILL.md", r"and\s+starts?\s+transcription",
+        ("archive/skills/plaud-upload/SKILL.md", r"and\s+starts?\s+transcription",
          "the description and body headline both claimed the upload starts it"),
         ("README.md", r"and\s+starts?\s+transcription",
          "the README's plaud-upload paragraph claimed the same"),
-        ("skills/plaud-upload/SKILL.md", r"transcript\s+reaches\s+your\s+machine",
+        ("archive/skills/plaud-upload/SKILL.md", r"transcript\s+reaches\s+your\s+machine",
          "promised the transcript would arrive on its own"),
-        ("skills/plaud-upload/SKILL.md", r"once\s+processing\s+finishes",
+        ("archive/skills/plaud-upload/SKILL.md", r"once\s+processing\s+finishes",
          "presupposed processing had started; it never does"),
     )
 
     # (path, required pattern, why)
     KEPT = (
-        ("skills/plaud-upload/SKILL.md", r"does not\s*\n?\s*start transcription",
+        ("archive/skills/plaud-upload/SKILL.md", r"does not\s*\n?\s*start transcription",
          "the description must deny it outright — that denial is the fix"),
-        ("README.md", r"立即產生|Generate now",
-         "the README must name the SECOND press; the first only opens the "
-         "chooser, and a reader who stops after one is back in the silent wait"),
     )
 
     # File-wide "contains 立即產生" is not enough for the handoff: adding the
@@ -542,7 +576,7 @@ class TestTheExactRegressionOf36(unittest.TestCase):
     HANDOFF_HEADING = "### The skill stops here, and the recording has no transcript"
 
     def _handoff_section(self) -> str:
-        text = (REPO_ROOT / "skills/plaud-upload/SKILL.md").read_text(encoding="utf-8")
+        text = (REPO_ROOT / "archive/skills/plaud-upload/SKILL.md").read_text(encoding="utf-8")
         self.assertIn(self.HANDOFF_HEADING, text,
                       "the handoff section is gone — without it the skill ends "
                       "silently and the user waits for an event that never "
@@ -635,9 +669,12 @@ class TestLiveDescriptions(unittest.TestCase):
         again. It is not vacuous the way the old live check became: the old
         one asked whether a body contained a step, and once #36 was fixed no
         description mentioned the capability at all, so it passed no matter
-        what the rule did. This asks about the mention itself, which is
-        exactly what plaud-upload's fixed description still contains — and
-        which is on the allow-list by its whole text.
+        what the rule did. This asks about the mention itself, which
+        is what plaud-upload's fixed description did — it names the capability
+        in order to deny it, and is on the allow-list by its whole text. That
+        skill was archived on 2026-08-18, so the live scan no longer reaches it
+        and nothing in the current set matches. Read the green here as "the rule
+        is not firing", not as "the rule still catches what it was built for".
         """
         for skill_md in _skills():
             for name, sentence in capability_mentions(_description(skill_md)):

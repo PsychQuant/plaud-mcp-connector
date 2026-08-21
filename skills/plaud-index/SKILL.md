@@ -462,9 +462,9 @@ failed. The official CLI's own test is `sourceList.some(s => s.data_type ===
 "transaction")` — an existence check, and `list_files` returns six fields, none
 of them about transcription. Measured across this account's ten most recent
 recordings: nine had no transcript, because Plaud only transcribes when someone
-presses 產生 / Generate. **The state that needs an action is the common one**,
-and calling it "processing" turns it into a wait that never ends and produces
-no error to notice it by.
+presses 產生 / Generate and then confirms with 立即產生 / Generate now. **The
+state that needs an action is the common one**, and calling it "processing"
+turns it into a wait that never ends and produces no error to notice it by.
 
 ### 4. Report
 
@@ -481,7 +481,9 @@ will otherwise supply the harmless reading. Say it in this shape:
 skipped 9 — no transcript
   Plaud's API cannot say which of these it is: never requested, still being
   made, or failed. If a recording has sat here across several runs it is
-  almost certainly the first — open it in Plaud and press 產生 / Generate.
+  almost certainly the first — open it in Plaud, press 產生 / Generate, then
+  立即產生 / Generate now. The second press is the one that starts it; stopping
+  after the first only opens the chooser.
 ```
 
 **Do not try to guess which one it is.** There is no field to read, and any

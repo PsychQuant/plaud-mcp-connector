@@ -39,3 +39,6 @@ openspec/.vector-search.db*
 # than reading this file.
 .claude/.idd/*
 !.claude/.idd/local.json
+
+# Local codex-pro run artifacts — never part of the shipped plugin
+.codex-pro/

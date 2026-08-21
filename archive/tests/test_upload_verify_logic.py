@@ -1,10 +1,17 @@
 """Run the Node-based verification-logic test as part of the Python suite.
 
+ARCHIVED 2026-08-18 with `plaud-upload` (#48). Every path below is relative to
+`archive/`, which is why they still resolve: the script is at
+`archive/skills/plaud-upload/scripts/inject_upload.sh` and the Node test at
+`archive/tests/upload_verify_logic.test.mjs`. From the repo root neither exists.
+
 The logic under test is JavaScript embedded in a shell script
 (skills/plaud-upload/scripts/inject_upload.sh), so it is exercised by
-tests/upload_verify_logic.test.mjs. This wrapper exists so a single
-`python3 -m unittest discover -s tests` covers everything — nobody has to
-remember a second command.
+tests/upload_verify_logic.test.mjs. This wrapper exists so one
+`python3 -m unittest discover -s tests` covers everything — but note that the
+root suite no longer reaches this file, so the "single command" is now
+`cd archive && python3 -m unittest discover -s tests`. That invocation passes
+and does run the Node leg; `make check` does not run it at all.
 
 Node is already a hard requirement of this plugin (.mcp.json launches the
 official MCP via npx, which needs Node >= 20), so depending on it here adds
