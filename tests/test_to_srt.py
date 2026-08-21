@@ -198,6 +198,109 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
         self.assertEqual(bracket_lines, len(to_srt.parse_segments(stripped)))
 
 
+class TestTheBoundAppliesToBothEndsAndBothShapes(unittest.TestCase):
+    """Verify round 1 found the bound was enforced on a quarter of what it claimed.
+
+    `_STAMP` governs the `ts` group only. The `end` group is `[^\]]*?` and goes
+    straight to `parse_timestamp`, which has no width limit — so `10000:00` as
+    an END sailed through while the same string as a START was rejected. And
+    `_STAMP` is ONE pattern serving TWO shapes: `MM:SS` (total minutes, which
+    is what #50 is about) and `HH:MM:SS` (literal hours). Widening it to four
+    digits for the first silently widened the hours field of the second to
+    9999 hours — 416 days — where two digits had rejected it before.
+
+    The comment justifying the bound said an unbounded class "would trade a
+    silent-drop bug for a silent-accept one at the same site". It was right,
+    and it only checked one of the two shapes it was describing.
+    """
+
+    def test_a_five_digit_end_does_not_become_a_timestamp(self):
+        segs = to_srt.parse_segments("[100:05 - 10000:00] Speaker 1: five-digit end")
+        self.assertEqual(1, len(segs), "the line itself must survive — a malformed end "
+                                       "costs the timing, not the words")
+        self.assertIsNone(segs[0]["end"],
+                          "a five-digit end was accepted as a real time. The contract "
+                          "says five digits is malformed and stays rejected; it was "
+                          "only ever true of starts")
+
+    def test_a_well_formed_end_still_parses(self):
+        segs = to_srt.parse_segments("[100:05 - 100:31] Speaker 1: fine")
+        self.assertAlmostEqual(6031.0, segs[0]["end"])
+
+    def test_a_malformed_end_keeps_the_words(self):
+        """The existing trade, restated as a test rather than a comment."""
+        for bad in ("banana", "00:412", "10000:00", ""):
+            with self.subTest(end=bad):
+                segs = to_srt.parse_segments(f"[00:10 - {bad}] Speaker 1: the words")
+                self.assertEqual(1, len(segs), f"end={bad!r} cost the whole line")
+                self.assertEqual("the words", segs[0]["text"])
+
+    def test_seconds_must_be_exactly_two_digits(self):
+        """`00:412` became 412.0 — a plausible-looking wrong number (#53's substance)."""
+        segs = to_srt.parse_segments("[00:10 - 00:412] Speaker 1: three-digit seconds")
+        self.assertIsNone(segs[0]["end"],
+                          "`00:412` was converted to a number instead of refused. "
+                          "Silently wrong beats silently absent for danger")
+
+    def test_the_hours_field_is_not_four_digits(self):
+        """`\\d{1,4}` was meant for TOTAL MINUTES. On the HH:MM:SS shape it is hours."""
+        self.assertEqual(
+            [], to_srt.parse_segments("[1234:05:06] Speaker 1: 51 days in"),
+            "a four-digit HOURS field parsed as 4442706s (51.4 days). The bound was "
+            "justified as `9999:59 is about seven days`, which is the minutes reading; "
+            "the same four digits on hours is 416 days")
+
+    def test_the_ordinary_hour_forms_still_parse(self):
+        for line, want in (("[00:01:01] S: a", 61.0),
+                           ("[12:30:00] S: b", 45000.0),
+                           ("[1:02:03.250] S: c", 3723.25)):
+            with self.subTest(line=line):
+                segs = to_srt.parse_segments(line)
+                self.assertEqual(1, len(segs), f"{line} stopped parsing")
+                self.assertAlmostEqual(want, segs[0]["start"])
+
+    def test_total_minutes_still_reach_four_digits(self):
+        segs = to_srt.parse_segments("[1440:00] Speaker 1: a day of total minutes")
+        self.assertEqual(1, len(segs))
+        self.assertAlmostEqual(86400.0, segs[0]["start"])
+
+
+class TestTheGuardDoesNotShareTheParsersAssumption(unittest.TestCase):
+    """The denominator must be LOOSER than the parser, or it cannot see the gap.
+
+    The guard counted `line.startswith("[")` — the same column-0 anchor
+    `SEGMENT`'s `^\[` requires. Any drop whose cause also breaks that anchor
+    left both the numerator and the denominator, so `unparsed` stayed 0 and
+    nothing was said. One leading space was enough to reproduce #50's exact
+    signature: an SRT that looks complete, no error, no warning.
+    """
+
+    def _run(self, body: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(SCRIPT), "abc123"],
+                                  capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stderr
+
+    def test_an_indented_bracket_line_is_counted_and_warned_about(self):
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00 - 00:12] S: parses\n"
+                " [00:13 - 00:20] S: one leading space, silently dropped\n"
+                "[00:21 - 00:30] S: parses\n")
+        _, err = self._run(body)
+        self.assertIn("did not parse", err,
+                      "an indented bracket line vanished without a word. The guard "
+                      "shares the parser's line-start assumption, so the drop leaves "
+                      "the denominator too and `unparsed` stays 0")
+
+    def test_a_clean_file_is_still_quiet(self):
+        body = ("Subject: t\nDuration: 00:01\n\n---\n\n"
+                "[00:00 - 00:12] S: parses\n\n[00:13 - 00:20] S: also parses\n")
+        _, err = self._run(body)
+        self.assertNotIn("did not parse", err, f"warned about a clean file: {err!r}")
+
+
 class TestPartialDropIsLoud(unittest.TestCase):
     """A file that parses PARTLY is the case both guards were blind to.
 
@@ -227,7 +330,12 @@ class TestPartialDropIsLoud(unittest.TestCase):
                 "[bogus shape] Speaker 1: does not parse\n"
                 "[also bogus] Speaker 1: nor this\n")
         _, err = self._run(body)
-        self.assertIn("2", err, f"the count of dropped lines is not in stderr: {err!r}")
+        # NOT `assertIn("2", err)` — the fixture filename `abc123.md` is printed in
+        # the warning and contains a "2", so that assertion passed on the filename
+        # and never tested the count at all (verify round 1).
+        self.assertRegex(err, r"\b2 of 3 lines\b",
+                         f"the warning does not state how many of how many were "
+                         f"dropped: {err!r}")
         self.assertIn("bogus shape", err,
                       "the warning does not name the first offending line, so a false "
                       "positive would be undiagnosable")

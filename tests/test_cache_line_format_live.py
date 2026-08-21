@@ -66,7 +66,23 @@ from test_cache_line_format import to_srt  # noqa: E402  (same parser as the con
 # A line that carries a timestamp at all. Deliberately looser than the
 # contract: this file's job is to find lines the contract does NOT cover, so
 # it must be able to see them.
-TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,2}:\d{2}")
+#
+# The minute field is `\d{1,4}` for the same reason the parser's is (#50): the
+# producer writes TOTAL minutes, so it passes two digits at 100 and reaches
+# `446:12` at seven hours. This oracle was left at `\d{1,2}` when the parser
+# was widened, which broke it in the one direction it exists to guard — the
+# sister file's docstring says this check exists precisely so that "if a
+# producer starts writing a third shape and the parser is widened to accept
+# it" the two sides do not quietly agree. Widening the parser and not the
+# oracle made them quietly DISagree instead: it stopped recognising
+# `[446:12 - 446:40]` as timestamp-shaped at all, so the next live run against
+# any recording past 99 minutes would have failed spuriously — on exactly the
+# data class #50 fixed. Default CI could not see it; this file is opt-in.
+#
+# It stays LOOSER than `_STAMP` on purpose (no seconds-width or hours bound):
+# an oracle that matched the parser's shape exactly would be the circularity
+# this file was built to avoid.
+TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,4}:\d{2}")
 
 # The CLI colours its table. Ids arrive as `\x1b[36m<32 hex>\x1b[39m`, and the
 # `m` of the escape is a word character — so `\b[0-9a-f]{32}\b` matched

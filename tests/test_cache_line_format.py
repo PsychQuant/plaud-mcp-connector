@@ -96,6 +96,11 @@ OUT_OF_CONTRACT = [
     # in #50 is bounded at four on purpose — an unbounded minute field would
     # trade a silent-drop bug for a silent-accept one at the same site.
     ("five-digit minutes", "[99999:00] Speaker 1: not a recording"),
+    # Verify round 1: the four-digit bound was enforced on a range's START
+    # only, and the same widening had leaked into the HOURS field of the
+    # three-part form. Both are contract statements, so both are pinned here.
+    ("four-digit hours",   "[1234:05:06] Speaker 1: 51 days is not a recording"),
+    ("three-digit seconds", "[00:412] Speaker 1: seconds are exactly two digits"),
 ]
 
 
@@ -171,6 +176,15 @@ class TestTheContractIsWrittenDownWhereProducersLook(unittest.TestCase):
         self.assertIn("total minutes", head.lower(),
                       "cache.py does not say the minute field is TOTAL minutes, so "
                       "nothing tells a reader it can exceed two digits (#50)")
+        # The bound is a contract statement, so the contract has to say what it
+        # bounds. "five is malformed" alone read three ways too widely at once.
+        self.assertIn("both ends of a range", head,
+                      "cache.py states a five-digit bound without saying it applies to "
+                      "a range's end too — it did not, and 10000:00 became 600000.0")
+        self.assertIn("literal hours", head,
+                      "cache.py does not distinguish the HH field from the MM field, so "
+                      "the four-digit bound reads as covering hours (416 days)")
+
         self.assertIn("446:12", head,
                       "cache.py has no worked example of a minute field past 99 — the "
                       "shape is the one that silently truncated real transcripts, and "

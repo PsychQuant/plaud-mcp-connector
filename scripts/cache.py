@@ -40,7 +40,17 @@ once a recording passes 99 minutes:
     [446:12 - 446:40] Speaker 1: text        # 7.4 hours in
 
 Up to four digits (`9999:59` is about seven days, past any real recording);
-five is a malformed line and stays rejected.
+five is a malformed line and stays rejected — **at both ends of a range, and
+in the `MM` field only**. In the three-part `HH:MM:SS` form the leading field
+is literal hours and stays at two digits, because four digits of hours is 416
+days rather than seven. The seconds field is always exactly two digits.
+
+Those three qualifications are not pedantry. The first version of this
+paragraph said only "five is a malformed line and stays rejected", and all
+three ways it could be read too widely were true at once: the bound was
+enforced on a range's start but not its end, four digits had been let into the
+hours field of the other shape, and `00:412` was being converted to 412
+seconds. A sentence that states a bound has to say what it is bounding.
 
 This paragraph is #50, and it is worth saying why it was missing. The two-form
 table above was written from short recordings, so `MM` looked like it meant two

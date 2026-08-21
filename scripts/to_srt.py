@@ -53,7 +53,23 @@ CACHE_DIR = pathlib.Path(
 # Bounded at four, not `\d+`. Total-minute stamps are bounded by how long a
 # recording can be (`9999:59` is about seven days); an unbounded class would
 # swap a silent-drop bug for a silent-accept one at the same line.
-_STAMP = r"\d{1,4}:\d{2}(?::\d{2})?(?:[.,]\d{1,3})?"
+# TWO shapes, and they need DIFFERENT bounds, because the leading field means
+# different things in each:
+#
+#   HH:MM:SS   leading field is literal HOURS      -> 1-2 digits
+#   MM:SS      leading field is TOTAL MINUTES      -> up to 4 digits (#50)
+#
+# One pattern with one bound was the mistake verify round 1 caught. Widening to
+# four digits for the total-minute form silently widened the HOURS field of the
+# other form to 9999 hours — 416 days — where two digits had rejected it. The
+# justification written here ("9999:59 is about seven days") was the MINUTES
+# reading, applied without checking to the shape where the same four digits
+# mean something 60x larger. That is exactly the silent-accept this bound was
+# chosen to prevent, introduced by the bound itself.
+#
+# Three-part alternative first, so `12:30:00` is read as hours and not as
+# `12:30` with a stray tail.
+_STAMP = r"(?:\d{1,2}:\d{2}:\d{2}|\d{1,4}:\d{2})(?:[.,]\d{1,3})?"
 
 # Two bracket forms, because two producers write into this cache and they do
 # not agree (#40): Plaud's MCP path emits `[start]`, its CLI emits
@@ -69,6 +85,10 @@ SEGMENT = re.compile(
     r"(?:(?P<speaker>[^:\[\]]{1,60}?)\s*:\s*)?"
     r"(?P<text>.*\S)\s*$"
 )
+
+
+# The same shape as a start, for validating an end before converting it.
+_STAMP_ONLY = re.compile(_STAMP)
 
 
 def parse_timestamp(raw: str) -> float:
@@ -120,10 +140,25 @@ def parse_segments(body: str) -> list[dict]:
         raw_end = m.group("end")
         end: float | None = None
         if raw_end:
-            try:
-                end = parse_timestamp(raw_end)
-            except ValueError:
-                end = None      # keep the words, lose only the timing
+            # The end group is matched loosely (`[^\]]*?`) on purpose, so a
+            # malformed end costs the timing and not the line. But loose in the
+            # REGEX became unbounded in the VALUE: `parse_timestamp` only splits
+            # and converts, it validates nothing, so `10000:00` became 600000.0
+            # and `00:412` became 412.0 — plausible-looking wrong numbers where
+            # the docstring above promises None. `banana` was refused only
+            # because int() choked on it, which is luck, not a check.
+            #
+            # So the shape check happens HERE, before conversion: same bound as
+            # the start, same trade as before (the words survive either way).
+            # This is also #53's substance — its own deferral reasoning said
+            # `parse_timestamp` was shared by both paths and could not be
+            # tightened for one, which confused a shared CONVERTER for a shared
+            # VALIDATOR. Start was never validated there either.
+            if _STAMP_ONLY.fullmatch(raw_end):
+                try:
+                    end = parse_timestamp(raw_end)
+                except ValueError:
+                    end = None  # keep the words, lose only the timing
         out.append({
             "start": start,
             "end": end,
@@ -400,8 +435,14 @@ def main() -> None:
     # reasons: a line starting with `[` was meant to be a cue, so it is the
     # honest denominator; and counting here does not reuse the parser, so this
     # says something the parser cannot say about itself.
+    # `lstrip()`, not `startswith("[")`. The parser anchors on `^\[` at column
+    # zero; counting with the SAME anchor meant any drop caused by breaking it
+    # left the numerator AND the denominator together, so `unparsed` stayed 0.
+    # One leading space was enough to reproduce #50's whole signature — three
+    # bracket lines in, two cues out, exit 0, stderr empty (verify round 1).
+    # A denominator that shares the parser's assumption cannot see past it.
     bracket_lines = [line for line in strip_frontmatter(raw).splitlines()
-                     if line.startswith("[")]
+                     if line.lstrip().startswith("[")]
     unparsed = len(bracket_lines) - len(segments)
     if unparsed > 0:
         first_bad = next((line for line in bracket_lines
