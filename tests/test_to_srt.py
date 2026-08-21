@@ -198,6 +198,51 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
         self.assertEqual(bracket_lines, len(to_srt.parse_segments(stripped)))
 
 
+class TestPartialDropIsLoud(unittest.TestCase):
+    """A file that parses PARTLY is the case both guards were blind to.
+
+    `parse_segments` drops non-matching lines silently, and that is right for
+    the `Subject:` header and blank lines — warning about those would bury the
+    real problem. The caller then guards on `if not segments`, which fires only
+    at ZERO. #50 parsed 20% of one file: the drop was silent by design and the
+    guard was quiet because the list was not empty. "All or nothing" was an
+    assumption nobody wrote down, and partial parsing fell straight through it.
+
+    So the signal belongs on the line count, not on the parser: a line that
+    starts with `[` was meant to be a cue, and if it did not become one, say so.
+    """
+
+    def _run(self, body: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123"],
+                capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stderr
+
+    def test_a_partially_parsed_file_warns(self) -> None:
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00 - 00:12] Speaker 1: parses\n"
+                "[bogus shape] Speaker 1: does not parse\n"
+                "[also bogus] Speaker 1: nor this\n")
+        _, err = self._run(body)
+        self.assertIn("2", err, f"the count of dropped lines is not in stderr: {err!r}")
+        self.assertIn("bogus shape", err,
+                      "the warning does not name the first offending line, so a false "
+                      "positive would be undiagnosable")
+
+    def test_a_fully_parsed_file_stays_quiet(self) -> None:
+        """The header and blank lines must not trip it — that silence is deliberate."""
+        body = ("Subject: t\nDuration: 00:01\n\n---\n\n"
+                "[00:00 - 00:12] Speaker 1: parses\n"
+                "\n"
+                "[00:13 - 00:20] Speaker 1: also parses\n")
+        _, err = self._run(body)
+        self.assertNotIn("did not parse", err,
+                         f"warned about a clean file — header/blank lines must stay silent: {err!r}")
+
+
 class TestMinutesPastNinetyNine(unittest.TestCase):
     """Plaud's CLI writes TOTAL minutes, so 100 minutes in the field is `100:05`.
 

@@ -390,6 +390,29 @@ def main() -> None:
             f"possibility and sent people looking at the wrong one (#40)."
         )
 
+    # A file that parses PARTLY is what both guards were blind to. The silent
+    # drop in parse_segments is right for the `Subject:` header and blank lines;
+    # the guard above fires only at ZERO. #50 parsed 20% of a file — silent by
+    # design, and quiet at the guard because the list was not empty. "All or
+    # nothing" was an assumption nobody wrote down.
+    #
+    # The signal goes on the LINE COUNT rather than inside the parser, for two
+    # reasons: a line starting with `[` was meant to be a cue, so it is the
+    # honest denominator; and counting here does not reuse the parser, so this
+    # says something the parser cannot say about itself.
+    bracket_lines = [line for line in strip_frontmatter(raw).splitlines()
+                     if line.startswith("[")]
+    unparsed = len(bracket_lines) - len(segments)
+    if unparsed > 0:
+        first_bad = next((line for line in bracket_lines
+                          if not SEGMENT.match(line)), bracket_lines[0])
+        print(f"⚠ {unparsed} of {len(bracket_lines)} lines in {path.name} start with "
+              f"'[' but did not parse as segments — those words are missing from the "
+              f"subtitles, which will otherwise look complete.\n"
+              f"  first one: {first_bad[:90]}\n"
+              f"  If the shape looks legitimate, the line-format contract in "
+              f"scripts/cache.py needs to grow to cover it (#50).", file=sys.stderr)
+
     # A truncated cache would yield subtitles that just stop mid-recording, with
     # nothing in the .srt to say why. Say it here instead.
     if "complete: false" in raw[:400]:
