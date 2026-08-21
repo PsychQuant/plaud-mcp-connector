@@ -119,6 +119,34 @@ class TestTheShippedReportIsTheOneUnderTest(unittest.TestCase):
             len(TEMPLATE_FILE.read_text(encoding="utf-8")), 200,
             "report_template.txt is suspiciously short")
 
+    def test_the_template_sits_inside_section_4(self):
+        """Containment says the bytes are present; this says they are where the model reads.
+
+        Round 4: `count(template) == 1` forbids nothing about position. A
+        one-press shape at `Say it in this shape:` plus the verbatim template
+        parked in an appendix — or inside an HTML comment no reader sees —
+        left the whole suite green. The relocation attacks from round 3 did
+        not become RED; they became unnecessary.
+
+        Three `str.index` calls, no parsing. A renamed heading raises
+        ValueError, which is loud and correct: this check is meaningless if it
+        cannot find the landmarks.
+        """
+        skill = SKILL.read_text(encoding="utf-8")
+        template = TEMPLATE_FILE.read_text(encoding="utf-8")
+        heading = skill.index("### 4. Report")
+        try:
+            end_of_section = skill.index("\n## ", heading)
+        except ValueError:
+            end_of_section = len(skill)
+        at = skill.index(template)
+        self.assertTrue(
+            heading < at < end_of_section,
+            f"the template is at offset {at}, outside `### 4. Report` "
+            f"({heading}..{end_of_section}). The bytes being somewhere in the file "
+            f"is not the requirement — the requirement is that the report the model "
+            f"is told to emit contains them.")
+
     def test_the_skill_ships_the_template_verbatim_exactly_once(self):
         template = TEMPLATE_FILE.read_text(encoding="utf-8")
         occurrences = SKILL.read_text(encoding="utf-8").count(template)
@@ -182,6 +210,25 @@ class TestTheReportSaysWhatItMustSay(unittest.TestCase):
             first.start(), second.start(),
             "the two presses are named out of order. 產生 opens the chooser and "
             "立即產生 is inside it; reversed, the instruction cannot be followed")
+
+    def test_the_second_press_is_not_talked_out_of(self):
+        """Round 4: `You do not need 立即產生 / Generate now` passed every guard.
+
+        The first press got a negation window in round 3; the second — the one
+        that actually starts transcription, and the entire subject of #47 —
+        did not. Checked on both sides, because "you do not need X" negates
+        forward and "X is unnecessary" negates backward.
+        """
+        body = self._template()
+        second = SECOND_PRESS.search(body)
+        self.assertIsNotNone(second, "no second press to check")
+        window = body[max(0, second.start() - 120):second.end() + 120]
+        hit = NEGATED.search(window)
+        if hit is not None:
+            self.fail(f"the report says {hit.group(0)!r} near 立即產生 / Generate now. "
+                      f"Both presses are still named and still in order, so every "
+                      f"other check passes — while the reader is being told to skip "
+                      f"the press that starts transcription")
 
     def test_the_first_press_is_not_negated(self):
         """`Do not press 產生 / Generate` satisfies every pattern above."""
