@@ -687,3 +687,51 @@ class TestLiveDescriptions(unittest.TestCase):
                         f"a trigger phrase) — in which case add the sentence "
                         f"verbatim to ALLOWED_SENTENCES with the reason. "
                         f"Reading it is the mechanism (#43).")
+
+
+class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
+    """A closed list of signals in the operator's instructions must stay closed.
+
+    `skills/plaud-srt/SKILL.md` is the only caller of `scripts/to_srt.py` in
+    this repo, and its step 4 tells the operator — a model — which stderr
+    signals to pass on. It enumerated exactly two, with the justification
+    "because neither is visible in the resulting `.srt`".
+
+    #50 then added a third with the same justification and did not grow the
+    list, so the fix's entire user-visible output terminated at a line the
+    operator's own checklist said it did not need to mention. Meanwhile the
+    plausible-looking cue count kept going to stdout with exit 0 — which is
+    precisely the shape of the "6 succeeded / 0 failed" report #50 opens with.
+
+    This test pins the correspondence rather than the wording: every warning
+    the CLI can print must be findable in the skill that reads it.
+    """
+
+    SKILL = pathlib.Path(__file__).resolve().parent.parent / "skills" / "plaud-srt" / "SKILL.md"
+
+    def _skill_text(self) -> str:
+        return self.SKILL.read_text(encoding="utf-8")
+
+    def test_the_partial_drop_warning_is_in_the_list(self):
+        self.assertIn(
+            "did not parse", self._skill_text(),
+            "to_srt.py warns that timestamped lines were dropped, and the only "
+            "skill that runs it never mentions the warning. The operator is a "
+            "model following this checklist; a signal absent from it is a signal "
+            "that does not reach the user (#50)")
+
+    def test_the_skill_says_the_drop_contradicts_the_success_line(self):
+        text = self._skill_text()
+        self.assertIn(
+            "dropped — see stderr", text,
+            "the skill does not quote the stdout sentence that carries the drop "
+            "count, so an operator relaying 'wrote N cues' still reports #50's "
+            "exact failure as a success")
+
+    def test_the_enumeration_count_matches_the_list(self):
+        """'Two things' outlived the second thing once already."""
+        text = self._skill_text()
+        self.assertNotIn(
+            "Two things to surface", text,
+            "the list says 'Two things' — it has three members. A stale count is "
+            "how the third one got left out in the first place")

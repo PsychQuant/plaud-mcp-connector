@@ -120,7 +120,8 @@ CLI (above) buys exact timing as well as a cheaper index.
 
 **Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
 silently truncated at the 100-minute mark and the `.srt` gave no sign of it —
-valid syntax, continuous timecodes, and 86% of a 7.4-hour transcript missing.
+valid syntax, continuous timecodes, and four-fifths of a 7.4-hour transcript
+missing — 281 segments in the cache, 57 cues in the file.
 The CLI writes *total* minutes, so the field passes two digits at 100 (`100:05`,
 then `446:12` at seven hours) and the parser had been built for two. If you
 produced subtitles from a long recording before v0.10.1, redo them: the old file
@@ -254,12 +255,19 @@ nothing else makes it visible.
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
 - **A transcript line the parser does not recognise is dropped, but no longer
-  quietly.** Any line that looks like a cue and fails to parse is now counted and
-  named on stderr. This exists because two defences that were each individually
-  reasonable left a gap between them: dropping unrecognised lines is deliberate
-  (cache files carry a header and blank lines), and the guard against a broken
-  file fires only when *nothing* parsed. Neither covered *partly* — 20% parsed is
-  not zero, so #50 lost most of a transcript in silence. Treat the warning as a
+  quietly.** Any line carrying a timestamp that fails to parse is counted, and
+  its shape — not its words — is named on stderr; the count also rides along
+  with the cue count on stdout, so a caller reading only the success line still
+  sees it. "Carrying a timestamp" is deliberately looser than what the parser
+  accepts: it ignores indentation, a byte-order mark, and whether the bracket is
+  `[` or `(`, and it puts no upper bound on the numbers. A counter that shares
+  any of the parser's assumptions goes blind exactly where the parser does,
+  which happened twice while fixing #50. This exists because two defences that
+  were each individually reasonable left a gap between them: dropping
+  unrecognised lines is deliberate (cache files carry a header and blank lines),
+  and the guard against a broken file fires only when *nothing* parsed. Neither
+  covered *partly* — one fifth parsed is not zero, so #50 lost most of a
+  transcript in silence. Treat the warning as a
   contract gap rather than a bad file: the shape probably needs adding to
   `scripts/cache.py`.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —

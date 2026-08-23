@@ -110,15 +110,28 @@ long transcript into the conversation** — write the file and report the path.
 
 ### 4. Report honestly
 
-Say where the file went and how many cues it has. Two things to surface if they
-happen, because neither is visible in the resulting `.srt`:
+Say where the file went and how many cues it has. Three things to surface if
+they happen, because none is visible in the resulting `.srt`:
 
+- **`⚠ N of M timestamped lines … did not parse` on stderr** — the file was
+  converted, but part of the transcript is missing from it. **This is the one
+  that contradicts the success line**: the run exits 0 and stdout still reports
+  a cue count, because the `.srt` was written and is usable. The count is real
+  and it is also short. Report both, and lead with the loss — a 7.4-hour
+  recording once produced 57 perfectly-formed cues out of 281 segments and was
+  reported as a success (#50). When this fires, stdout says
+  `wrote N cues (K timestamped line(s) dropped — see stderr)`; pass that whole
+  sentence on rather than just the number.
 - **`⚠ marked incomplete` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
 - **`no timestamped segments`** — the cached transcript has no timestamps, so
   subtitles are impossible from it. This exits non-zero rather than writing an
   empty `.srt`, which would look like success and produce a silent video.
+
+A `⚠ … trimmed` line may also appear: a declared end ran past the next cue's
+start and was pulled back. That is a correction, not a loss — mention it only
+if the user is checking timing closely.
 
 ## How the timing works, and where it is a guess
 

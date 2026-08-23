@@ -68,6 +68,24 @@ class TestTimestampParsing(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     to_srt.parse_timestamp(raw)
 
+    def test_rejects_what_its_docstring_says_it_rejects(self) -> None:
+        """"Raises ValueError on anything else" was not true, and #53 is that gap.
+
+        The function split on `:` and converted, so a malformed stamp became a
+        plausible-looking NUMBER rather than an error: `00:412` came back as
+        412.0 seconds. Round 1 and round 2 both closed this at the CALL SITES
+        by checking the shape before converting, which fixed every reachable
+        path and left the function itself still contradicting its own
+        docstring — so #53's title claim stayed literally true while its
+        symptom was gone. Validation living in two places, neither of which is
+        the function that promises it, is how the two halves drifted apart in
+        the first place.
+        """
+        for raw in ("00:412", "99:99", "12:99:99", "10000:00", "1:2", "00:1"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    to_srt.parse_timestamp(raw)
+
 
 class TestTimestampFormatting(unittest.TestCase):
     def test_renders_srt_shape(self) -> None:
@@ -184,7 +202,8 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
             bracket_lines, len(segments),
             f"{bracket_lines - len(segments)} line(s) starting with '[' produced no cue. "
             f"A file can lose most of its transcript this way and still emit a "
-            f"syntactically valid SRT — #50 lost 86% of a 7.4-hour recording with "
+            f"syntactically valid SRT — #50 lost four fifths of a 7.4-hour recording "
+            f"(281 segments in, 57 cues out) with "
             f"no error, no warning, and continuous timecodes.")
 
     def test_the_point_form_counts_too(self) -> None:
@@ -199,7 +218,7 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
 
 
 class TestTheBoundAppliesToBothEndsAndBothShapes(unittest.TestCase):
-    """Verify round 1 found the bound was enforced on a quarter of what it claimed.
+    r"""Verify round 1 found the bound was enforced on a quarter of what it claimed.
 
     `_STAMP` governs the `ts` group only. The `end` group is `[^\]]*?` and goes
     straight to `parse_timestamp`, which has no width limit — so `10000:00` as
@@ -266,7 +285,7 @@ class TestTheBoundAppliesToBothEndsAndBothShapes(unittest.TestCase):
 
 
 class TestTheGuardDoesNotShareTheParsersAssumption(unittest.TestCase):
-    """The denominator must be LOOSER than the parser, or it cannot see the gap.
+    r"""The denominator must be LOOSER than the parser, or it cannot see the gap.
 
     The guard counted `line.startswith("[")` — the same column-0 anchor
     `SEGMENT`'s `^\[` requires. Any drop whose cause also breaks that anchor
@@ -301,6 +320,210 @@ class TestTheGuardDoesNotShareTheParsersAssumption(unittest.TestCase):
         self.assertNotIn("did not parse", err, f"warned about a clean file: {err!r}")
 
 
+class TestTheDenominatorSharesNoAssumptionWithTheParser(unittest.TestCase):
+    """Round 2: `lstrip()` NARROWED the shared assumption instead of removing it.
+
+    Round 1 caught the denominator counting `startswith("[")` — the parser's own
+    column-0 anchor — so a drop caused by breaking that anchor left numerator and
+    denominator together. The repair moved to `lstrip().startswith("[")`, which
+    sees the indent class and still requires a leading `[`, exactly as `SEGMENT`
+    does. Anything cue-shaped without that bracket escapes both again, and #50's
+    whole signature came back: three cue-shaped lines in, two cues out, exit 0,
+    stderr empty.
+
+    A denominator is only honest if it shares NO gate with the parser. This one
+    asks a single question the parser never asks: does the line carry a
+    timestamp at all?
+    """
+
+    def _run(self, body: str, name: str = "abc123.md") -> tuple[int, str, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / name).write_text(body, encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(SCRIPT), name[:-3]],
+                                  capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stdout, proc.stderr
+
+    def test_a_cue_shaped_line_without_a_bracket_is_counted(self):
+        """#50's signature, reproduced through a prefix the bracket test cannot see."""
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00 - 00:12] S: parses\n"
+                "(00:13 - 00:20) S: paren form, silently dropped\n"
+                "[00:21 - 00:30] S: parses\n")
+        _, _, err = self._run(body)
+        self.assertIn("did not parse", err,
+                      "a cue-shaped line vanished without a word because the "
+                      "denominator still required a leading '[' — the same gate "
+                      "SEGMENT applies, one character narrower than round 1")
+
+    def test_a_byte_order_mark_does_not_hide_a_drop(self):
+        """`str.lstrip()` does not strip a BOM, so it hid the line from BOTH sides.
+
+        The assertion is on the OUTCOME — no line lost — and not on the warning,
+        because the warning is only the second-best answer here. Reading the file
+        as `utf-8-sig` consumes the mark and the line simply parses, which beats
+        parsing one of two and saying so. An earlier draft of this test demanded
+        the warning, and would have failed the better fix.
+        """
+        body = ("\ufeff[00:00 - 00:12] S: a BOM defeats SEGMENT's column-zero anchor\n"
+                "[00:13 - 00:20] S: parses\n")
+        _, out, err = self._run(body)
+        self.assertNotIn("did not parse", err, f"a BOM cost a line: {err!r}")
+        # Without `-o` the CLI writes the SRT itself to stdout, so count cues there.
+        self.assertEqual(2, out.count(" --> "),
+                         f"the BOM line vanished — round 1's B3 reached through a "
+                         f"different invisible prefix: {out!r}")
+
+    def test_an_annotation_line_is_not_counted_as_a_lost_cue(self):
+        """`[laughter]` was never meant to be a cue; claiming it is cries wolf."""
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00] S: hello\n"
+                "[laughter]\n"
+                "[00:10] S: bye\n")
+        _, _, err = self._run(body)
+        self.assertNotIn("did not parse", err,
+                         f"warned about a bracketed annotation: {err!r}. A warning "
+                         f"that fires on every clean file is one nobody reads")
+
+    def test_the_denominator_is_not_bounded_where_the_parser_is(self):
+        """A drift PAST the parser's bound must be visible, not agreed-upon."""
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00] S: parses\n"
+                "[10000:00] S: five digits — past the contract's bound\n")
+        _, _, err = self._run(body)
+        self.assertIn("did not parse", err,
+                      "a five-digit minute field was invisible to the denominator "
+                      "AND the parser, so they agreed silently — which is the one "
+                      "thing this count exists to prevent")
+
+
+class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
+    """`tests/test_cache_line_format_live.py` already forbids this for CI logs.
+
+    Its reason — "Recordings are other people's speech; a CI log is a
+    publication" — applies at least as strongly to a terminal, and `shape_of`
+    already existed to describe a line without quoting it. The warning added for
+    #50 quoted 90 raw characters instead, which both publishes third-party
+    speech and lets embedded control codes rewrite the terminal.
+    """
+
+    def _run(self, body: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(SCRIPT), "abc123"],
+                                  capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stderr
+
+    def test_the_warning_never_quotes_the_transcript(self):
+        secret = "something somebody actually said"
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00] S: fine\n"
+                f"[99999:00] S: {secret}\n")
+        _, err = self._run(body)
+        self.assertIn("did not parse", err, "precondition: the warning must fire")
+        self.assertNotIn(secret, err,
+                         "the warning printed a transcript line verbatim. This repo "
+                         "already has shape_of() and a test forbidding exactly this")
+
+    def test_control_codes_never_reach_the_terminal(self):
+        body = ("Subject: t\n\n---\n\n"
+                "[00:00] S: fine\n"
+                "[99999:00] S: benign\x1b[2K\x1b[1A\x1b[2K forged\n")
+        _, err = self._run(body)
+        self.assertNotIn("\x1b", err,
+                         "an ANSI escape from untrusted transcript text reached "
+                         "stderr, where \\x1b[1A\\x1b[2K erases the very line "
+                         "reporting the problem")
+
+
+class TestTheBoundIsOnMagnitudeNotJustDigitCount(unittest.TestCase):
+    """Round 2: the gate counted digits and never looked at what they meant.
+
+    Round 1's B1 named `600000.0` as "the exact value the contract text added by
+    this branch promised could not exist". The repair bounded field WIDTH, so
+    `[9999:99]` produced 600039.0 — past the very number that was the point. A
+    seconds field of 99 is not a seconds field.
+    """
+
+    def test_seconds_above_fifty_nine_are_not_a_timestamp(self):
+        for line in ("[99:99] S: x", "[12:99:99] S: x", "[9999:99] S: x"):
+            with self.subTest(line=line):
+                self.assertEqual(
+                    [], to_srt.parse_segments(line),
+                    f"{line!r} parsed. Sixty-plus seconds is malformed, and "
+                    f"accepting it is the silent-accept this bound exists to stop")
+
+    def test_the_middle_field_of_the_three_part_form_is_also_bounded(self):
+        self.assertEqual([], to_srt.parse_segments("[12:60:00] S: x"),
+                         "sixty minutes in the HH:MM:SS form parsed")
+
+    def test_a_bad_seconds_field_at_the_end_loses_the_timing_not_the_words(self):
+        segs = to_srt.parse_segments("[00:10 - 00:99] Speaker 1: the words")
+        self.assertEqual(1, len(segs), "the line must survive")
+        self.assertIsNone(segs[0]["end"], "an end of 99 seconds was accepted as real")
+
+    def test_the_shapes_that_must_still_parse(self):
+        for line, want in (("[99:59] S: x", 5999.0),
+                           ("[12:59:59] S: x", 46799.0),
+                           ("[9999:59] S: x", 599999.0),
+                           ("[1:02:03] S: x", 3723.0),
+                           ("[00:10.500] S: x", 10.5)):
+            with self.subTest(line=line):
+                segs = to_srt.parse_segments(line)
+                self.assertEqual(1, len(segs), f"{line!r} stopped parsing")
+                self.assertAlmostEqual(want, segs[0]["start"])
+
+
+class TestEveryCorrectionReachesSomebody(unittest.TestCase):
+    """`build_cues` appends trim warnings "when a list is passed" — and the CLI
+    never passed one, so the branch was unreachable in the only shipped path.
+    A PR whose whole subject is "partial loss must not be silent" left a second
+    silent correction in the function it feeds."""
+
+    def test_a_trimmed_cue_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "Subject: t\n\n---\n\n"
+                "[00:00 - 09:59] S: a long declared end\n"
+                "[00:30 - 00:40] S: the next cue starts long before it\n",
+                encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(SCRIPT), "abc123"],
+                                  capture_output=True, text=True, env=cli_env(cache))
+        self.assertIn("trim", proc.stderr.lower(),
+                      "a declared end was pulled back by nine minutes and nothing "
+                      "said so. build_cues' own docstring: 'a correction nobody "
+                      "can see is one nobody can judge'")
+
+
+class TestTheCueCountCarriesItsOwnCaveat(unittest.TestCase):
+    """#50's harm was a plausible number reported as success.
+
+    The story in the issue is a script reporting "6 succeeded / 0 failed" over
+    files that were 80% empty. The branch put a contradicting signal on stderr
+    and left the plausible-looking count alone on stdout, without saying which
+    one wins. Anything that reads only the success line still gets #50.
+    """
+
+    def test_stdout_says_lines_were_dropped(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "Subject: t\n\n---\n\n"
+                "[00:00] S: parses\n"
+                "[99999:00] S: dropped\n",
+                encoding="utf-8")
+            out = pathlib.Path(d) / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertIn("dropped", proc.stdout.lower(),
+                      f"stdout said {proc.stdout.strip()!r} with no hint that a "
+                      f"line was lost — the same shape as the '6 succeeded / 0 "
+                      f"failed' report #50 opens with")
+
+
 class TestPartialDropIsLoud(unittest.TestCase):
     """A file that parses PARTLY is the case both guards were blind to.
 
@@ -325,20 +548,31 @@ class TestPartialDropIsLoud(unittest.TestCase):
             return proc.returncode, proc.stderr
 
     def test_a_partially_parsed_file_warns(self) -> None:
+        # These carry a TIMESTAMP and still fail to parse, which is the class the
+        # count is about. The first version of this fixture used `[bogus shape]`
+        # and `[also bogus]` — bracketed lines with no digits in them. Those are
+        # annotations, not lost cues, and counting them was the false positive
+        # that made this warning fire on any transcript containing `[laughter]`
+        # (verify round 2).
         body = ("Subject: t\n\n---\n\n"
                 "[00:00 - 00:12] Speaker 1: parses\n"
-                "[bogus shape] Speaker 1: does not parse\n"
-                "[also bogus] Speaker 1: nor this\n")
+                "[99999:00] Speaker 1: five-digit minutes, out of contract\n"
+                "[00:99] Speaker 1: ninety-nine seconds, out of contract\n")
         _, err = self._run(body)
         # NOT `assertIn("2", err)` — the fixture filename `abc123.md` is printed in
         # the warning and contains a "2", so that assertion passed on the filename
         # and never tested the count at all (verify round 1).
-        self.assertRegex(err, r"\b2 of 3 lines\b",
+        self.assertRegex(err, r"\b2 of 3 timestamped lines\b",
                          f"the warning does not state how many of how many were "
                          f"dropped: {err!r}")
-        self.assertIn("bogus shape", err,
-                      "the warning does not name the first offending line, so a false "
-                      "positive would be undiagnosable")
+        # Named by SHAPE, not quoted. Round 1 asked for the offending line to be
+        # named so a false positive would be diagnosable; round 2 found the
+        # naming was done by printing ninety raw characters of somebody's
+        # speech. Both are satisfiable at once — the shape is what you need to
+        # find the line and fix the producer, and it is not what was said.
+        self.assertRegex(err, r"opens with '\[9",
+                         f"the warning does not identify the first offending line's "
+                         f"shape, so a false positive would be undiagnosable: {err!r}")
 
     def test_a_fully_parsed_file_stays_quiet(self) -> None:
         """The header and blank lines must not trip it — that silence is deliberate."""

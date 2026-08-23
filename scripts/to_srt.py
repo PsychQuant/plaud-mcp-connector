@@ -42,8 +42,9 @@ CACHE_DIR = pathlib.Path(
 #
 # The minute field takes up to FOUR digits, because Plaud's CLI writes TOTAL
 # minutes: a recording passes 99 minutes and the field becomes `100:05`, then
-# `446:12` at seven hours. `\d{1,2}` here cost #50 — 86% of a 7.4-hour
-# transcript, dropped silently, into an SRT that was syntactically perfect.
+# `446:12` at seven hours. `\d{1,2}` here cost #50 — a 7.4-hour transcript went
+# in with 281 segments and came out with 57, dropped silently, into an SRT that
+# was syntactically perfect.
 #
 # `parse_timestamp` never had the problem: it does `int(minutes) * 60` with no
 # width assumption, and the END of a ranged line goes straight there without
@@ -69,7 +70,16 @@ CACHE_DIR = pathlib.Path(
 #
 # Three-part alternative first, so `12:30:00` is read as hours and not as
 # `12:30` with a stray tail.
-_STAMP = r"(?:\d{1,2}:\d{2}:\d{2}|\d{1,4}:\d{2})(?:[.,]\d{1,3})?"
+#
+# The seconds field — and the MINUTES field of the three-part form — are
+# `[0-5]\d`, a MAGNITUDE bound and not a width one. Round 2 caught the
+# difference: the round-1 repair bounded how many digits each field may hold
+# and never asked what they meant, so `[9999:99]` produced 600039.0. Round 1
+# had named 600000.0 as "the exact value the contract text promised could not
+# exist"; the repair moved the bound and left the class of defect standing. A
+# field of 99 seconds is not a seconds field, and counting its digits will
+# never say so.
+_STAMP = r"(?:\d{1,2}:[0-5]\d:[0-5]\d|\d{1,4}:[0-5]\d)(?:[.,]\d{1,3})?"
 
 # Two bracket forms, because two producers write into this cache and they do
 # not agree (#40): Plaud's MCP path emits `[start]`, its CLI emits
@@ -88,11 +98,83 @@ SEGMENT = re.compile(
 
 
 # The same shape as a start, for validating an end before converting it.
-_STAMP_ONLY = re.compile(_STAMP)
+# Anchored, not merely used with `fullmatch`: unanchored, a later `.search()`
+# would accept `100:05` inside any surrounding junk and the check would pass
+# silently. The anchors make the pattern say what it means on its own.
+_STAMP_ONLY = re.compile(rf"\A(?:{_STAMP})\Z")
+
+
+# A line that was MEANT to be a cue, for counting what the parser lost.
+#
+# This exists to be the honest denominator, which means it must share NO gate
+# with `SEGMENT`. Both earlier versions shared one and both went blind in the
+# same direction:
+#
+#   round 1  `startswith("[")`            — the parser's own column-0 anchor
+#   round 2  `lstrip().startswith("[")`   — still requires a leading `[`
+#
+# Each time, a drop whose cause also broke the shared gate left the numerator
+# AND the denominator together, `unparsed` stayed 0, and #50's whole signature
+# came back: cue-shaped lines in, fewer cues out, exit 0, stderr silent. Round 2
+# reproduced it with `(00:13 - 00:20)` and again with a byte-order mark.
+#
+# So this asks one question `SEGMENT` never asks — does the line carry a
+# timestamp at all? — and asks it as loosely as it can:
+#
+#   `[﻿\s]*`  a BOM is not whitespace (`'﻿'.isspace()` is False), so
+#                  `lstrip()` left it on and hid the line from both sides
+#   `[\[(]?`       the bracket is OPTIONAL, and a parenthesis counts
+#   `\d+:\d+`      UNBOUNDED on purpose: a drift PAST the contract's four-digit
+#                  bound must be visible here, or the two sides agree silently
+#                  about a line neither can read
+#
+# Requiring digits is what keeps `[laughter]` and `[音樂]` out of the count:
+# those were never meant to be cues, and a warning that fires on every clean
+# file is one nobody reads.
+CUE_SHAPED = re.compile(r"^[﻿\s]*[\[(]?\s*\d+\s*:\s*\d+")
+
+
+# Anything that could move a cursor, clear a line, or set a colour. Stripped
+# rather than escaped: the point is that untrusted transcript text must not be
+# able to address the terminal at all.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def shape_of(line: str) -> str:
+    """Describe a line without quoting it.
+
+    Recordings are other people's speech, and a terminal scrollback is as much
+    a place words end up as a CI log. `tests/test_cache_line_format_live.py`
+    has forbidden quoting a transcript line in a failure message since it was
+    written; the warning added for #50 quoted ninety raw characters anyway,
+    which published somebody's words and let embedded control codes rewrite the
+    terminal — `\\x1b[1A\\x1b[2K` erases the line reporting the problem.
+
+    The description is deliberately enough to identify the SHAPE and act on it
+    (length, and the punctuation-and-digits the line opens with) and never
+    enough to read what was said.
+    """
+    head = re.match(r"^[﻿\s]*[^\w\s]*\s*[\d:.,\s-]*", line)
+    opener = _CONTROL.sub("", head.group(0)) if head else ""
+    return f"{len(line)} chars, opens with {opener!r}"
 
 
 def parse_timestamp(raw: str) -> float:
-    """'1:02:03.250' / '02:03' → seconds. Raises ValueError on anything else."""
+    """'1:02:03.250' / '02:03' → seconds. Raises ValueError on anything else.
+
+    The shape check is HERE, in the function that promises it. It used to be
+    absent: this split on `:` and converted, so anything numeric came back as a
+    plausible-looking number — `00:412` as 412.0 seconds, `10000:00` as
+    600000.0 — while the docstring said those raise. That is #53.
+
+    Both earlier repairs put the check at a CALL SITE instead, once for the
+    start and once for the end. Each closed its own path and left this function
+    still lying, so the same validation lived in two places and neither was the
+    one a reader would look at. Splitting a promise from the code that keeps it
+    is how the two halves came apart to begin with.
+    """
+    if not _STAMP_ONLY.fullmatch(raw):
+        raise ValueError(f"unrecognised timestamp: {raw!r}")
     stamp = raw.replace(",", ".")
     parts = stamp.split(":")
     if len(parts) == 2:                      # MM:SS — the common short form
@@ -154,11 +236,17 @@ def parse_segments(body: str) -> list[dict]:
             # `parse_timestamp` was shared by both paths and could not be
             # tightened for one, which confused a shared CONVERTER for a shared
             # VALIDATOR. Start was never validated there either.
-            if _STAMP_ONLY.fullmatch(raw_end):
-                try:
-                    end = parse_timestamp(raw_end)
-                except ValueError:
-                    end = None  # keep the words, lose only the timing
+            # One check, in `parse_timestamp`, and the trade stated on the
+            # branch that actually makes it. Round 1 put the check here and
+            # left the converter unvalidated; round 2's repair then guarded
+            # this call with a `fullmatch` and hung the "keep the words"
+            # comment on a `try/except` that the guard had made unreachable —
+            # so a reader auditing "where do we lose an end?" was pointed at
+            # the one line where it could not happen.
+            try:
+                end = parse_timestamp(raw_end)
+            except ValueError:
+                end = None      # keep the words, lose only the timing
         out.append({
             "start": start,
             "end": end,
@@ -413,12 +501,31 @@ def main() -> None:
     if not path.is_file():
         sys.exit(f"error: {path} not found — run the plaud-index skill first")
 
-    raw = path.read_text()
+    # `utf-8-sig`, so a byte-order mark is consumed rather than left on line 1
+    # where it defeats `SEGMENT`'s `^\[`. `CUE_SHAPED` tolerates a BOM as well;
+    # both together, because a file should parse AND be counted correctly, and
+    # relying on only the second would leave the first line silently dropped.
+    raw = path.read_text(encoding="utf-8-sig")
     segments = parse_segments(strip_frontmatter(raw))
+
+    # Counted BEFORE the zero-segment exit, not after. Put after, a file where
+    # NOTHING parsed took the generic branch below and never got the counted,
+    # shape-named diagnostic — the one case where the count is most certain and
+    # most useful, and the one the README advertises.
+    cue_shaped = [line for line in strip_frontmatter(raw).splitlines()
+                  if CUE_SHAPED.match(line)]
+    unparsed = len(cue_shaped) - len(segments)
+
     if not segments:
+        detail = (f"\n{len(cue_shaped)} line(s) DID carry a timestamp and none of "
+                  f"them parsed; the first is {shape_of(cue_shaped[0])}."
+                  if cue_shaped else
+                  "\nNo line carried a timestamp at all, so this is most likely a "
+                  "recording without them rather than a shape problem.")
         sys.exit(
             f"error: no lines in {path} looked like segments.\n"
-            f"Expected '[00:12:03] Speaker 1: ...' or '[01:01 - 01:55] Speaker 1: ...'.\n"
+            f"Expected '[00:12:03] Speaker 1: ...' or '[01:01 - 01:55] Speaker 1: ...'."
+            f"{detail}\n"
             f"Either the recording genuinely has no timestamps, or it was cached in "
             f"a third shape neither of those covers — see the line-format contract "
             f"in scripts/cache.py. The earlier wording named only the first "
@@ -431,28 +538,29 @@ def main() -> None:
     # design, and quiet at the guard because the list was not empty. "All or
     # nothing" was an assumption nobody wrote down.
     #
-    # The signal goes on the LINE COUNT rather than inside the parser, for two
-    # reasons: a line starting with `[` was meant to be a cue, so it is the
-    # honest denominator; and counting here does not reuse the parser, so this
-    # says something the parser cannot say about itself.
-    # `lstrip()`, not `startswith("[")`. The parser anchors on `^\[` at column
-    # zero; counting with the SAME anchor meant any drop caused by breaking it
-    # left the numerator AND the denominator together, so `unparsed` stayed 0.
-    # One leading space was enough to reproduce #50's whole signature — three
-    # bracket lines in, two cues out, exit 0, stderr empty (verify round 1).
-    # A denominator that shares the parser's assumption cannot see past it.
-    bracket_lines = [line for line in strip_frontmatter(raw).splitlines()
-                     if line.lstrip().startswith("[")]
-    unparsed = len(bracket_lines) - len(segments)
+    # The signal goes on the LINE COUNT rather than inside the parser, because
+    # counting here does not reuse the parser — so it says something the parser
+    # cannot say about itself. That only holds while the count shares no gate
+    # with `SEGMENT`; see `CUE_SHAPED`, where the two earlier versions of this
+    # denominator and the way each went blind are written down.
     if unparsed > 0:
-        first_bad = next((line for line in bracket_lines
-                          if not SEGMENT.match(line)), bracket_lines[0])
-        print(f"⚠ {unparsed} of {len(bracket_lines)} lines in {path.name} start with "
-              f"'[' but did not parse as segments — those words are missing from the "
+        first_bad = next((line for line in cue_shaped
+                          if not SEGMENT.match(line)), cue_shaped[0])
+        # Two causes, two different things to do about them. Sending an
+        # indented line to "grow the contract" was advice that could never
+        # work — `SEGMENT` matches from the start of the line, so no contract
+        # text makes leading whitespace parse — and a warning nobody can clear
+        # is a warning that gets ignored, which is how #50's silence returns.
+        remedy = ("The line is indented, and the parser reads from column "
+                  "zero — no contract change makes it parse. Unindent it at "
+                  "the producer." if first_bad[:1].isspace() else
+                  "If the shape looks legitimate, measure it and add it to the "
+                  "line-format contract in scripts/cache.py (#50).")
+        print(f"⚠ {unparsed} of {len(cue_shaped)} timestamped lines in {path.name} "
+              f"did not parse as segments — those words are missing from the "
               f"subtitles, which will otherwise look complete.\n"
-              f"  first one: {first_bad[:90]}\n"
-              f"  If the shape looks legitimate, the line-format contract in "
-              f"scripts/cache.py needs to grow to cover it (#50).", file=sys.stderr)
+              f"  first one: {shape_of(first_bad)}\n"
+              f"  {remedy}", file=sys.stderr)
 
     # A truncated cache would yield subtitles that just stop mid-recording, with
     # nothing in the .srt to say why. Say it here instead.
@@ -460,13 +568,30 @@ def main() -> None:
         print(f"⚠ {path.name} is marked incomplete — these subtitles cover only the "
               f"part that was fetched. Re-run plaud-index first.", file=sys.stderr)
 
+    # `build_cues` has always appended its trim corrections "when a list is
+    # passed", and this call never passed one — so in the only shipped path the
+    # branch was unreachable and the docstring described an intention. A tool
+    # whose subject is "partial loss must not be silent" had a second silent
+    # correction in the function it feeds.
+    trims: list[str] = []
     srt = render_srt(build_cues(segments,
                                 show_speaker=not args.no_speaker,
-                                tail_seconds=args.tail_seconds),
+                                tail_seconds=args.tail_seconds,
+                                warnings=trims),
                      limits=cfg["srt_line_limits"])
+    for note in trims:
+        print(f"⚠ {note}", file=sys.stderr)
+
     if args.output:
         pathlib.Path(args.output).write_text(srt)
-        print(f"wrote {len(segments)} cues → {args.output}")
+        # The drop count rides along with the cue count, on the same stream, in
+        # the same sentence. #50 opens with a script reporting "6 succeeded /
+        # 0 failed" over files that were four-fifths empty: the number was
+        # plausible and alone. A warning on stderr does not fix that for
+        # anything reading only the success line — so the success line has to
+        # carry its own caveat.
+        note = f" ({unparsed} timestamped line(s) dropped — see stderr)" if unparsed > 0 else ""
+        print(f"wrote {len(segments)} cues{note} → {args.output}")
     else:
         sys.stdout.write(srt)
 

@@ -67,22 +67,25 @@ from test_cache_line_format import to_srt  # noqa: E402  (same parser as the con
 # contract: this file's job is to find lines the contract does NOT cover, so
 # it must be able to see them.
 #
-# The minute field is `\d{1,4}` for the same reason the parser's is (#50): the
-# producer writes TOTAL minutes, so it passes two digits at 100 and reaches
-# `446:12` at seven hours. This oracle was left at `\d{1,2}` when the parser
-# was widened, which broke it in the one direction it exists to guard — the
-# sister file's docstring says this check exists precisely so that "if a
-# producer starts writing a third shape and the parser is widened to accept
-# it" the two sides do not quietly agree. Widening the parser and not the
-# oracle made them quietly DISagree instead: it stopped recognising
-# `[446:12 - 446:40]` as timestamp-shaped at all, so the next live run against
-# any recording past 99 minutes would have failed spuriously — on exactly the
-# data class #50 fixed. Default CI could not see it; this file is opt-in.
+# BOTH numeric fields are `\d+` — UNBOUNDED, where `_STAMP` is bounded at four
+# digits of minutes and two of hours, and where the seconds field is `[0-5]\d`.
+# That gap is the whole point, and it has now been got wrong twice in opposite
+# directions:
 #
-# It stays LOOSER than `_STAMP` on purpose (no seconds-width or hours bound):
-# an oracle that matched the parser's shape exactly would be the circularity
-# this file was built to avoid.
-TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,4}:\d{2}")
+#   round 1  `\d{1,2}`  — NARROWER than the parser. It stopped seeing
+#                          `[446:12 - 446:40]`, so the live run would have gone
+#                          red on exactly the data class #50 fixed.
+#   round 2  `\d{1,4}`  — EQUAL to the parser. `[10000:00]` was invisible to
+#                          both, the counts matched, and the assertion passed
+#                          green over a line neither side could read.
+#
+# Both times the comment above it said "looser". A comment claiming a relation
+# has nothing checking it, which is why the relation is now pinned by
+# `TestTheOracleIsStrictlyLooserThanTheParser` below — every string the parser
+# accepts must match here, and some strings that match here must be refused
+# there. Widen the parser without widening this, or the reverse, and that test
+# goes red before a live run is ever needed.
+TIMESTAMPED = re.compile(r"^[\ufeff\s]*[\[(]?\s*\d+\s*:\s*\d+")
 
 # The CLI colours its table. Ids arrive as `\x1b[36m<32 hex>\x1b[39m`, and the
 # `m` of the escape is a word character — so `\b[0-9a-f]{32}\b` matched
@@ -91,11 +94,12 @@ TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,4}:\d{2}")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def shape_of(line: str) -> str:
-    """Describe a line without quoting it."""
-    head = re.match(r"^\s*[^\w\s]*\s*[\d:.,\s-]*", line)
-    return f"{len(line)} chars, opens with {head.group(0)!r}" if head else \
-           f"{len(line)} chars"
+# One implementation, not two. `to_srt` grew this function when round 2 found
+# the CLI's own drop warning quoting ninety raw characters of somebody's speech
+# — the very thing `test_a_failure_message_never_quotes_a_transcript_line` has
+# forbidden here since this file was written. Pointing that test at the shipped
+# function turns a rule this file kept for itself into one the tool obeys too.
+shape_of = to_srt.shape_of
 
 
 class TestRealProducerOutputIsInsideTheContract(unittest.TestCase):
@@ -162,12 +166,69 @@ class TestRealProducerOutputIsInsideTheContract(unittest.TestCase):
                   f"it to tests/test_cache_line_format.py — do not widen the "
                   f"parser alone.")
             checked += 1
-            break
+            # Not `break`. Stopping at the first recording that HAS a transcript
+            # meant a live run could pass having looked at one short file, while
+            # #50's shape only appears past 99 minutes — so the check most likely
+            # to matter was the one least likely to run. Three is a compromise
+            # against the CLI call each costs.
+            if checked >= 3:
+                break
 
         if not checked:
             self.skipTest("none of the 20 most recent recordings has a "
                           "transcript — nine of ten is normal on this "
                           "account (#37), so this is not a failure")
+
+
+class TestTheOracleIsStrictlyLooserThanTheParser(unittest.TestCase):
+    """The one property that makes this file's comparison mean anything.
+
+    `TIMESTAMPED` is the independent side of `len(parsed) == len(timestamped)`.
+    If it is NARROWER than the parser the live run goes red on good data; if it
+    is EQUAL, the two agree silently about anything neither can read and the
+    assertion passes over a real loss. Round 1 shipped the first mistake and
+    round 2 shipped the second, each under a comment asserting the opposite.
+
+    So the relation is checked here rather than described there. This runs in
+    default CI — no `PLAUD_LIVE_TESTS`, no network — because the failure it
+    guards against is invisible in an opt-in test by construction.
+    """
+
+    def test_everything_the_parser_accepts_the_oracle_can_see(self):
+        for line in ("[00:00] S: x",
+                     "[99:59] S: x",
+                     "[446:12 - 446:40] S: x",      # #50's shape
+                     "[9999:59] S: x",              # the parser's upper bound
+                     "[1:02:03] S: x",
+                     "[12:59:59] S: x",
+                     "[00:10.500] S: x",
+                     "[00:10,500] S: x"):
+            with self.subTest(line=line):
+                self.assertTrue(
+                    to_srt.parse_segments(line), f"precondition: {line!r} must parse")
+                self.assertTrue(
+                    TIMESTAMPED.match(line),
+                    f"the parser accepts {line!r} and the oracle cannot see it. The "
+                    f"live comparison would go red on data that is actually fine — "
+                    f"round 1's mistake, which cost a spurious failure on exactly "
+                    f"the recordings #50 fixed")
+
+    def test_the_oracle_sees_shapes_the_parser_refuses(self):
+        """Where the two differ is where a real drift becomes visible."""
+        for line in ("[10000:00] S: five-digit minutes",
+                     "[00:99] S: ninety-nine seconds",
+                     "[100:5] S: one-digit seconds",
+                     " [00:13] S: indented",
+                     "(00:13 - 00:20) S: paren form",
+                     "\ufeff[00:00] S: byte-order mark"):
+            with self.subTest(line=line):
+                self.assertTrue(
+                    TIMESTAMPED.match(line),
+                    f"the oracle cannot see {line!r}, so a producer drifting to it "
+                    f"would be dropped by the parser and agreed with here")
+                self.assertFalse(
+                    to_srt.parse_segments(line),
+                    f"precondition: {line!r} is meant to be out of contract")
 
 
 class TestTheLiveTestCannotSilentlyStopRunning(unittest.TestCase):

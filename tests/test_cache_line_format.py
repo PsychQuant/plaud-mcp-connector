@@ -79,10 +79,32 @@ IN_CONTRACT = [
     # The minute field is TOTAL minutes, so it leaves two digits at 100 (#50).
     # This was in the cache and shipping for as long as the CLI has written
     # long recordings — the contract simply never said so, which is why the
-    # table above could look complete while a 7.4-hour transcript lost 86%.
+    # table above could look complete while a 7.4-hour transcript lost four
+    # fifths of its segments (281 in, 57 out).
     ("point, mmm:ss",      "[100:05] Speaker 1: a line",              6005.0, None),
     ("range, mmm:ss",      "[100:05 - 100:31] Speaker 1: a line",     6005.0, 6031.0),
+]
+
+# Shapes the parser accepts that NO producer has been measured emitting. They
+# are pinned so the boundary cannot move unnoticed — not offered as evidence
+# that anything writes them.
+#
+# The distinction is the same one `scripts/cache.py` makes three paragraphs
+# into its contract: "A third would go here only after something real emits it,
+# never because it seems reasonable." A four-digit row went into IN_CONTRACT
+# during #50 under a heading that reads "Both shapes a shipped producer emits",
+# and #50's own measurements contain no four-digit minute field — the longest
+# is `446:12`. That promotes a conservative implementation bound into a
+# contract backed by a measurement that was never taken, and the next person
+# wanting to tighten the bound would have to overturn a test that presents
+# itself as a record of reality. An over-extended contract is a wrong contract
+# in the same way an incomplete one is.
+BOUND_PINS = [
     ("range, four-digit",  "[1440:00 - 1440:30] Speaker 1: a day in", 86400.0, 86430.0),
+    ("max minutes",        "[9999:59] Speaker 1: the upper bound",   599999.0, None),
+    ("fractional seconds", "[01:01.500] Speaker 1: a line",             61.5, None),
+    ("one-digit hours",    "[1:02:03] Speaker 1: a line",             3723.0, None),
+    ("no speaker",         "[01:01] a line with no speaker label",      61.0, None),
 ]
 
 # Shapes no producer emits. Listed so that "the contract is two forms" is a
@@ -105,8 +127,21 @@ OUT_OF_CONTRACT = [
 
 
 class TestTheTwoAcceptedForms(unittest.TestCase):
+    def test_the_measured_table_holds_both_forms_of_both_shapes(self):
+        """A count, so a row cannot quietly vanish from the table.
+
+        The rewrite in #50 made the assertions table-driven and, in doing so,
+        dropped the implicit "two forms x two time-shapes" count the hardcoded
+        version had. A table-driven test that never checks the table's own size
+        passes just as green with a row deleted.
+        """
+        labels = [label for label, *_ in IN_CONTRACT]
+        self.assertEqual(6, len(labels), f"IN_CONTRACT changed size: {labels}")
+        self.assertEqual(3, sum("range" in l for l in labels), f"ranges: {labels}")
+        self.assertEqual(3, sum("point" in l for l in labels), f"points: {labels}")
+
     def test_each_in_contract_form_parses_with_the_right_times(self):
-        for label, line, start, end in IN_CONTRACT:
+        for label, line, start, end in IN_CONTRACT + BOUND_PINS:
             with self.subTest(form=label):
                 segs = to_srt.parse_segments(line + "\n")
                 self.assertEqual(len(segs), 1, f"{label} did not parse")
@@ -172,7 +207,7 @@ class TestTheContractIsWrittenDownWhereProducersLook(unittest.TestCase):
         # digits was the whole story. The producer had been writing three for
         # as long as recordings ran past 99 minutes. An incomplete contract is
         # not a smaller contract; it is a wrong one, and it made the parser
-        # look right while it dropped 86% of a transcript.
+        # look right while it dropped four fifths of a transcript.
         self.assertIn("total minutes", head.lower(),
                       "cache.py does not say the minute field is TOTAL minutes, so "
                       "nothing tells a reader it can exceed two digits (#50)")

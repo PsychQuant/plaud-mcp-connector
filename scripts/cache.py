@@ -22,51 +22,46 @@ single line — deliberately, so any source can land content here. That makes
 this the only place a producer is told what the shape has to be, and
 `tests/test_cache_line_format.py` the only place it is enforced.
 
-For `--kind transcript` and `--kind polish`, one segment per line, in exactly
-one of two forms:
+For `--kind transcript` and `--kind polish`, one segment per line. The ranged
+form carries a real end time; the point form does not, and `to_srt` has to infer
+one from where the next segment starts, which leaves the last segment with a
+guess. Both are accepted; a producer that has end times should keep them.
 
-    [MM:SS] Speaker 1: text          [HH:MM:SS] Speaker 1: text
-    [MM:SS - MM:SS] Speaker 1: text  [HH:MM:SS - HH:MM:SS] Speaker 1: text
+Written as a grammar rather than as examples, because prose about field widths
+turned out to be readable three incompatible ways at once (#50, twice):
 
-The second carries a real end time. The first does not, and `to_srt` has to
-infer one from where the next segment starts — which leaves the last segment
-with a guess. Both forms are accepted; the ranged one produces better
-subtitles, so a producer that has end times should keep them.
+    stamp   := ( HH ":" MM ":" SS | TOTALMIN ":" SS ) frac?    [1:02:03.500]
+    HH      := 1-2 digits, literal hours
+    TOTALMIN:= 1-4 digits, TOTAL minutes not minutes-within-an-hour  [446:12]
+    MM, SS  := exactly 2 digits, 00-59
+    frac    := ( "." | "," ) 1-3 digits
+    line    := "[" stamp ( " - " stamp )? "]" ( speaker ":" )? text
+    speaker := optional, 1-60 chars, no colon or bracket
 
-`MM` is **total minutes**, not minutes-within-an-hour, so it leaves two digits
-once a recording passes 99 minutes:
+Three things that grammar says and earlier prose versions did not. The bound is
+on **magnitude, not digit count** — `[9999:99]` has four legal minute digits and
+two legal seconds digits and is still malformed, because 99 is not a seconds
+value. It applies at **both ends of a range**, and the leading field means
+different things in the two forms: four digits of TOTALMIN is about seven days,
+four digits of HH would be 416 days. And a malformed **end** costs the timing,
+not the line — `[00:10 - 10000:00] S: x` still becomes a cue with an unknown
+end, while a malformed **start** rejects the line, because without one there is
+nowhere to put the words.
 
-    [100:05] Speaker 1: text
-    [446:12 - 446:40] Speaker 1: text        # 7.4 hours in
+**An incomplete contract is not a smaller contract, it is a wrong one.** This
+was written from short recordings, so `MM` looked like two digits and `to_srt`
+was built to match, while the producer had been writing three for as long as
+anyone recorded past 99 minutes. The parser was correct by these words and
+silently dropped four fifths of a 7.4-hour transcript — 281 segments in, 57 cues
+out — into an SRT with continuous timecodes and no error (#50). A shape not
+written here is that bug again, not a small omission.
 
-Up to four digits (`9999:59` is about seven days, past any real recording);
-five is a malformed line and stays rejected — **at both ends of a range, and
-in the `MM` field only**. In the three-part `HH:MM:SS` form the leading field
-is literal hours and stays at two digits, because four digits of hours is 416
-days rather than seven. The seconds field is always exactly two digits.
-
-Those three qualifications are not pedantry. The first version of this
-paragraph said only "five is a malformed line and stays rejected", and all
-three ways it could be read too widely were true at once: the bound was
-enforced on a range's start but not its end, four digits had been let into the
-hours field of the other shape, and `00:412` was being converted to 412
-seconds. A sentence that states a bound has to say what it is bounding.
-
-This paragraph is #50, and it is worth saying why it was missing. The two-form
-table above was written from short recordings, so `MM` looked like it meant two
-digits, and `to_srt` was built to match. The producer had been writing three
-digits for as long as anyone recorded past 99 minutes. **An incomplete contract
-is not a smaller contract, it is a wrong one** — the parser was correct by these
-words while it silently dropped 86% of a 7.4-hour transcript into an SRT with
-continuous timecodes and no error. If you are adding a producer and its shape is
-not written here, that is this bug again, not a small omission.
-
-**Two forms, and only these two.** The list is closed, and closed on purpose:
-both entries are shapes that a shipped producer actually emits, measured
-2026-08-09 — Plaud's MCP path writes the first, its CLI writes the second. A
-third would go here only after something real emits it, never because it
-seems reasonable. `plaud-index` wrote both for months while `to_srt` accepted
-only one, and every test passed the whole time (#40).
+**Closed on purpose**, and closed against measurement: both forms are ones a
+shipped producer emits, measured 2026-08-09 (MCP path writes the point form,
+CLI the ranged one). A third goes here only once something real emits it, never
+because it seems reasonable (#40). Shapes the parser accepts but nothing has
+been measured emitting are pinned separately, in `BOUND_PINS` in the contract
+test.
 
 `--kind outline` and `--kind summary` are **not covered**. Their line shapes
 have not been measured, and writing down an unmeasured shape as if it were
