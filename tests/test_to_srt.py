@@ -121,7 +121,7 @@ class TestSegmentParsing(unittest.TestCase):
         self.assertEqual(segs[0]["text"], "the ratio is 3:1 and rising")
 
     def test_non_segment_lines_are_dropped(self) -> None:
-        body = "Subject: a meeting\n\n[00:00:05] A: real line\nrandom prose\n"
+        body = "some prose\n\n[00:00:05] A: real line\nrandom prose\n"
         self.assertEqual(len(to_srt.parse_segments(body)), 1)
 
     def test_frontmatter_is_stripped_before_parsing(self) -> None:
@@ -497,6 +497,89 @@ class TestTheDenominatorEnumeratesNothing(unittest.TestCase):
         self.assertNotIn("did not parse", err, f"false positive: {err!r}")
 
 
+class TestTheCountComesFromOnePass(unittest.TestCase):
+    """Round 5: stop deriving the count twice.
+
+    Four rounds tried to make a SECOND derivation of the input agree with the
+    parser's. Each time the two derivations shared a step, and the shared step
+    was the blind spot:
+
+        round 1  startswith("[")           the column-0 anchor
+        round 2  lstrip().startswith("[")  still requires a leading `[`
+        round 3  ^[BOM\s]*[\[(]?\s*\d+:\d+  the stamp must begin the line
+        round 4  strip_frontmatter(raw) on BOTH sides — a body opening with
+                 `---` lost cues from the numerator AND the denominator
+
+    That is not bad luck. Computing one quantity twice from one source makes
+    every transformation before the split a shared gate, and the next one is
+    only ever found by someone looking for it.
+
+    So the parser reports its own skips. It already visits every line and
+    already decides which become cues; returning both halves of that decision
+    leaves no second traversal to desynchronise and no preprocessing to share.
+    """
+
+    def _run(self, body: str) -> tuple[int, str, str]:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stdout, proc.stderr
+
+    def test_a_body_opening_with_a_delimiter_keeps_its_cues(self):
+        """Round 4's blind spot. The default source is written WITHOUT frontmatter."""
+        _, out, err = self._run("---\n"
+                                "[00:00] S: one\n"
+                                "[00:10] S: two\n"
+                                "---\n"
+                                "[00:20] S: three\n")
+        self.assertIn("wrote 3 cues", out,
+                      f"a body whose first line is `---` lost cues to a "
+                      f"frontmatter strip that never checked what it was eating: "
+                      f"{out!r}")
+
+    def test_a_delimiter_pair_that_is_not_frontmatter_is_not_stripped(self):
+        self.assertEqual(
+            3, len(to_srt.parse_segments(to_srt.strip_frontmatter(
+                "---\n[00:00] S: a\n[00:10] S: b\n---\n[00:20] S: c\n"))),
+            "strip_frontmatter ate cue lines because they sat between two `---`")
+
+    def test_real_frontmatter_is_still_stripped(self):
+        body = ("---\nid: abc123\nname: \"x\"\ncomplete: true\n---\n\n"
+                "[00:00] S: a\n")
+        self.assertNotIn("id: abc123", to_srt.strip_frontmatter(body),
+                         "a well-formed frontmatter block stopped being stripped")
+
+    def test_the_skipped_lines_come_from_the_same_pass_as_the_cues(self):
+        """The property itself: one traversal, both halves."""
+        cues, skipped = to_srt.parse_transcript(
+            "[00:00] S: kept\n"
+            "- [00:10] S: bullet\n"
+            "not a cue at all\n"
+            "\n"
+            "[00:20] S: kept\n")
+        self.assertEqual(2, len(cues))
+        self.assertEqual(2, len(skipped),
+                         f"blank lines must not count and dropped lines must: {skipped!r}")
+
+    def test_no_second_derivation_exists_in_main(self):
+        """A mechanical check: main must not re-split the body to count.
+
+        This is the regression that would undo the design. If someone later
+        recomputes a denominator from the text, the shared-gate class comes
+        straight back, and it comes back silently.
+        """
+        src = SCRIPT.read_text(encoding="utf-8")
+        main_src = src[src.index("def main("):]
+        self.assertNotIn(".splitlines()", main_src,
+                         "main() splits the body again to count. The count must "
+                         "come from the parse that already visited every line — "
+                         "any second traversal can go blind where the first does")
+
+
 class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
     """`tests/test_cache_line_format_live.py` already forbids this for CI logs.
 
@@ -669,92 +752,131 @@ class TestEveryCorrectionReachesSomebody(unittest.TestCase):
             self.assertNotIn(word, err.lower(), f"corrected a clean file: {err!r}")
 
 
-class TestBothReadSitesConsumeAByteOrderMark(unittest.TestCase):
-    """Round 3: the BOM fix reached one of `to_srt.py`'s two `read_text` calls.
+class TestPreviewSourcesRefusesToPairAfterADrop(unittest.TestCase):
+    """A drop on either side makes the comparison a fabrication.
 
-    `main()` got `utf-8-sig`; `_cue_lines`, which feeds `--preview-sources`, did
-    not. It matters specifically because of WHERE polish files come from:
-    `cache.py` writes frontmatter only for `--kind transcript`, and polish,
-    summary and outline are written as bare bodies (`cache.py:458`). So on a
-    polish file a leading BOM does not land harmlessly on a `---` line — it
-    lands on the FIRST CUE, `SEGMENT`'s `^\[` fails, and that cue is gone.
+    `differing_sample` pairs polished against verbatim BY INDEX. Its docstring
+    says a broken alignment is handled — "the zip below simply stops at the
+    shorter one rather than pairing lines that are not the same moment" — but
+    `zip` truncating does not undo an index SHIFT: lose line 1 of one side and
+    every later pair is two different moments presented as one sentence written
+    two ways.
 
-    The cost is then worse than one missing line, because `differing_sample`
-    pairs polished against verbatim BY INDEX: polished sentence 2 gets shown
-    beside verbatim sentence 1 and labelled the same sentence written two ways,
-    which is what that function's docstring promises will not happen.
+    Round 3 found this through a BOM. Round 4 fixed the BOM and left the class:
+    any drop cause at all — an out-of-contract shape, a bullet, a `---` body —
+    still shifts the pairing, and `--preview-sources` returns before the drop
+    counter exists, so there is not even a warning.
 
-    An earlier version of this test put the BOM on a file WITH frontmatter,
-    where it only prevents the frontmatter being stripped and costs no cue at
-    all. It passed with the fix reverted — a test with no teeth, caught by
-    mutation rather than by reading it.
+    It matters beyond one odd line: per SKILL.md the operator quotes those two
+    lines to the user and then PERSISTS the answer with `config.py set
+    subtitle_source`. A fabricated comparison becomes a stored preference.
     """
 
-    def _preview(self, polish_body: str, verbatim_body: str) -> subprocess.CompletedProcess:
+    def _preview(self, polish_body: str, verbatim_cues: str) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as d:
             cache = pathlib.Path(d)
             (cache / "polish").mkdir()
-            # Transcript carries frontmatter, polish does not — the real shapes.
             (cache / "abc123.md").write_text(
-                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim_body,
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim_cues,
                 encoding="utf-8")
+            # polish is written by cache.py as a BARE body — no frontmatter
             (cache / "polish" / "abc123.md").write_text(polish_body, encoding="utf-8")
             return subprocess.run(
                 [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
                 capture_output=True, text=True, env=cli_env(cache))
 
+    def test_a_drop_on_one_side_refuses_rather_than_mis_pairs(self):
+        """The polish side loses its first line to an out-of-contract shape."""
+        proc = self._preview(
+            "[00:99] S: so the budget\n[00:10] S: we split it in two\n[00:20] S: agreed\n",
+            "[00:00] S: um so the budget\n[00:10] S: we split it in two\n[00:20] S: agreed\n")
+        self.assertNotIn("we split it in two", proc.stdout,
+                         f"a dropped line shifted the pairing and two different "
+                         f"moments were offered as the same sentence: {proc.stdout!r}")
+        self.assertIn("drop", (proc.stdout + proc.stderr).lower(),
+                      f"the preview neither paired correctly nor said why it "
+                      f"could not: out={proc.stdout!r} err={proc.stderr!r}")
+
     def test_a_bom_on_a_polish_file_does_not_shift_the_pairing(self):
         cues = "[00:00] S: first\n[00:10] S: second\n[00:20] S: third\n"
         proc = self._preview("\ufeff" + cues, cues)
-        self.assertEqual(
-            3, proc.returncode,
-            f"the two sources are identical, so the preview must report there is "
-            f"no choice to make (exit 3). A BOM ate the polish file's first cue "
-            f"and the comparison then paired polished #2 with verbatim #1: "
-            f"rc={proc.returncode} out={proc.stdout!r}")
+        self.assertEqual(3, proc.returncode,
+                         f"identical sources must report no choice to make: "
+                         f"rc={proc.returncode} out={proc.stdout!r}")
 
     def test_a_genuine_difference_is_still_reported(self):
-        """The guard must not turn every comparison into 'no choice'."""
         proc = self._preview("[00:00] S: thinned\n", "[00:00] S: um, thinned\n")
-        self.assertEqual(
-            0, proc.returncode,
-            f"a real difference between the two sources stopped being reported: "
-            f"rc={proc.returncode} out={proc.stdout!r}")
+        self.assertEqual(0, proc.returncode,
+                         f"a real difference stopped being reported: "
+                         f"rc={proc.returncode} out={proc.stdout!r}")
 
 
 class TestTheCueCountCarriesItsOwnCaveat(unittest.TestCase):
     """#50's harm was a plausible number reported as success.
 
     The story in the issue is a script reporting "6 succeeded / 0 failed" over
-    files that were 80% empty. The branch put a contradicting signal on stderr
-    and left the plausible-looking count alone on stdout, without saying which
-    one wins. Anything that reads only the success line still gets #50.
+    files that were four-fifths empty. Round 4 put the drop count on the stdout
+    success line — and only on the `-o` path, while writing the guarantee into
+    the module docstring unconditionally. Without `-o` the SRT itself IS stdout,
+    so there is no success line to carry anything and the promise was false on
+    the default invocation.
     """
 
-    def test_stdout_says_lines_were_dropped(self):
+    def _run(self, *args: str, body: str | None = None) -> subprocess.CompletedProcess:
+        body = body or ("---\nid: abc123\ncomplete: true\n---\n\n"
+                        "[00:00] S: kept\n[99999:00] S: dropped\n")
         with tempfile.TemporaryDirectory() as d:
             cache = pathlib.Path(d)
-            (cache / "abc123.md").write_text(
-                "---\nid: abc123\ncomplete: true\n---\n\n"
-                "[00:00] S: parses\n"
-                "[99999:00] S: dropped\n",
-                encoding="utf-8")
-            out = pathlib.Path(d) / "o.srt"
-            proc = subprocess.run(
-                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123",
+                 *[a.replace("{d}", str(cache)) for a in args]],
                 capture_output=True, text=True, env=cli_env(cache))
+
+    def test_stdout_says_lines_were_dropped(self):
+        proc = self._run("-o", "{d}/o.srt")
         self.assertIn("dropped", proc.stdout.lower(),
                       f"stdout said {proc.stdout.strip()!r} with no hint that a "
                       f"line was lost — the same shape as the '6 succeeded / 0 "
                       f"failed' report #50 opens with")
 
+    def test_streaming_mode_still_says_it(self):
+        """No `-o`: stdout is the subtitle file, so the count must go to stderr."""
+        proc = self._run()
+        self.assertNotIn("dropped", proc.stdout.lower(),
+                         "the caveat was written into the .srt itself")
+        self.assertIn("dropped", proc.stderr.lower(),
+                      f"streaming mode reported nothing at all: a caller doing "
+                      f"`to_srt.py id > out.srt` gets a short file, exit 0 and "
+                      f"silence — #50's exact shape. stderr={proc.stderr!r}")
+
+    def test_the_words_on_the_two_streams_agree(self):
+        """Round 4 said 'timestamped line(s) dropped' for a line with no timestamp."""
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
+                "[00:00] S: ok\nthis line is prose, no timestamp at all\n")
+        proc = self._run("-o", "{d}/o.srt", body=body)
+        self.assertNotIn("timestamped line", proc.stdout,
+                         f"stdout calls the dropped line timestamped while stderr "
+                         f"says it carries none — same run:\n"
+                         f"  stdout: {proc.stdout.strip()!r}\n"
+                         f"  stderr: {proc.stderr.strip()!r}")
+
+    def test_a_clean_file_gets_no_caveat_on_either_stream(self):
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
+                "[00:00] S: a\n[00:10] S: b\n")
+        proc = self._run("-o", "{d}/o.srt", body=body)
+        self.assertNotIn("dropped", proc.stdout.lower())
+        self.assertNotIn("dropped", proc.stderr.lower())
+
 
 class TestPartialDropIsLoud(unittest.TestCase):
     """A file that parses PARTLY is the case both guards were blind to.
 
-    `parse_segments` drops non-matching lines silently, and that is right for
-    the `Subject:` header and blank lines — warning about those would bury the
-    real problem. The caller then guards on `if not segments`, which fires only
+    The parse drops non-matching lines silently, and that is right for blank
+    lines. (It was long justified by a `Subject:`-style header as well — no
+    producer in this repo writes one; `cache.py put` emits YAML frontmatter.
+    The justification outlived whatever it was written for.) The caller then
+    guards on `if not segments`, which fires only
     at ZERO. #50 parsed 20% of one file: the drop was silent by design and the
     guard was quiet because the list was not empty. "All or nothing" was an
     assumption nobody wrote down, and partial parsing fell straight through it.
@@ -1443,3 +1565,109 @@ class TestSourcePreferenceCLI(unittest.TestCase):
         self.assertEqual(0, out.returncode, out.stderr)
         self.assertIn("subtitle_soruce", out.stderr)
         self.assertIn("tidy wording", out.stdout, "the typo must not silently take effect")
+
+
+class TestTheAdviceHintIsPinned(unittest.TestCase):
+    """`CUE_SHAPED` picks which advice the warning gives. Nothing tested it.
+
+    Round 4 demoted it from denominator to hint, and the tests that had pinned
+    it went with the denominator they were really about. Setting it to a pattern
+    that never matches left all 527 tests green — so the three-way advice could
+    silently collapse to one branch and no run would say so.
+
+    Round 3 recorded a DA finding of this shape as "did not reproduce", and that
+    verdict was correct against round-3 code. Round 4's fix made it true. A
+    "did not reproduce" is a statement about the code at that moment, not a
+    property that survives the next commit.
+    """
+
+    def _advice(self, bad_line: str) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n"
+                f"[00:00] S: ok\n{bad_line}\n", encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache)).stderr
+
+    def test_a_timestamped_line_is_sent_to_the_contract(self):
+        err = self._advice("[99999:00] S: five-digit minutes")
+        self.assertIn("carries a timestamp", err,
+                      f"a line that DOES carry a timestamp was not recognised as "
+                      f"one, so the advice sent it to the wrong place: {err!r}")
+
+    def test_a_line_with_no_timestamp_is_not(self):
+        err = self._advice("just some prose in the body")
+        self.assertIn("no recognisable timestamp", err,
+                      f"a prose line was told to go grow the timestamp contract: {err!r}")
+
+    def test_an_indented_line_gets_the_only_advice_that_works(self):
+        err = self._advice("  [00:10] S: indented")
+        self.assertIn("column", err,
+                      f"an indented line was sent to 'grow the contract', which "
+                      f"cannot ever make it parse: {err!r}")
+
+
+class TestTheIncompleteGuardCanFireOnTheDefaultSource(unittest.TestCase):
+    """It structurally could not — the same failure class as this PR's subject.
+
+    `subtitle_source` prefers `polish/<id>.md`, and `cache.py:465` writes polish,
+    summary and outline as a bare body with NO frontmatter. So `"complete: false"
+    in raw[:400]` tested a string that can never appear in the file actually
+    being read: a recording indexed incompletely produced subtitles that stop
+    partway, with the one warning built to explain that silence unable to fire.
+    """
+
+    def test_an_incomplete_recording_warns_even_when_polish_is_preferred(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: false\n---\n\n[00:00] S: x\n",
+                encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(
+                "[00:00] S: x\n", encoding="utf-8")
+            err = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache)).stderr
+        self.assertIn("incomplete", err,
+                      f"the transcript is marked incomplete and the subtitles come "
+                      f"from the polish beside it, which carries no frontmatter to "
+                      f"say so — the warning could not fire: {err!r}")
+
+
+class TestThereIsOnlyOneParse(unittest.TestCase):
+    """`parse_segments` must not become a second implementation.
+
+    Two derivations of one quantity drifting apart is the hazard that cost this
+    issue four rounds. A convenience wrapper is fine; a copy of the loop is the
+    same trap in a new place, and it would drift the moment somebody fixes a
+    bug in one and not the other.
+    """
+
+    CASES = [
+        "[00:00] S: a\n[00:10] S: b\n",
+        "[00:00] S: a\nnot a cue\n\n[00:20] S: c\n",
+        "- [00:10] S: bullet\n",
+        "[99999:00] S: out of contract\n",
+        "[00:10 - banana] S: malformed end\n",
+        "",
+        "\n\n\n",
+    ]
+
+    def test_the_wrapper_returns_exactly_the_pass_result(self):
+        for body in self.CASES:
+            with self.subTest(body=body[:24]):
+                self.assertEqual(to_srt.parse_transcript(body)[0],
+                                 to_srt.parse_segments(body),
+                                 "parse_segments and parse_transcript disagree — "
+                                 "they are two implementations now")
+
+    def test_the_wrapper_has_no_loop_of_its_own(self):
+        src = SCRIPT.read_text(encoding="utf-8")
+        body = src[src.index("def parse_segments("):src.index("def build_cues(")]
+        self.assertNotIn("SEGMENT.match", body,
+                         "parse_segments matches lines itself instead of "
+                         "delegating — that is a second parse, and second "
+                         "derivations are what this issue kept failing on")

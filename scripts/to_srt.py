@@ -17,10 +17,11 @@ two-field form the leading number is TOTAL MINUTES, so it passes two digits at
 longer than 99 minutes were silently truncated before v0.10.1 (#50). The full
 contract lives in scripts/cache.py.
 
-If some lines cannot be parsed the rest are still written, the count is reported
-on stdout beside the cue count, and the shapes go to stderr. Exit stays 0 — the
-file was written and is usable — so a caller checking only the exit status must
-read the cue line, which says how many were dropped.
+If some lines cannot be parsed the rest are still written and the count is
+reported beside the cue count — on stdout with `-o`, and on stderr without it,
+because there stdout is the subtitle file itself. The shapes go to stderr either
+way. Exit stays 0: the file was written and is usable, so a caller checking only
+the exit status must read the cue line, which says how many were dropped.
 
 Usage:
     to_srt.py <recording-id> [-o out.srt] [--no-speaker] [--tail-seconds N]
@@ -209,64 +210,108 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
+# A frontmatter line: `key: value`, or the blank lines around them.
+_FRONT_LINE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:|^\s*$")
+
+
 def strip_frontmatter(text: str) -> str:
+    """Remove the YAML block `cache.py put` writes, and NOTHING else.
+
+    The check that the block IS frontmatter is the point. This used to take the
+    first `---` line and the next one and delete everything between, without
+    ever asking what it was deleting — so a body whose first line happened to be
+    `---` lost every cue up to the next one. Round 4 measured that on the
+    DEFAULT source: `cache.py` writes polish, summary and outline as a bare body
+    with no frontmatter (`cache.py:465`), so a polish file starting with `---`
+    produced half a transcript with exit 0 and an empty stderr.
+
+    That mattered more than a normal parsing bug because both the cues and the
+    count were derived from this function's output, which made it a gate they
+    shared: a line lost here left the numerator and the denominator together
+    and `unparsed` stayed 0. It was the fourth consecutive round in which the
+    drop counter went blind through a step it shared with the parser.
+
+    Now it strips only when every line between the delimiters is `key: value`
+    or blank. Anything else is not frontmatter and the text is returned whole,
+    so the parser sees those lines and the counter can report them.
+    """
     if not text.startswith("---\n"):
         return text
     end = text.find("\n---\n", 4)
-    return text if end == -1 else text[end + len("\n---\n"):]
+    if end == -1:
+        return text
+    block = text[4:end]
+    if block and not all(_FRONT_LINE.match(line) for line in block.splitlines()):
+        return text                       # a `---` pair, but not frontmatter
+    return text[end + len("\n---\n"):]
+
+
+def parse_transcript(body: str) -> tuple[list[dict], list[str]]:
+    """One pass over the body. Returns (cues, lines that produced no cue).
+
+    Both halves come from the SAME traversal, and that is the whole point.
+
+    Four rounds of #50 tried to make a second derivation of the input agree
+    with this function's: count the `[`-leading lines, then the lstripped ones,
+    then the timestamp-shaped ones, then the non-blank ones. Every version
+    shared a step with the parser, and the shared step was where both went
+    blind together — `unparsed` stayed 0 and a short file reported success.
+    Round 4's shared step was `strip_frontmatter`, which is not even in this
+    file's control.
+
+    Computing one quantity twice from one source makes every transformation
+    before the split a shared gate. There is no fourth pattern to try; there is
+    a different shape of answer, which is to stop deriving it twice. This
+    function already visits every line and already decides which ones become
+    cues. Returning what it skipped alongside what it kept means there is no
+    second traversal to desynchronise, no preprocessing to share, and no
+    positive test to enumerate.
+
+    Blank lines are not skips — they are not content and never were.
+    """
+    cues: list[dict] = []
+    skipped: list[str] = []
+    for line in body.splitlines():
+        m = SEGMENT.match(line)
+        if m:
+            try:
+                start = parse_timestamp(m.group("ts"))
+            except ValueError:
+                skipped.append(line)      # matched the shape, failed the value
+                continue
+            raw_end = m.group("end")
+            end: float | None = None
+            if raw_end:
+                # One check, in `parse_timestamp`, and the trade stated on the
+                # branch that makes it: a malformed END costs the timing and
+                # keeps the words, because losing somebody's speech over a
+                # timing detail is the worse trade.
+                try:
+                    end = parse_timestamp(raw_end)
+                except ValueError:
+                    end = None
+            cues.append({
+                "start": start,
+                "end": end,
+                "speaker": (m.group("speaker") or "").strip(),
+                "text": m.group("text").strip(),
+            })
+        elif line.strip():
+            skipped.append(line)
+    return cues, skipped
 
 
 def parse_segments(body: str) -> list[dict]:
-    """Lines that look like segments become cues; everything else is dropped.
+    """The cues only, for callers that genuinely do not need the skips.
 
-    Dropping silently is deliberate: cached files carry a `Subject:`-style header
-    and blank lines, and warning about each one would bury the real problem —
-    which is a file with *no* parseable segments at all (handled by the caller).
+    A thin delegate on purpose. Writing the loop twice would recreate the exact
+    hazard `parse_transcript` exists to remove: two derivations of one quantity
+    that can drift apart silently, which is what cost #50 four rounds. Anything
+    that needs to know what was dropped must call `parse_transcript` — the count
+    and the cues have to come from the same traversal or neither can be trusted.
     """
-    out: list[dict] = []
-    for line in body.splitlines():
-        m = SEGMENT.match(line)
-        if not m:
-            continue
-        try:
-            start = parse_timestamp(m.group("ts"))
-        except ValueError:
-            continue
-        raw_end = m.group("end")
-        end: float | None = None
-        if raw_end:
-            # The end group is matched loosely (`[^\]]*?`) on purpose, so a
-            # malformed end costs the timing and not the line. But loose in the
-            # REGEX became unbounded in the VALUE: `parse_timestamp` only splits
-            # and converts, it validates nothing, so `10000:00` became 600000.0
-            # and `00:412` became 412.0 — plausible-looking wrong numbers where
-            # the docstring above promises None. `banana` was refused only
-            # because int() choked on it, which is luck, not a check.
-            #
-            # So the shape check happens HERE, before conversion: same bound as
-            # the start, same trade as before (the words survive either way).
-            # This is also #53's substance — its own deferral reasoning said
-            # `parse_timestamp` was shared by both paths and could not be
-            # tightened for one, which confused a shared CONVERTER for a shared
-            # VALIDATOR. Start was never validated there either.
-            # One check, in `parse_timestamp`, and the trade stated on the
-            # branch that actually makes it. Round 1 put the check here and
-            # left the converter unvalidated; round 2's repair then guarded
-            # this call with a `fullmatch` and hung the "keep the words"
-            # comment on a `try/except` that the guard had made unreachable —
-            # so a reader auditing "where do we lose an end?" was pointed at
-            # the one line where it could not happen.
-            try:
-                end = parse_timestamp(raw_end)
-            except ValueError:
-                end = None      # keep the words, lose only the timing
-        out.append({
-            "start": start,
-            "end": end,
-            "speaker": (m.group("speaker") or "").strip(),
-            "text": m.group("text").strip(),
-        })
-    return out
+    cues, _ = parse_transcript(body)
+    return cues
 
 
 def build_cues(segments: list[dict], *, show_speaker: bool = True,
@@ -437,18 +482,20 @@ def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
     return CACHE_DIR / f"{rec_id}.md"
 
 
-def _cue_lines(path: pathlib.Path) -> list[str]:
-    """A file's segments rendered the way a cue would read, speaker included."""
+def _cue_lines(path: pathlib.Path) -> tuple[list[str], int]:
+    """A file's cues as they would read, and how many lines produced none.
+
+    The drop count is returned, not discarded, because the caller pairs two of
+    these BY INDEX and a drop on either side shifts every later pair. Round 3
+    found that through a BOM and round 4 fixed the BOM, leaving the class: any
+    drop cause at all still mis-pairs, and `--preview-sources` returns before
+    `main`'s counter exists, so nothing said so.
+    """
     if not path.is_file() or path.stat().st_size == 0:
-        return []
-    # `utf-8-sig` here too. Round 3 caught the BOM fix reaching only the OTHER
-    # of the two read sites, and the cost here is worse than a dropped line:
-    # `differing_sample` pairs polished against verbatim BY INDEX, so losing
-    # line 1 of one side pairs polished sentence 2 with verbatim sentence 1 and
-    # presents them as the same sentence written two ways — which is exactly
-    # what that function's docstring promises it will not do.
-    segments = parse_segments(strip_frontmatter(path.read_text(encoding="utf-8-sig")))
-    return [c["text"] for c in build_cues(segments)]
+        return [], 0
+    cues, dropped = parse_transcript(
+        strip_frontmatter(path.read_text(encoding="utf-8-sig")))
+    return [c["text"] for c in build_cues(cues)], len(dropped)
 
 
 def differing_sample(rec_id: str) -> dict | None:
@@ -469,12 +516,28 @@ def differing_sample(rec_id: str) -> dict | None:
 
     Pairs by position: Plaud returns both blocks with the same segment count and
     the same timings (94 against 94, measured in #22), so index alignment holds.
-    If a future release breaks that, the zip below simply stops at the shorter
-    one rather than pairing lines that are not the same moment.
+
+    A fourth None case, and the reason it is here: **either side dropped a
+    line**. `zip` stopping at the shorter list does NOT rescue an index shift —
+    lose line 1 of one side and every remaining pair is two different moments
+    shown as one sentence written two ways. The earlier docstring claimed the
+    zip handled it; it handles a length difference, not a displacement. Since
+    the operator quotes this pair to the user and stores the answer as a
+    preference, a fabricated comparison would become persisted configuration,
+    so refusing is the only honest option.
     """
-    polished = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
-    verbatim = _cue_lines(CACHE_DIR / f"{rec_id}.md")
+    polished, polish_drops = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
+    verbatim, verbatim_drops = _cue_lines(CACHE_DIR / f"{rec_id}.md")
     if not polished or not verbatim:
+        return None
+    if polish_drops or verbatim_drops:
+        which = "polished" if polish_drops else "verbatim"
+        n = polish_drops or verbatim_drops
+        print(f"⚠ refusing to compare: the {which} transcript dropped {n} line(s), "
+              f"so the two sides no longer line up and any pair shown would be two "
+              f"different moments. Fix the shape first — run to_srt on the file to "
+              f"see which lines, or see the contract in scripts/cache.py (#50).",
+              file=sys.stderr)
         return None
     for tidy, raw in zip(polished, verbatim):
         if tidy != raw:
@@ -544,40 +607,21 @@ def main() -> None:
     # `cache.py` writes frontmatter only for `--kind transcript`, so on a polish
     # file a leading BOM lands on the FIRST CUE rather than harmlessly on `---`.
     raw = path.read_text(encoding="utf-8-sig")
-    segments = parse_segments(strip_frontmatter(raw))
 
-    # The denominator is NEGATIVE, and that is the whole design.
-    #
-    # It does not ask "does this line look like a cue?" — three rounds of
-    # answering that kept leaving a shape out, because a positive test has to
-    # enumerate and producer drift does not. It asks the question that
-    # enumerates nothing: this line was not blank and not frontmatter, so it was
-    # content; did it become a cue? A shape nobody has thought of is counted
-    # here without anyone adding an entry for it, which is the one property the
-    # three previous denominators could not have.
-    #
-    # The cost is real and it is the mirror image: a prose line in the body
-    # counts as a drop. Measured before choosing it — `cache.py put` is the only
-    # producer, it writes YAML frontmatter and then one segment per line, and on
-    # all nine real cache files every non-blank line after `strip_frontmatter`
-    # is a cue line. False positives on real data today: zero. If a producer
-    # does start writing prose into the body, this warns about it, and that is
-    # the right way round: it is a contract question, and a warning names it
-    # where silence would not.
-    #
-    # Counted BEFORE the zero-segment exit, not after. Put after, a file where
-    # NOTHING parsed took the generic branch below and never got the counted,
-    # shape-named diagnostic — the one case where the count is most certain.
-    content_lines = [line for line in strip_frontmatter(raw).splitlines()
-                     if line.strip()]
-    unparsed = len(content_lines) - len(segments)
+    # ONE pass. `parse_transcript` visits every line once and hands back both
+    # what became a cue and what did not, so there is no second derivation to
+    # go blind where the first does. Four rounds of #50 were spent making a
+    # separate count agree with this one; each version shared a step with the
+    # parser, and the shared step was the blind spot. See `parse_transcript`.
+    segments, dropped = parse_transcript(strip_frontmatter(raw))
+    unparsed = len(dropped)
 
     if not segments:
-        stamped = [l for l in content_lines if CUE_SHAPED.match(l)]
+        stamped = [l for l in dropped if CUE_SHAPED.match(l)]
         detail = (f"\n{len(stamped)} line(s) DID carry a timestamp and none of "
                   f"them parsed; the first is {shape_of(stamped[0])}."
                   if stamped else
-                  f"\n{len(content_lines)} content line(s) were present and none "
+                  f"\n{len(dropped)} content line(s) were present and none "
                   f"carried a recognisable timestamp, so this is most likely a "
                   f"recording without them rather than a shape problem.")
         sys.exit(
@@ -591,17 +635,12 @@ def main() -> None:
         )
 
     # A file that parses PARTLY is what both guards were blind to. The silent
-    # drop in parse_segments is right for blank lines; the guard above fires
-    # only at ZERO. #50 parsed 20% of a file — silent by design, and quiet at
-    # the guard because the list was not empty. "All or nothing" was an
-    # assumption nobody wrote down.
-    #
-    # The signal goes on the LINE COUNT rather than inside the parser, because
-    # counting here does not reuse the parser — so it says something the parser
-    # cannot say about itself.
+    # drop is right for blank lines; the guard above fires only at ZERO. #50
+    # parsed 20% of a file — silent by design, and quiet at the guard because
+    # the list was not empty. "All or nothing" was an assumption nobody wrote
+    # down.
     if unparsed > 0:
-        first_bad = next((line for line in content_lines
-                          if not SEGMENT.match(line)), content_lines[0])
+        first_bad = dropped[0]
         # The COUNT enumerates nothing; the ADVICE is allowed to guess, because
         # guessing wrong here costs a sentence rather than a silent truncation.
         # Three causes, three different things to do. Sending an indented line
@@ -622,7 +661,15 @@ def main() -> None:
                       "producer wrote prose into the body — which the "
                       "line-format contract does not allow — or it has started "
                       "writing a shape this cannot even recognise as a time.")
-        print(f"⚠ {unparsed} of {len(content_lines)} content lines in {path.name} "
+        # `!r`, not raw and not `shape_of`. The filename is attacker-controlled
+        # through `--file`, and `\x1b[1A\x1b[2K` in it erases the very line
+        # reporting the problem — the same capability the transcript sanitiser
+        # exists for, through the channel left open beside it. What actually
+        # stops a control character addressing the terminal here is the repr's
+        # escaping, not the character-class strip; `shape_of` would hide the
+        # name entirely and leave nobody able to say WHICH file.
+        print(f"⚠ {unparsed} of {unparsed + len(segments)} content lines in "
+              f"{path.name!r} "
               f"did not parse as segments — those words are missing from the "
               f"subtitles, which will otherwise look complete.\n"
               f"  first one: {shape_of(first_bad)}\n"
@@ -630,8 +677,21 @@ def main() -> None:
 
     # A truncated cache would yield subtitles that just stop mid-recording, with
     # nothing in the .srt to say why. Say it here instead.
-    if "complete: false" in raw[:400]:
-        print(f"⚠ {path.name} is marked incomplete — these subtitles cover only the "
+    #
+    # Read from the TRANSCRIPT, not from whatever file we are subtitling. The
+    # completeness flag lives in the transcript's frontmatter, and `cache.py`
+    # writes polish, summary and outline as bare bodies with none (`cache.py:465`)
+    # — while `subtitle_source` PREFERS the polish. So testing `raw` meant testing
+    # a string that could never appear in the file being read: on the default
+    # path this warning was structurally unable to fire, which is the same shape
+    # of silent truncation the rest of this issue is about.
+    completeness_source = raw
+    if not args.file and args.id:
+        transcript = CACHE_DIR / f"{args.id}.md"
+        if transcript.is_file() and transcript != path:
+            completeness_source = transcript.read_text(encoding="utf-8-sig")[:400]
+    if "complete: false" in completeness_source[:400]:
+        print(f"⚠ {path.name!r} is marked incomplete — these subtitles cover only the "
               f"part that was fetched. Re-run plaud-index first.", file=sys.stderr)
 
     # `build_cues` has always appended its trim corrections "when a list is
@@ -648,17 +708,29 @@ def main() -> None:
     for note in trims:
         print(f"⚠ {note}", file=sys.stderr)
 
+    # "content line(s)", not "timestamped line(s)". The count is of lines that
+    # did not become cues, and after the inversion most of them carry no
+    # timestamp at all — round 4 shipped stdout calling them timestamped while
+    # stderr, in the same run, said they carried none.
+    note = f" ({unparsed} content line(s) dropped — see stderr)" if unparsed > 0 else ""
     if args.output:
         pathlib.Path(args.output).write_text(srt)
         # The drop count rides along with the cue count, on the same stream, in
         # the same sentence. #50 opens with a script reporting "6 succeeded /
         # 0 failed" over files that were four-fifths empty: the number was
         # plausible and alone. A warning on stderr does not fix that for
-        # anything reading only the success line — so the success line has to
-        # carry its own caveat.
-        note = f" ({unparsed} timestamped line(s) dropped — see stderr)" if unparsed > 0 else ""
+        # anything reading only the success line — so the success line carries
+        # its own caveat.
         print(f"wrote {len(segments)} cues{note} → {args.output}")
     else:
+        # Streaming: stdout IS the subtitle file, so there is no success line to
+        # attach anything to and writing one would corrupt the .srt. The count
+        # goes to stderr instead — which round 4 missed entirely, having put the
+        # guarantee on the `-o` path, tested only that path, and then written
+        # the promise into the module docstring without a condition. A caller
+        # doing `to_srt.py id > out.srt` got a short file, exit 0 and silence.
+        if note:
+            print(f"wrote {len(segments)} cues to stdout{note}", file=sys.stderr)
         sys.stdout.write(srt)
 
 
