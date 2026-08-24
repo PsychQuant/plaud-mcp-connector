@@ -529,23 +529,19 @@ class TestTheCountComesFromOnePass(unittest.TestCase):
                 capture_output=True, text=True, env=cli_env(cache))
             return proc.returncode, proc.stdout, proc.stderr
 
-    def test_a_body_opening_with_a_delimiter_keeps_its_cues(self):
-        """Round 4's blind spot. The default source is written WITHOUT frontmatter."""
-        _, out, err = self._run("---\n"
-                                "[00:00] S: one\n"
-                                "[00:10] S: two\n"
-                                "---\n"
-                                "[00:20] S: three\n")
-        self.assertIn("wrote 3 cues", out,
-                      f"a body whose first line is `---` lost cues to a "
-                      f"frontmatter strip that never checked what it was eating: "
-                      f"{out!r}")
+    def test_a_bare_body_opening_with_a_delimiter_keeps_its_cues(self):
+        """Round 4's blind spot, on the source it actually affects.
 
-    def test_a_delimiter_pair_that_is_not_frontmatter_is_not_stripped(self):
-        self.assertEqual(
-            3, len(to_srt.parse_segments(to_srt.strip_frontmatter(
-                "---\n[00:00] S: a\n[00:10] S: b\n---\n[00:20] S: c\n"))),
-            "strip_frontmatter ate cue lines because they sat between two `---`")
+        This fixture is a POLISH body — no frontmatter, because `cache.py`
+        writes none for that kind — so nothing here may be consumed as one.
+        """
+        cues, skipped, front = to_srt.parse_transcript(
+            "---\n[00:00] S: one\n[00:10] S: two\n---\n[00:20] S: three\n",
+            expect_frontmatter=False)
+        self.assertEqual([], front)
+        self.assertEqual(3, len(cues),
+                         f"a bare body whose first line is `---` lost cues: {cues!r}")
+        self.assertEqual(2, len(skipped), "the two delimiters are content here")
 
     def test_real_frontmatter_is_still_stripped(self):
         body = ("---\nid: abc123\nname: \"x\"\ncomplete: true\n---\n\n"
@@ -555,7 +551,7 @@ class TestTheCountComesFromOnePass(unittest.TestCase):
 
     def test_the_skipped_lines_come_from_the_same_pass_as_the_cues(self):
         """The property itself: one traversal, both halves."""
-        cues, skipped = to_srt.parse_transcript(
+        cues, skipped, _ = to_srt.parse_transcript(
             "[00:00] S: kept\n"
             "- [00:10] S: bullet\n"
             "not a cue at all\n"
@@ -784,6 +780,24 @@ class TestPreviewSourcesRefusesToPairAfterADrop(unittest.TestCase):
             return subprocess.run(
                 [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
                 capture_output=True, text=True, env=cli_env(cache))
+
+    def test_it_pairs_the_same_moment_when_both_sides_parse_cleanly(self):
+        """Round 5: the drop guard could not see this, because there is no drop.
+
+        `_cue_lines` threw the start times away, so nothing downstream could
+        check that index N on one side was the same moment as index N on the
+        other — even though the timestamps were right there. Equal cue counts
+        and zero drops were enough to offer 00:20 against 00:10 as "the same
+        line both ways", and the operator stores that answer as a preference.
+        """
+        proc = self._preview(
+            "[00:00] S: first\n[00:20] S: third\n[00:30] S: fourth\n",
+            "[00:00] S: first\n[00:10] S: second\n[00:30] S: fourth\n")
+        self.assertNotIn("second", proc.stdout,
+                         f"00:20 was paired against 00:10 and offered as one "
+                         f"sentence written two ways: {proc.stdout!r}")
+        self.assertNotIn("third", proc.stdout,
+                         f"same pair, other side: {proc.stdout!r}")
 
     def test_a_drop_on_one_side_refuses_rather_than_mis_pairs(self):
         """The polish side loses its first line to an out-of-contract shape."""
@@ -1671,3 +1685,97 @@ class TestThereIsOnlyOneParse(unittest.TestCase):
                          "parse_segments matches lines itself instead of "
                          "delegating — that is a second parse, and second "
                          "derivations are what this issue kept failing on")
+
+
+class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
+    """Round 6: the last look-like test goes.
+
+    Every failure in this series was a shape question. Does this line look like
+    a cue (rounds 1-3). Does this block look like frontmatter (round 5). A shape
+    question has to enumerate, the enumeration is finite, and producer drift is
+    not — so there is always a next shape, and it is always found by someone
+    else.
+
+    Two facts replace the guess, and neither is a shape:
+
+      WHICH KIND OF FILE.  `cache.py` writes frontmatter for `--kind transcript`
+        and writes polish, summary and outline as bare bodies (`cache.py:465`).
+        `subtitle_source` knows which one it handed back. The caller does not
+        have to infer what it is looking at.
+      WHERE THE LINES ARE.  When a frontmatter block is expected and the first
+        line is a delimiter, the block runs to the next delimiter — whatever
+        those lines contain. Position, not resemblance.
+
+    Round 5 asked instead whether each line looked like `key: value`, which ate
+    `Alice: [00:00] opening statement` — speaker-labelled dialogue carrying a
+    timestamp, the most likely thing a drifting producer writes — and, when the
+    check failed, kept the block and rendered `[00:01] metadata` into the
+    subtitles as if somebody had said it.
+
+    Nothing is invisible either way: the frontmatter line count comes back from
+    the same call, so a misjudged region is reportable rather than silent.
+    """
+
+    FRONT = "---\nid: abc123\nname: \"x\"\ncomplete: true\n---\n\n"
+
+    def test_a_bare_body_keeps_lines_that_look_like_frontmatter(self):
+        """Polish files have no frontmatter, so nothing may be consumed as it."""
+        cues, skipped, front = to_srt.parse_transcript(
+            "---\nAlice: [00:00] opening statement\n---\n[00:20] S: real\n",
+            expect_frontmatter=False)
+        self.assertEqual([], front, "a bare body had lines eaten as frontmatter")
+        self.assertEqual(1, len(cues))
+        self.assertEqual(3, len(skipped),
+                         f"the two delimiters and the dialogue line are content "
+                         f"here and must be counted: {skipped!r}")
+
+    def test_a_transcript_block_is_taken_whole_whatever_it_contains(self):
+        """By position. `Alice:` and `[00:01]` alike — the region is the region."""
+        cues, skipped, front = to_srt.parse_transcript(
+            "---\nAlice: [00:00] opening\n[00:01] metadata\n---\n[00:20] S: real\n",
+            expect_frontmatter=True)
+        self.assertEqual(4, len(front),
+                         f"the frontmatter region is delimiter-to-delimiter: {front!r}")
+        self.assertEqual(1, len(cues),
+                         f"a line INSIDE the frontmatter became a subtitle — round 5 "
+                         f"turned silent deletion into silent fabrication: {cues!r}")
+
+    def test_the_frontmatter_count_is_never_invisible(self):
+        """Whatever the region turns out to be, the caller is told its size."""
+        _, _, front = to_srt.parse_transcript(self.FRONT + "[00:00] S: a\n",
+                                              expect_frontmatter=True)
+        self.assertEqual(5, len(front), f"{front!r}")
+
+    def test_an_unterminated_delimiter_is_content_not_frontmatter(self):
+        cues, skipped, front = to_srt.parse_transcript(
+            "---\nid: abc\n[00:00] S: a\n", expect_frontmatter=True)
+        self.assertEqual([], front, "a block with no closing delimiter was consumed")
+        self.assertEqual(1, len(cues))
+        self.assertEqual(2, len(skipped))
+
+    def test_the_default_source_no_longer_loses_speaker_labelled_dialogue(self):
+        """Round 5's blocking repro, through the CLI, on the preferred source."""
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(self.FRONT + "[00:00] S: x\n",
+                                             encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(
+                "---\nAlice: [00:00] opening statement\nBob: [00:10] response\n"
+                "---\n[00:20] S: final line\n", encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertIn("did not parse", proc.stderr,
+                      f"speaker-labelled dialogue carrying timestamps vanished "
+                      f"from the cues AND the count: out={proc.stdout!r} "
+                      f"err={proc.stderr!r}")
+
+    def test_no_shape_test_decides_the_region(self):
+        """Mechanical: the region must not be chosen by what the lines look like."""
+        src = SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("_FRONT_LINE", src,
+                         "a pattern for what frontmatter LOOKS LIKE is back. That "
+                         "is the construct that failed in rounds 1, 2, 3 and 5; "
+                         "the region is decided by kind and position now")

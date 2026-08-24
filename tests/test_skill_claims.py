@@ -720,13 +720,50 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
             "model following this checklist; a signal absent from it is a signal "
             "that does not reach the user (#50)")
 
-    def test_the_skill_says_the_drop_contradicts_the_success_line(self):
+    def test_every_quoted_string_is_one_the_tool_actually_prints(self):
+        """Read the format strings OUT of to_srt.py rather than hardcoding them.
+
+        The previous version asserted `"dropped — see stderr"`, a substring that
+        survived the code changing "timestamped line(s)" to "content line(s)" —
+        so the suite stayed green while the only document that reads this tool
+        told the operator to relay a sentence the tool never prints, using the
+        very word the same commit had removed. An assertion that cannot fail
+        when the thing it guards changes is not guarding it.
+        """
+        import re as _re
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "scripts" / "to_srt.py").read_text(encoding="utf-8")
         text = self._skill_text()
-        self.assertIn(
-            "dropped — see stderr", text,
-            "the skill does not quote the stdout sentence that carries the drop "
-            "count, so an operator relaying 'wrote N cues' still reports #50's "
-            "exact failure as a success")
+        # Every literal the CLI can put on a stream, reduced to its fixed part.
+        # Phrases SKILL.md quotes VERBATIM. The long stderr warning is elided
+        # with `…` there, which is fine for a checklist and would make an
+        # exact-match assertion a formatting test — so only the fragments the
+        # operator is told to relay word for word are pinned.
+        for fixed in ("content line(s) dropped — see stderr",
+                      "content lines",
+                      "did not parse"):
+            with self.subTest(phrase=fixed):
+                self.assertIn(fixed, src,
+                              f"{fixed!r} is no longer what the tool prints — this "
+                              f"test's own reference is stale")
+                self.assertIn(fixed, text,
+                              f"SKILL.md does not quote {fixed!r}, which the tool "
+                              f"prints. The operator is a model following that "
+                              f"checklist; a sentence absent from it does not reach "
+                              f"the user, and a sentence that DIFFERS from it gets "
+                              f"relayed wrong")
+        self.assertNotIn("timestamped line", text,
+                         "SKILL.md still quotes the pre-inversion wording, so the "
+                         "operator relays a prose line as 'timestamped'")
+
+    def test_the_exit_three_causes_are_all_listed(self):
+        """A third cause was added and the closed table was not grown."""
+        text = self._skill_text()
+        self.assertIn("refused", text.lower(),
+                      "`--preview-sources` can now exit 3 because the comparison "
+                      "was REFUSED after a drop, and the decision table still "
+                      "says exit 3 means 'no polish, or identical' — so the "
+                      "operator is told not to ask and never surfaces it")
 
     def test_the_enumeration_count_matches_the_list(self):
         """'Two things' outlived the second thing once already."""

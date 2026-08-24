@@ -210,43 +210,45 @@ def format_timestamp(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
 
 
-# A frontmatter line: `key: value`, or the blank lines around them.
-_FRONT_LINE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\s*:|^\s*$")
+DELIM = "---"
+
+
+def _frontmatter_span(lines: list[str]) -> int:
+    """How many leading lines are the frontmatter block. Position only.
+
+    No test of what the lines look like. Round 5 asked whether each one matched
+    `key: value` and ate `Alice: [00:00] opening statement` — speaker-labelled
+    dialogue carrying a timestamp — while, when the test failed, keeping the
+    block and letting `[00:01] metadata` render as a subtitle. Both directions
+    of that came from the same mistake: deciding a REGION by the SHAPE of its
+    contents.
+
+    A block is delimiter to delimiter or it is not a block. Unterminated means
+    there is none, and the `---` is then ordinary content that the counter will
+    report rather than swallow.
+    """
+    if not lines or lines[0].strip() != DELIM:
+        return 0
+    for i in range(1, len(lines)):
+        if lines[i].strip() == DELIM:
+            return i + 1
+    return 0
 
 
 def strip_frontmatter(text: str) -> str:
-    """Remove the YAML block `cache.py put` writes, and NOTHING else.
+    """Kept for callers that only want the body. Prefer `parse_transcript`.
 
-    The check that the block IS frontmatter is the point. This used to take the
-    first `---` line and the next one and delete everything between, without
-    ever asking what it was deleting — so a body whose first line happened to be
-    `---` lost every cue up to the next one. Round 4 measured that on the
-    DEFAULT source: `cache.py` writes polish, summary and outline as a bare body
-    with no frontmatter (`cache.py:465`), so a polish file starting with `---`
-    produced half a transcript with exit 0 and an empty stderr.
-
-    That mattered more than a normal parsing bug because both the cues and the
-    count were derived from this function's output, which made it a gate they
-    shared: a line lost here left the numerator and the denominator together
-    and `unparsed` stayed 0. It was the fourth consecutive round in which the
-    drop counter went blind through a step it shared with the parser.
-
-    Now it strips only when every line between the delimiters is `key: value`
-    or blank. Anything else is not frontmatter and the text is returned whole,
-    so the parser sees those lines and the counter can report them.
+    This exists because other modules and tests call it. It cannot report what
+    it consumed, which is precisely why the count must not be built on it — for
+    four rounds it was, and for four rounds the count went blind wherever this
+    function did.
     """
-    if not text.startswith("---\n"):
-        return text
-    end = text.find("\n---\n", 4)
-    if end == -1:
-        return text
-    block = text[4:end]
-    if block and not all(_FRONT_LINE.match(line) for line in block.splitlines()):
-        return text                       # a `---` pair, but not frontmatter
-    return text[end + len("\n---\n"):]
+    lines = text.splitlines(keepends=True)
+    return "".join(lines[_frontmatter_span([l.rstrip("\n") for l in lines]):])
 
 
-def parse_transcript(body: str) -> tuple[list[dict], list[str]]:
+def parse_transcript(text: str, *, expect_frontmatter: bool = False
+                     ) -> tuple[list[dict], list[str], list[str]]:
     """One pass over the body. Returns (cues, lines that produced no cue).
 
     Both halves come from the SAME traversal, and that is the whole point.
@@ -269,9 +271,13 @@ def parse_transcript(body: str) -> tuple[list[dict], list[str]]:
 
     Blank lines are not skips — they are not content and never were.
     """
+    all_lines = text.splitlines()
+    span = _frontmatter_span(all_lines) if expect_frontmatter else 0
+    front, body_lines = all_lines[:span], all_lines[span:]
+
     cues: list[dict] = []
     skipped: list[str] = []
-    for line in body.splitlines():
+    for line in body_lines:
         m = SEGMENT.match(line)
         if m:
             try:
@@ -298,7 +304,7 @@ def parse_transcript(body: str) -> tuple[list[dict], list[str]]:
             })
         elif line.strip():
             skipped.append(line)
-    return cues, skipped
+    return cues, skipped, front
 
 
 def parse_segments(body: str) -> list[dict]:
@@ -310,7 +316,7 @@ def parse_segments(body: str) -> list[dict]:
     that needs to know what was dropped must call `parse_transcript` — the count
     and the cues have to come from the same traversal or neither can be trusted.
     """
-    cues, _ = parse_transcript(body)
+    cues, _, _ = parse_transcript(body)
     return cues
 
 
@@ -482,8 +488,8 @@ def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
     return CACHE_DIR / f"{rec_id}.md"
 
 
-def _cue_lines(path: pathlib.Path) -> tuple[list[str], int]:
-    """A file's cues as they would read, and how many lines produced none.
+def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
+    """A file's cues as (start, text), and how many lines produced none.
 
     The drop count is returned, not discarded, because the caller pairs two of
     these BY INDEX and a drop on either side shifts every later pair. Round 3
@@ -493,9 +499,17 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[str], int]:
     """
     if not path.is_file() or path.stat().st_size == 0:
         return [], 0
-    cues, dropped = parse_transcript(
-        strip_frontmatter(path.read_text(encoding="utf-8-sig")))
-    return [c["text"] for c in build_cues(cues)], len(dropped)
+    # Same "the caller knows" rule as `main`: only the top-level transcript
+    # carries frontmatter, so only it may have a block consumed.
+    cues, dropped, _ = parse_transcript(
+        path.read_text(encoding="utf-8-sig"),
+        expect_frontmatter=path.parent == CACHE_DIR)
+    # The START comes back with the text. Round 5 returned text alone, so the
+    # caller pairing two of these had nothing to check alignment WITH — and a
+    # guard that only knew about parser drops could not see two clean files
+    # whose moments simply differ. The timestamps were always available; not
+    # returning them was the whole gap.
+    return [(c["start"], t) for c, t in zip(cues, [x["text"] for x in build_cues(cues)])], len(dropped)
 
 
 def differing_sample(rec_id: str) -> dict | None:
@@ -539,8 +553,18 @@ def differing_sample(rec_id: str) -> dict | None:
               f"see which lines, or see the contract in scripts/cache.py (#50).",
               file=sys.stderr)
         return None
-    for tidy, raw in zip(polished, verbatim):
-        if tidy != raw:
+    # Aligned by START TIME, not by index. Plaud returns both blocks with the
+    # same segments and timings (94 against 94, measured in #22), so normally
+    # every start matches — but "normally" is what four rounds of this issue
+    # were about. Round 5 paired by position and checked only for parser drops,
+    # which cannot see two clean files whose moments differ: it offered 00:20
+    # against 00:10 as one sentence written two ways, and the operator stores
+    # that answer as a preference. Comparing at equal starts makes a
+    # misalignment unable to produce a pair at all.
+    by_start = {start: text for start, text in verbatim}
+    for start, tidy in polished:
+        raw = by_start.get(start)
+        if raw is not None and tidy != raw:
             return {"polished": tidy, "verbatim": raw}
     return None
 
@@ -594,10 +618,21 @@ def main() -> None:
 
     if args.file:
         path = pathlib.Path(args.file)
+        # An arbitrary path, so the kind is unknown. Allow a block, and let the
+        # count report its size — an unknown region that is visible is a
+        # different thing from one that is guessed at silently.
+        expect_front = True
     else:
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", args.id or ""):
             sys.exit(f"error: refusing unsafe recording id: {args.id!r}")
         path = subtitle_source(args.id, prefer=prefer)
+        # THE CALLER KNOWS. `cache.py` writes frontmatter for `--kind
+        # transcript` and writes polish, summary and outline as bare bodies
+        # (`cache.py:465`), and `subtitle_source` just decided which of those it
+        # handed back. Nothing here has to infer what it is looking at from the
+        # shape of the text, which is the guess that failed in rounds 1, 2, 3
+        # and 5. A polish file's first line is content even when it is `---`.
+        expect_front = path.parent == CACHE_DIR
 
     if not path.is_file():
         sys.exit(f"error: {path} not found — run the plaud-index skill first")
@@ -613,7 +648,7 @@ def main() -> None:
     # go blind where the first does. Four rounds of #50 were spent making a
     # separate count agree with this one; each version shared a step with the
     # parser, and the shared step was the blind spot. See `parse_transcript`.
-    segments, dropped = parse_transcript(strip_frontmatter(raw))
+    segments, dropped, front = parse_transcript(raw, expect_frontmatter=expect_front)
     unparsed = len(dropped)
 
     if not segments:

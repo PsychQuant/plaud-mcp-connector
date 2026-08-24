@@ -73,7 +73,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> --preview-sources
 |---|---|
 | `get` exits 3 **and** `--preview-sources` exits 0 | **Ask**, quoting the two lines it printed. Then `config.py set subtitle_source <answer>` |
 | `get` exits 0 | A choice is on record — use it, say nothing |
-| `--preview-sources` exits 3 | **Do not ask.** Either there is no polish, or the two versions are identical — there is no choice to offer, and asking would present two identical lines |
+| `--preview-sources` exits 3 | **Do not ask** — but read stderr first. Three causes: there is no polish; the two versions are identical; or the comparison was **refused** because one side dropped a line, in which case stderr says so and the shape needs fixing before the question can be asked at all |
 | Nobody is there to answer | Use the default and **say which version you used** in the report |
 
 Asking "polished or verbatim?" with nothing attached is unanswerable — the user
@@ -113,15 +113,17 @@ long transcript into the conversation** — write the file and report the path.
 Say where the file went and how many cues it has. Three things to surface if
 they happen, because none is visible in the resulting `.srt`:
 
-- **`⚠ N of M timestamped lines … did not parse` on stderr** — the file was
+- **`⚠ N of M content lines … did not parse` on stderr** — the file was
   converted, but part of the transcript is missing from it. **This is the one
   that contradicts the success line**: the run exits 0 and stdout still reports
   a cue count, because the `.srt` was written and is usable. The count is real
   and it is also short. Report both, and lead with the loss — a 7.4-hour
   recording once produced 57 perfectly-formed cues out of 281 segments and was
   reported as a success (#50). When this fires, stdout says
-  `wrote N cues (K timestamped line(s) dropped — see stderr)`; pass that whole
-  sentence on rather than just the number.
+  `wrote N cues (K content line(s) dropped — see stderr)`; pass that whole
+  sentence on rather than just the number. Without `-o` there is no success
+  line — stdout is the subtitle file itself — so the same sentence arrives on
+  stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
 - **`⚠ marked incomplete` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
