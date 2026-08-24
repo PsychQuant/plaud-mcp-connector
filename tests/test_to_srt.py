@@ -186,7 +186,7 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
     """
 
     def _fixture(self, *lines: str) -> str:
-        return "Subject: t\n\n---\n\n" + "\n".join(lines) + "\n"
+        return "---\nid: abc123\ncomplete: true\n---\n\n" + "\n".join(lines) + "\n"
 
     def test_no_bracket_line_is_silently_dropped(self) -> None:
         body = self._fixture(
@@ -303,7 +303,7 @@ class TestTheGuardDoesNotShareTheParsersAssumption(unittest.TestCase):
             return proc.returncode, proc.stderr
 
     def test_an_indented_bracket_line_is_counted_and_warned_about(self):
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00 - 00:12] S: parses\n"
                 " [00:13 - 00:20] S: one leading space, silently dropped\n"
                 "[00:21 - 00:30] S: parses\n")
@@ -314,7 +314,7 @@ class TestTheGuardDoesNotShareTheParsersAssumption(unittest.TestCase):
                       "the denominator too and `unparsed` stays 0")
 
     def test_a_clean_file_is_still_quiet(self):
-        body = ("Subject: t\nDuration: 00:01\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00 - 00:12] S: parses\n\n[00:13 - 00:20] S: also parses\n")
         _, err = self._run(body)
         self.assertNotIn("did not parse", err, f"warned about a clean file: {err!r}")
@@ -346,7 +346,7 @@ class TestTheDenominatorSharesNoAssumptionWithTheParser(unittest.TestCase):
 
     def test_a_cue_shaped_line_without_a_bracket_is_counted(self):
         """#50's signature, reproduced through a prefix the bracket test cannot see."""
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00 - 00:12] S: parses\n"
                 "(00:13 - 00:20) S: paren form, silently dropped\n"
                 "[00:21 - 00:30] S: parses\n")
@@ -374,20 +374,35 @@ class TestTheDenominatorSharesNoAssumptionWithTheParser(unittest.TestCase):
                          f"the BOM line vanished — round 1's B3 reached through a "
                          f"different invisible prefix: {out!r}")
 
-    def test_an_annotation_line_is_not_counted_as_a_lost_cue(self):
-        """`[laughter]` was never meant to be a cue; claiming it is cries wolf."""
-        body = ("Subject: t\n\n---\n\n"
+    def test_an_annotation_line_is_reported_under_the_negative_count(self):
+        """Deliberate behaviour change in round 4, recorded rather than hidden.
+
+        Under the positive denominator `[laughter]` was excluded, on the
+        argument that it was never meant to be a cue and warning about it cries
+        wolf. The negative denominator counts it, and on reflection that is the
+        right way round: `cache.py`'s contract is ONE SEGMENT PER LINE, so an
+        annotation line is a line the contract does not permit. Naming it is a
+        contract question surfacing, which is what this warning is for.
+
+        The trade only works because the advice distinguishes the cases — a
+        line with no recognisable timestamp gets told it may be prose, not told
+        to go grow the timestamp contract.
+        """
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00] S: hello\n"
                 "[laughter]\n"
                 "[00:10] S: bye\n")
         _, _, err = self._run(body)
-        self.assertNotIn("did not parse", err,
-                         f"warned about a bracketed annotation: {err!r}. A warning "
-                         f"that fires on every clean file is one nobody reads")
+        self.assertIn("did not parse", err,
+                      "an annotation line is a content line that produced no cue; "
+                      "the negative count must see it")
+        self.assertIn("no recognisable timestamp", err,
+                      f"the advice sent an annotation line to the timestamp "
+                      f"contract, which cannot help it: {err!r}")
 
     def test_the_denominator_is_not_bounded_where_the_parser_is(self):
         """A drift PAST the parser's bound must be visible, not agreed-upon."""
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00] S: parses\n"
                 "[10000:00] S: five digits — past the contract's bound\n")
         _, _, err = self._run(body)
@@ -395,6 +410,91 @@ class TestTheDenominatorSharesNoAssumptionWithTheParser(unittest.TestCase):
                       "a five-digit minute field was invisible to the denominator "
                       "AND the parser, so they agreed silently — which is the one "
                       "thing this count exists to prevent")
+
+
+class TestTheDenominatorEnumeratesNothing(unittest.TestCase):
+    """Round 4: the denominator was inverted, because widening it kept failing.
+
+    Rounds 1, 2 and 3 each widened a POSITIVE test — "does this line look like
+    a cue?" — and each time the next reviewer found a shape outside it:
+
+        round 1  startswith("[")             an indented line escapes both
+        round 2  lstrip().startswith("[")    a `(` or a BOM escapes both
+        round 3  ^[BOM\s]*[\[(]?\s*\d+:\d+   a bullet, a blockquote, a
+                                             numbered list, a fullwidth or an
+                                             angle bracket escapes both
+
+    A positive test must enumerate what counts. The enumeration is finite and
+    producer drift is not, so there is always a next shape. The question is now
+    NEGATIVE — did this non-blank line fail to become a cue? — which enumerates
+    nothing and therefore cannot have a blind spot of this kind.
+
+    The cost is the mirror image: prose lines inside the body would count as
+    drops. That cost is measured rather than assumed. `cache.py put` is the only
+    producer, it writes YAML frontmatter and then one segment per line, and on
+    all nine real cache files every non-blank line after `strip_frontmatter` is
+    a cue line — so the false-positive count on real data today is zero.
+    """
+
+    def _run(self, *body_lines: str) -> tuple[int, str, str]:
+        """A fixture in the REAL producer's shape — YAML frontmatter, then cues."""
+        body = ("---\nid: abc123\nname: \"t\"\ncomplete: true\n---\n\n"
+                + "\n".join(body_lines) + "\n")
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+            return proc.returncode, proc.stdout, proc.stderr
+
+    def test_every_prefix_round_three_missed_is_counted(self):
+        """The five shapes that reproduced #50's signature at 0ed3501."""
+        for label, line in (
+                ("markdown bullet",   "- [00:13 - 00:20] S: x"),
+                ("blockquote",        "> [00:13 - 00:20] S: x"),
+                ("numbered list",     "1. [00:13 - 00:20] S: x"),
+                ("fullwidth bracket", "【00:13 - 00:20】S: x"),
+                ("angle bracket",     "<00:13 - 00:20> S: x")):
+            with self.subTest(prefix=label):
+                _, out, err = self._run("[00:00] S: ok", line, "[00:30] S: ok")
+                self.assertIn("did not parse", err,
+                              f"{label} left numerator and denominator together — "
+                              f"#50's signature, the shape a positive test misses")
+                self.assertIn("dropped", out.lower(),
+                              f"{label}: stdout reported success with no caveat")
+
+    def test_a_shape_nobody_has_thought_of_is_counted(self):
+        """The point of a negative test: it needs no entry for this line.
+
+        If this test ever needs editing to add a new shape, the denominator has
+        silently gone back to being a positive one.
+        """
+        for line in ("\u2063\u2063[00:13] S: invisible separators",
+                     "\N{RIGHT-TO-LEFT OVERRIDE}[00:13] S: bidi",
+                     "\t\t|00:13 - 00:20| S: pipe delimiters",
+                     "00:13\u3000S: ideographic space, no bracket at all",
+                     "…[00:13] S: leading ellipsis"):
+            with self.subTest(line=line[:20]):
+                _, out, err = self._run("[00:00] S: ok", line, "[00:30] S: ok")
+                self.assertIn("did not parse", err,
+                              f"a line the parser dropped was invisible to the "
+                              f"count: {line[:30]!r}")
+
+    def test_blank_lines_and_frontmatter_stay_quiet(self):
+        """The silence that IS deliberate must survive the inversion."""
+        _, out, err = self._run("[00:00] S: ok", "", "   ", "[00:30] S: ok")
+        self.assertNotIn("did not parse", err, f"warned about blank lines: {err!r}")
+        self.assertNotIn("dropped", out.lower(), f"stdout caveat on a clean file: {out!r}")
+
+    def test_the_real_corpus_shape_is_quiet(self):
+        """Nine real cache files produce no warning; this is that shape."""
+        _, out, err = self._run(
+            "[00:01 - 00:27] Speaker 1: a line",
+            "[00:37 - 01:00] Speaker 2: another",
+            "[446:12 - 446:40] Speaker 1: seven hours in")
+        self.assertNotIn("did not parse", err, f"false positive: {err!r}")
 
 
 class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
@@ -417,7 +517,7 @@ class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
 
     def test_the_warning_never_quotes_the_transcript(self):
         secret = "something somebody actually said"
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00] S: fine\n"
                 f"[99999:00] S: {secret}\n")
         _, err = self._run(body)
@@ -426,8 +526,45 @@ class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
                          "the warning printed a transcript line verbatim. This repo "
                          "already has shape_of() and a test forbidding exactly this")
 
+
+    def test_no_digit_from_the_transcript_survives(self):
+        """Round 3: the leak moved rather than closed.
+
+        Round 2 replaced "ninety raw characters" with an opener matched by
+        `[\d:.,\s-]*`, which runs from the start of the line and eats digits,
+        dots, commas, hyphens and spaces without bound. In a transcript the
+        numbers ARE the sensitive part — account numbers, ID numbers, phone
+        numbers, amounts, dates — and every one of them is inside that class.
+        The test that was supposed to catch this passed only because its
+        fixture contained a `]`, which happens to fall outside the class and
+        stop the match.
+
+        So the rule is now the strong one: no digit from the line survives into
+        the description. The SHAPE does — how many digits, in what arrangement
+        — because that is what identifies the form without revealing the value.
+        """
+        for line, secret in (
+                ("99999:00 4111-1111-1111-1111 is the account", "4111"),
+                ("0912-345-678 called about it", "0912"),
+                ("99999:00 1990.03.14 身分證 A123456789", "1990"),
+                ("[99999:00] S: the sum was 8,750,000", "8,750")):
+            with self.subTest(line=line[:24]):
+                out = to_srt.shape_of(line)
+                self.assertNotIn(secret, out,
+                                 f"shape_of leaked {secret!r} from {line[:30]!r}: {out!r}")
+
+    def test_the_description_still_identifies_the_shape(self):
+        """Redaction that reveals nothing is useless — round 1 asked for naming."""
+        a = to_srt.shape_of("[99999:00] S: x")
+        b = to_srt.shape_of("- [00:13 - 00:20] S: x")
+        c = to_srt.shape_of("plain prose with no timestamp at all")
+        self.assertNotEqual(a, b, "two different shapes described identically")
+        self.assertNotEqual(b, c, "two different shapes described identically")
+        for out in (a, b, c):
+            self.assertIn("chars", out, f"length dropped from the description: {out!r}")
+
     def test_control_codes_never_reach_the_terminal(self):
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00] S: fine\n"
                 "[99999:00] S: benign\x1b[2K\x1b[1A\x1b[2K forged\n")
         _, err = self._run(body)
@@ -476,25 +613,113 @@ class TestTheBoundIsOnMagnitudeNotJustDigitCount(unittest.TestCase):
 
 
 class TestEveryCorrectionReachesSomebody(unittest.TestCase):
-    """`build_cues` appends trim warnings "when a list is passed" — and the CLI
-    never passed one, so the branch was unreachable in the only shipped path.
-    A PR whose whole subject is "partial loss must not be silent" left a second
-    silent correction in the function it feeds."""
+    """`build_cues` makes TWO corrections. Round 3 found only one reported.
 
-    def test_a_trimmed_cue_is_reported(self):
+    Its docstring argues the case — "a correction nobody can see is one nobody
+    can judge" — and round 2 wired `main()` to surface the TRIM. Measured across
+    all nine real cache files afterwards:
+
+        trims                    0
+        clamps to min_duration  30      (ten of them in #50's own 7.4-hour file)
+
+    So the correction that was wired up and tested never happens on real data,
+    and the one that happens thirty times stayed silent. A test named "every
+    correction reaches somebody" asserted a property the code did not have.
+
+    The trim message was also reporting a value that never existed: it named
+    `nxt` as the new end, but when the clamp then fired the end actually written
+    was `start + min_duration`.
+    """
+
+    def _stderr(self, *lines: str) -> str:
         with tempfile.TemporaryDirectory() as d:
             cache = pathlib.Path(d)
             (cache / "abc123.md").write_text(
-                "Subject: t\n\n---\n\n"
-                "[00:00 - 09:59] S: a long declared end\n"
-                "[00:30 - 00:40] S: the next cue starts long before it\n",
+                "---\nid: abc123\ncomplete: true\n---\n\n" + "\n".join(lines) + "\n",
                 encoding="utf-8")
-            proc = subprocess.run([sys.executable, str(SCRIPT), "abc123"],
-                                  capture_output=True, text=True, env=cli_env(cache))
-        self.assertIn("trim", proc.stderr.lower(),
-                      "a declared end was pulled back by nine minutes and nothing "
-                      "said so. build_cues' own docstring: 'a correction nobody "
-                      "can see is one nobody can judge'")
+            return subprocess.run([sys.executable, str(SCRIPT), "abc123"],
+                                  capture_output=True, text=True,
+                                  env=cli_env(cache)).stderr
+
+    def test_a_trimmed_cue_is_reported(self):
+        err = self._stderr("[00:00 - 09:59] S: a long declared end",
+                           "[00:30 - 00:40] S: the next cue starts long before it")
+        self.assertIn("trim", err.lower(),
+                      f"a declared end was pulled back by nine minutes in silence: {err!r}")
+
+    def test_a_clamped_cue_is_reported(self):
+        """The correction that actually happens: 30 times on the real corpus."""
+        err = self._stderr("[00:10 - 00:10] S: zero-length declared range",
+                           "[00:10 - 00:20] S: same start as the one before")
+        self.assertIn("clamp", err.lower(),
+                      f"a cue was silently given a synthetic duration: {err!r}")
+
+    def test_the_reported_end_is_the_one_actually_written(self):
+        """A correction that misreports itself is not a correction anyone can judge."""
+        err = self._stderr("[00:20 - 09:59] S: declared end runs long",
+                           "[00:10 - 00:30] S: and the next cue starts BEFORE it")
+        self.assertNotIn("00:00:10,000", err,
+                         f"the message named the next cue's start as the new end, but "
+                         f"the clamp then moved it — so the value reported was never "
+                         f"written: {err!r}")
+
+    def test_a_clean_file_reports_no_correction(self):
+        err = self._stderr("[00:00 - 00:10] S: fine", "[00:20 - 00:30] S: fine")
+        for word in ("trim", "clamp"):
+            self.assertNotIn(word, err.lower(), f"corrected a clean file: {err!r}")
+
+
+class TestBothReadSitesConsumeAByteOrderMark(unittest.TestCase):
+    """Round 3: the BOM fix reached one of `to_srt.py`'s two `read_text` calls.
+
+    `main()` got `utf-8-sig`; `_cue_lines`, which feeds `--preview-sources`, did
+    not. It matters specifically because of WHERE polish files come from:
+    `cache.py` writes frontmatter only for `--kind transcript`, and polish,
+    summary and outline are written as bare bodies (`cache.py:458`). So on a
+    polish file a leading BOM does not land harmlessly on a `---` line — it
+    lands on the FIRST CUE, `SEGMENT`'s `^\[` fails, and that cue is gone.
+
+    The cost is then worse than one missing line, because `differing_sample`
+    pairs polished against verbatim BY INDEX: polished sentence 2 gets shown
+    beside verbatim sentence 1 and labelled the same sentence written two ways,
+    which is what that function's docstring promises will not happen.
+
+    An earlier version of this test put the BOM on a file WITH frontmatter,
+    where it only prevents the frontmatter being stripped and costs no cue at
+    all. It passed with the fix reverted — a test with no teeth, caught by
+    mutation rather than by reading it.
+    """
+
+    def _preview(self, polish_body: str, verbatim_body: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            # Transcript carries frontmatter, polish does not — the real shapes.
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim_body,
+                encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish_body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_a_bom_on_a_polish_file_does_not_shift_the_pairing(self):
+        cues = "[00:00] S: first\n[00:10] S: second\n[00:20] S: third\n"
+        proc = self._preview("\ufeff" + cues, cues)
+        self.assertEqual(
+            3, proc.returncode,
+            f"the two sources are identical, so the preview must report there is "
+            f"no choice to make (exit 3). A BOM ate the polish file's first cue "
+            f"and the comparison then paired polished #2 with verbatim #1: "
+            f"rc={proc.returncode} out={proc.stdout!r}")
+
+    def test_a_genuine_difference_is_still_reported(self):
+        """The guard must not turn every comparison into 'no choice'."""
+        proc = self._preview("[00:00] S: thinned\n", "[00:00] S: um, thinned\n")
+        self.assertEqual(
+            0, proc.returncode,
+            f"a real difference between the two sources stopped being reported: "
+            f"rc={proc.returncode} out={proc.stdout!r}")
 
 
 class TestTheCueCountCarriesItsOwnCaveat(unittest.TestCase):
@@ -510,7 +735,7 @@ class TestTheCueCountCarriesItsOwnCaveat(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             cache = pathlib.Path(d)
             (cache / "abc123.md").write_text(
-                "Subject: t\n\n---\n\n"
+                "---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00] S: parses\n"
                 "[99999:00] S: dropped\n",
                 encoding="utf-8")
@@ -554,7 +779,7 @@ class TestPartialDropIsLoud(unittest.TestCase):
         # annotations, not lost cues, and counting them was the false positive
         # that made this warning fire on any transcript containing `[laughter]`
         # (verify round 2).
-        body = ("Subject: t\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00 - 00:12] Speaker 1: parses\n"
                 "[99999:00] Speaker 1: five-digit minutes, out of contract\n"
                 "[00:99] Speaker 1: ninety-nine seconds, out of contract\n")
@@ -562,21 +787,22 @@ class TestPartialDropIsLoud(unittest.TestCase):
         # NOT `assertIn("2", err)` — the fixture filename `abc123.md` is printed in
         # the warning and contains a "2", so that assertion passed on the filename
         # and never tested the count at all (verify round 1).
-        self.assertRegex(err, r"\b2 of 3 timestamped lines\b",
+        self.assertRegex(err, r"\b2 of 3 content lines\b",
                          f"the warning does not state how many of how many were "
                          f"dropped: {err!r}")
-        # Named by SHAPE, not quoted. Round 1 asked for the offending line to be
-        # named so a false positive would be diagnosable; round 2 found the
-        # naming was done by printing ninety raw characters of somebody's
-        # speech. Both are satisfiable at once — the shape is what you need to
-        # find the line and fix the producer, and it is not what was said.
-        self.assertRegex(err, r"opens with '\[9",
+        # Named by SHAPE, and the shape carries no digit VALUES either (round 3).
+        # Round 1 asked that the line be named so a false positive stays
+        # diagnosable; round 2 named it by printing ninety raw characters of
+        # speech; round 3 found the replacement still echoed unbounded digit
+        # runs, which is where account and ID numbers live. `d{5}` identifies
+        # the form and reveals no value.
+        self.assertRegex(err, r"opens with '\[d\{5\}",
                          f"the warning does not identify the first offending line's "
                          f"shape, so a false positive would be undiagnosable: {err!r}")
 
     def test_a_fully_parsed_file_stays_quiet(self) -> None:
         """The header and blank lines must not trip it — that silence is deliberate."""
-        body = ("Subject: t\nDuration: 00:01\n\n---\n\n"
+        body = ("---\nid: abc123\ncomplete: true\n---\n\n"
                 "[00:00 - 00:12] Speaker 1: parses\n"
                 "\n"
                 "[00:13 - 00:20] Speaker 1: also parses\n")

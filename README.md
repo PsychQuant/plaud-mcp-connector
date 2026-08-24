@@ -255,19 +255,21 @@ nothing else makes it visible.
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
 - **A transcript line the parser does not recognise is dropped, but no longer
-  quietly.** Any line carrying a timestamp that fails to parse is counted, and
-  its shape — not its words — is named on stderr; the count also rides along
-  with the cue count on stdout, so a caller reading only the success line still
-  sees it. "Carrying a timestamp" is deliberately looser than what the parser
-  accepts: it ignores indentation, a byte-order mark, and whether the bracket is
-  `[` or `(`, and it puts no upper bound on the numbers. A counter that shares
-  any of the parser's assumptions goes blind exactly where the parser does,
-  which happened twice while fixing #50. This exists because two defences that
-  were each individually reasonable left a gap between them: dropping
-  unrecognised lines is deliberate (cache files carry a header and blank lines),
-  and the guard against a broken file fires only when *nothing* parsed. Neither
-  covered *partly* — one fifth parsed is not zero, so #50 lost most of a
-  transcript in silence. Treat the warning as a
+  quietly.** Every non-blank line after the frontmatter that does not become a
+  cue is counted; its shape — not its words, and not its digits — is named on
+  stderr, and the count rides along with the cue count on stdout so a caller
+  reading only the success line still sees it. The counter asks whether the line
+  *became a cue*, never whether it *looks like* one: three attempts at the
+  looks-like question each left a shape out (an indented line, a `(` bracket, a
+  markdown bullet), because that question has to enumerate and producer drift
+  does not. The cost of the inversion is the mirror image — prose written into
+  the body counts as a drop — and that is the right way round, because prose in
+  the body is itself a contract violation worth naming. This exists because two
+  defences that were each individually reasonable left a gap between them:
+  dropping unrecognised lines is deliberate (blank lines, frontmatter), and the
+  guard against a broken file fires only when *nothing* parsed. Neither covered
+  *partly* — one fifth parsed is not zero, so #50 lost most of a transcript in
+  silence. Treat the warning as a
   contract gap rather than a bad file: the shape probably needs adding to
   `scripts/cache.py`.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —

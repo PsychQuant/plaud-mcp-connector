@@ -126,6 +126,67 @@ OUT_OF_CONTRACT = [
 ]
 
 
+# Where `to_srt` is MORE LENIENT than the grammar in scripts/cache.py, and the
+# one place it is stricter. The grammar states what a producer must write; the
+# parser is deliberately forgiving in specific ways, because being strict would
+# cost somebody's words over a punctuation detail.
+#
+# Enumerated here rather than in the contract prose because a written list
+# drifts from the parser exactly the way the contract itself drifted in #50 —
+# and drifts silently, which is the part that matters. If a tolerance is
+# removed, this table goes red and somebody decides whether that was intended.
+TOLERATED = [
+    ("dash needs no spaces",    "[00:10-00:20] S: x",          10.0, 20.0),
+    ("spaces inside brackets",  "[ 00:10 ] S: x",              10.0, None),
+    ("malformed end kept",      "[00:10 - banana] S: x",       10.0, None),
+    ("range may mix forms",     "[00:10:00 - 446:12] S: x",   600.0, 26772.0),
+]
+
+# Read as: the speaker label with no text after it becomes the TEXT, and the
+# speaker comes back empty. Surprising, worth pinning, not obviously wrong.
+TOLERATED_ODDITY = ("[00:10] Speaker 1:", "", "Speaker 1:")
+
+NOT_TOLERATED = [
+    ("text must be non-empty", "[00:10]"),
+    ("text must be non-blank", "[00:10]    "),
+]
+
+
+class TestTheParserIsLenientExactlyHere(unittest.TestCase):
+    """The grammar is what to WRITE; this is what the parser also accepts."""
+
+    def test_each_tolerance_still_holds(self):
+        for label, line, start, end in TOLERATED:
+            with self.subTest(tolerance=label):
+                segs = to_srt.parse_segments(line + "\n")
+                self.assertEqual(1, len(segs), f"{label}: stopped parsing")
+                self.assertEqual(start, segs[0]["start"])
+                self.assertEqual(end, segs[0]["end"])
+
+    def test_the_speaker_with_no_text_oddity(self):
+        line, want_speaker, want_text = TOLERATED_ODDITY
+        segs = to_srt.parse_segments(line + "\n")
+        self.assertEqual(1, len(segs))
+        self.assertEqual(want_speaker, segs[0]["speaker"])
+        self.assertEqual(want_text, segs[0]["text"])
+
+    def test_the_one_place_the_parser_is_stricter(self):
+        for label, line in NOT_TOLERATED:
+            with self.subTest(case=label):
+                self.assertEqual([], to_srt.parse_segments(line + "\n"),
+                                 f"{label}: the grammar does not say text is "
+                                 f"required, and the parser requires it")
+
+    def test_the_contract_points_at_this_table(self):
+        """So the pointer cannot rot into naming a table that moved."""
+        head = (pathlib.Path(__file__).resolve().parent.parent
+                / "scripts" / "cache.py").read_text(encoding="utf-8")[:6000]
+        self.assertIn("TOLERATED", head,
+                      "cache.py's contract no longer points at this table, so a "
+                      "reader diffing the grammar against the parser has nothing "
+                      "telling them the difference is deliberate")
+
+
 class TestTheTwoAcceptedForms(unittest.TestCase):
     def test_the_measured_table_holds_both_forms_of_both_shapes(self):
         """A count, so a row cannot quietly vanish from the table.
@@ -196,6 +257,12 @@ class TestTheContractIsWrittenDownWhereProducersLook(unittest.TestCase):
         """
         doc = (REPO / "scripts" / "cache.py").read_text(encoding="utf-8")
         head = doc.split('"""')[1] if '"""' in doc else ""
+        # Whitespace-collapsed before matching. These assertions pin PHRASES,
+        # and a phrase that wraps across a line break is the same phrase — an
+        # earlier version matched raw text, so reflowing a paragraph turned the
+        # suite red without any statement having changed. A test that fires on
+        # formatting teaches people to edit the test.
+        head = " ".join(head.split())
         for needed in ("line format", "transcript", "polish"):
             with self.subTest(mentions=needed):
                 self.assertIn(needed, head.lower(),
