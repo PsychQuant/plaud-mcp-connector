@@ -272,6 +272,28 @@ nothing else makes it visible.
   silence. Treat the warning as a
   contract gap rather than a bad file: the shape probably needs adding to
   `scripts/cache.py`.
+
+  Where the count reports depends on how you invoke it. With `-o` it rides on
+  the success line (`wrote N cues (K content line(s) dropped — see stderr)`);
+  without `-o` stdout *is* the subtitle file, so the same sentence goes to
+  stderr instead. Exit stays 0 either way — the file was written and is usable —
+  so a caller checking only the exit status has to read the cue line.
+
+- **Which lines count as the file's header is decided by the file's kind, not by
+  what the lines look like.** `cache.py` writes a `---` block only for
+  `--kind transcript`; polish, summary and outline are bare bodies. So in a
+  polish file a first line of `---` is *content* and is counted, while in a
+  transcript the block runs delimiter to delimiter whatever it contains and is
+  never parsed for cues. Five earlier attempts asked instead what the lines
+  *looked* like, and each one either ate content or turned metadata into
+  subtitles (#50).
+
+  **`--file` is the exception, and it can still lose lines quietly.** Given an
+  arbitrary path there is no kind to consult, so a leading `---` block is taken
+  as a header. Point `--file` at a *polish* file that happens to start with
+  `---` and those lines are consumed without being counted. Use the recording id
+  rather than `--file` when the file came from the cache; `--file` is for
+  transcripts from elsewhere.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —
   three in the MCP, one in the CLI — so a second login while one is open loses.
   `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and
