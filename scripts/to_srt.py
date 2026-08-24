@@ -513,60 +513,73 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
 
 
 def differing_sample(rec_id: str) -> dict | None:
-    """The same line both ways, or None when there is nothing to choose between.
+    """The same line both ways, or None with a REASON on stderr.
 
     This exists to make the question answerable. "Polished or verbatim?" asked
     in the abstract cannot be answered by someone who has not seen either; asked
     beside one real line of their own recording rendered both ways, it answers
-    itself. The failure was never that users could not decide — it was that the
-    question had no content in it.
+    itself.
 
-    Returns None in three cases, all of which mean *do not ask*:
-      - no polish for this recording — there is no choice
-      - polish is empty — same
-      - the two versions are identical — a recording with no fillers to thin.
-        Asking anyway would present two identical lines and demand a preference
-        between them.
+    Every refusal states its cause. The operator's checklist used to enumerate
+    them — three, when there were six, and three of those returned None in
+    silence, so the operator picked one of the listed causes and told the user
+    something untrue. A closed list that has to be kept in step with the code
+    drifts, and it drifted again in the same commit that grew it. So the list is
+    gone: read stderr, it always says why.
 
-    Pairs by position: Plaud returns both blocks with the same segment count and
-    the same timings (94 against 94, measured in #22), so index alignment holds.
+    Two of the silent causes were defects rather than omissions. A dict keyed on
+    `start` collapsed duplicate timestamps and paired two DIFFERENT segments —
+    round 5's fabricated comparison through a new mechanism. And two clean files
+    whose timelines merely differ shared no key at all, so nothing was found and
+    None came back, which the table read as "the two versions are identical".
 
-    A fourth None case, and the reason it is here: **either side dropped a
-    line**. `zip` stopping at the shorter list does NOT rescue an index shift —
-    lose line 1 of one side and every remaining pair is two different moments
-    shown as one sentence written two ways. The earlier docstring claimed the
-    zip handled it; it handles a length difference, not a displacement. Since
-    the operator quotes this pair to the user and stores the answer as a
-    preference, a fabricated comparison would become persisted configuration,
-    so refusing is the only honest option.
+    Pairing walks both sequences and requires the starts to agree at each step.
+    Position alone mis-pairs after a drop; a start lookup collapses duplicates;
+    both together do neither.
     """
+    def _refuse(why: str) -> None:
+        print(f"⚠ no source comparison to show: {why}", file=sys.stderr)
+        return None
+
     polished, polish_drops = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
     verbatim, verbatim_drops = _cue_lines(CACHE_DIR / f"{rec_id}.md")
-    if not polished or not verbatim:
-        return None
+
+    if not (CACHE_DIR / "polish" / f"{rec_id}.md").is_file():
+        return _refuse("this recording has no polished version, so there is "
+                       "nothing to choose between.")
+    if not polished:
+        return _refuse("the polished file is empty or produced no cues, so there "
+                       "is nothing to compare. Run to_srt on it to see why.")
+    if not verbatim:
+        return _refuse("the transcript produced no cues, so there is nothing to "
+                       "compare. Run to_srt on it to see why.")
     if polish_drops or verbatim_drops:
         which = "polished" if polish_drops else "verbatim"
         n = polish_drops or verbatim_drops
-        print(f"⚠ refusing to compare: the {which} transcript dropped {n} line(s), "
-              f"so the two sides no longer line up and any pair shown would be two "
-              f"different moments. Fix the shape first — run to_srt on the file to "
-              f"see which lines, or see the contract in scripts/cache.py (#50).",
-              file=sys.stderr)
-        return None
-    # Aligned by START TIME, not by index. Plaud returns both blocks with the
-    # same segments and timings (94 against 94, measured in #22), so normally
-    # every start matches — but "normally" is what four rounds of this issue
-    # were about. Round 5 paired by position and checked only for parser drops,
-    # which cannot see two clean files whose moments differ: it offered 00:20
-    # against 00:10 as one sentence written two ways, and the operator stores
-    # that answer as a preference. Comparing at equal starts makes a
-    # misalignment unable to produce a pair at all.
-    by_start = {start: text for start, text in verbatim}
-    for start, tidy in polished:
-        raw = by_start.get(start)
-        if raw is not None and tidy != raw:
+        return _refuse(f"the {which} transcript dropped {n} line(s), so the two "
+                       f"sides no longer line up and any pair shown would be two "
+                       f"different moments. Fix the shape first — see the "
+                       f"contract in scripts/cache.py (#50).")
+
+    # Walk BOTH sequences in step and require the starts to agree. Position
+    # alone mis-pairs after a drop (round 5); a `{start: text}` lookup collapses
+    # duplicate timestamps and pairs different segments (round 6). Together they
+    # do neither, and a timeline that has genuinely diverged is refused by name
+    # instead of returning None in silence.
+    if len(polished) != len(verbatim):
+        return _refuse(f"the two versions have different cue counts "
+                       f"({len(polished)} polished, {len(verbatim)} verbatim), so "
+                       f"they cannot be lined up sentence by sentence.")
+    for (p_start, tidy), (v_start, raw) in zip(polished, verbatim):
+        if p_start != v_start:
+            return _refuse(f"the two versions diverge at "
+                           f"{format_timestamp(min(p_start, v_start))} — one has a "
+                           f"segment the other does not, so no pair after that "
+                           f"point is the same moment.")
+        if tidy != raw:
             return {"polished": tidy, "verbatim": raw}
-    return None
+    return _refuse("the two versions are identical — there is no choice to "
+                   "offer, and asking would present the same line twice.")
 
 
 def main() -> None:
@@ -650,6 +663,33 @@ def main() -> None:
     # parser, and the shared step was the blind spot. See `parse_transcript`.
     segments, dropped, front = parse_transcript(raw, expect_frontmatter=expect_front)
     unparsed = len(dropped)
+
+    # ACCOUNTING. Every line lands in exactly one of three buckets — header,
+    # cue, dropped — and every bucket has to be reportable. Six rounds removed
+    # something from the input before or beside the count and reported the
+    # removal to nobody: look-like tests were one way to remove it, a position
+    # rule was another, and the silence was identical. `front` was returned and
+    # unpacked and never read.
+    #
+    # What is reported is a FACT about what was removed — how many consumed
+    # lines the parser would have taken as cues — not a judgement about whether
+    # the region looked like a header. Judging the region by shape is the test
+    # that failed in rounds 1, 2, 3 and 5; this asks nothing about shape, it
+    # counts what was lost.
+    #
+    # Silent when there is nothing to say: real frontmatter is `key: value`
+    # lines, none of which the parser would accept, so an ordinary file stays
+    # quiet. A header that swallowed cues is exactly the case worth a sentence.
+    header_cues = [line for line in front if SEGMENT.match(line)]
+    if header_cues:
+        print(f"⚠ {len(header_cues)} of {len(front)} lines taken as a header in "
+              f"{path.name!r} would have parsed as cues — they are NOT in the "
+              f"subtitles and are not counted among the dropped lines below.\n"
+              f"  first one: {shape_of(header_cues[0])}\n"
+              f"  The header is the block from the first '---' to the next one. "
+              f"If this file has no header, its first line should not be '---'; "
+              f"if it does, the block ended later than intended.",
+              file=sys.stderr)
 
     if not segments:
         stamped = [l for l in dropped if CUE_SHAPED.match(l)]

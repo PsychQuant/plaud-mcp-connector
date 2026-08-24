@@ -288,12 +288,17 @@ nothing else makes it visible.
   *looked* like, and each one either ate content or turned metadata into
   subtitles (#50).
 
-  **`--file` is the exception, and it can still lose lines quietly.** Given an
-  arbitrary path there is no kind to consult, so a leading `---` block is taken
-  as a header. Point `--file` at a *polish* file that happens to start with
-  `---` and those lines are consumed without being counted. Use the recording id
-  rather than `--file` when the file came from the cache; `--file` is for
-  transcripts from elsewhere.
+  **A header that swallows speech says so.** Whatever the region turns out to
+  be, any line inside it that the parser would have accepted as a cue is named
+  on stderr — those lines are in neither the subtitles nor the dropped count,
+  and that gap is where six rounds of silence lived. It stays quiet for ordinary
+  frontmatter, whose `key: value` lines are not cues.
+
+  This matters most for `--file`, where an arbitrary path gives nothing to
+  consult and a leading `---` block is taken as a header regardless. Point
+  `--file` at a *polish* file that starts with `---` and the block is still
+  consumed — but now you are told what went into it. Prefer the recording id
+  when the file came from the cache; `--file` is for transcripts from elsewhere.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —
   three in the MCP, one in the CLI — so a second login while one is open loses.
   `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and

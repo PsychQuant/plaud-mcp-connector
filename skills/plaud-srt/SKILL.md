@@ -73,7 +73,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> --preview-sources
 |---|---|
 | `get` exits 3 **and** `--preview-sources` exits 0 | **Ask**, quoting the two lines it printed. Then `config.py set subtitle_source <answer>` |
 | `get` exits 0 | A choice is on record — use it, say nothing |
-| `--preview-sources` exits 3 | **Do not ask** — but read stderr first. Three causes: there is no polish; the two versions are identical; or the comparison was **refused** because one side dropped a line, in which case stderr says so and the shape needs fixing before the question can be asked at all |
+| `--preview-sources` exits 3 | **Do not ask, and read stderr — it always says why.** The reason is never inferred from the exit code: every refusal prints `⚠ no source comparison to show: <cause>`. Relay that sentence if it points at something the user should fix (a dropped line, a diverging timeline); stay quiet if it does not (no polish, identical versions). This row used to enumerate the causes and was wrong every time the code grew one |
 | Nobody is there to answer | Use the default and **say which version you used** in the report |
 
 Asking "polished or verbatim?" with nothing attached is unanswerable — the user
@@ -110,8 +110,12 @@ long transcript into the conversation** — write the file and report the path.
 
 ### 4. Report honestly
 
-Say where the file went and how many cues it has. Three things to surface if
-they happen, because none is visible in the resulting `.srt`:
+Say where the file went and how many cues it has.
+
+**Surface every `⚠` line the tool puts on stderr.** Not a list to check against —
+relay what is there. None of these is visible in the resulting `.srt`, and this
+section has twice been a closed count that went stale the moment the code grew
+another one. What each means:
 
 - **`⚠ N of M content lines … did not parse` on stderr** — the file was
   converted, but part of the transcript is missing from it. **This is the one
@@ -127,13 +131,18 @@ they happen, because none is visible in the resulting `.srt`:
 - **`⚠ marked incomplete` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
+- **`⚠ N of M lines taken as a header … would have parsed as cues`** — the block
+  from the first `---` to the next one was treated as the file's header, and
+  some of what it swallowed looks like speech. Those lines are in neither the
+  subtitles nor the dropped count. Usually it means a file with no header whose
+  first line happens to be `---`, or a header whose closing delimiter is later
+  than intended.
 - **`no timestamped segments`** — the cached transcript has no timestamps, so
   subtitles are impossible from it. This exits non-zero rather than writing an
   empty `.srt`, which would look like success and produce a silent video.
-
-A `⚠ … trimmed` line may also appear: a declared end ran past the next cue's
-start and was pulled back. That is a correction, not a loss — mention it only
-if the user is checking timing closely.
+- **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
+  start, or a cue would have had no length. Corrections, not losses — mention
+  them only if the user is checking timing closely.
 
 ## How the timing works, and where it is a guess
 

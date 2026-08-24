@@ -1779,3 +1779,162 @@ class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
                          "a pattern for what frontmatter LOOKS LIKE is back. That "
                          "is the construct that failed in rounds 1, 2, 3 and 5; "
                          "the region is decided by kind and position now")
+
+
+class TestEveryLineEndsInExactlyOneReportableBucket(unittest.TestCase):
+    """Round 7: the count was never the problem. The silence around it was.
+
+    Six rounds removed something from the input before or beside the count, and
+    every time the removed thing was reported to nobody. Look-like tests were
+    one way to remove it; a position rule was another. Round 6's rule is right —
+    the region is delimiter to delimiter, whatever it contains — and it still
+    consumed lines that nothing ever mentioned, on the cache path as well as
+    `--file`, which is #50's signature for the sixth time.
+
+    So the missing sentence is an accounting one: every line of the input lands
+    in exactly one of three buckets — header, cue, dropped — and every bucket is
+    reportable. `front` was already returned and already unpacked; nothing read
+    it.
+
+    Note what this is NOT: checking whether the consumed lines *look* like
+    frontmatter would be the look-like test again. Saying how many lines were
+    consumed, and how many of them the parser would have accepted as cues, is a
+    statement of fact about what was removed — not a rule for deciding what to
+    remove.
+    """
+
+    def _run(self, body: str, *args: str, name: str = "abc123") -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / f"{name}.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), name, "-o", str(cache / "o.srt"), *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_cue_lines_inside_the_header_region_are_reported(self):
+        """Round 6's blind spot, on the NORMAL cache path."""
+        proc = self._run("---\n"
+                         "id: abc123\n"
+                         "complete: true\n"
+                         "[00:00] S: eaten one\n"
+                         "[00:10] S: eaten two\n"
+                         "---\n"
+                         "[00:20] S: kept\n")
+        self.assertIn("header", (proc.stdout + proc.stderr).lower(),
+                      f"two cue-shaped lines were consumed as a header and "
+                      f"nothing said so: out={proc.stdout!r} err={proc.stderr!r}")
+        self.assertIn("2", proc.stderr,
+                      f"the count of consumed cue-shaped lines is not stated: "
+                      f"{proc.stderr!r}")
+
+    def test_an_ordinary_header_is_not_worth_a_word(self):
+        """The accounting must not turn every clean run into a warning."""
+        proc = self._run("---\nid: abc123\nname: \"x\"\ncomplete: true\n---\n\n"
+                         "[00:00] S: a\n[00:10] S: b\n")
+        self.assertEqual("", proc.stderr.strip(),
+                         f"a normal file with normal frontmatter warned: {proc.stderr!r}")
+
+    def test_the_buckets_add_up(self):
+        """header + cues + dropped == every non-blank line. No fourth outcome."""
+        for body in ("---\nid: a\n---\n\n[00:00] S: x\nprose\n",
+                     "[00:00] S: x\n---\n[00:10] S: y\n",
+                     "---\nid: a\n[00:00] S: in header\n---\n[00:10] S: out\n",
+                     "no header at all\n[00:00] S: x\n"):
+            for expect in (True, False):
+                with self.subTest(body=body[:20], expect_frontmatter=expect):
+                    cues, dropped, front = to_srt.parse_transcript(
+                        body, expect_frontmatter=expect)
+                    non_blank = [l for l in body.splitlines() if l.strip()]
+                    accounted = len(cues) + len(dropped) + len(
+                        [l for l in front if l.strip()])
+                    self.assertEqual(
+                        len(non_blank), accounted,
+                        f"{len(non_blank) - accounted} line(s) fell outside every "
+                        f"bucket — that gap is where six rounds of silence lived")
+
+
+class TestEveryPreviewRefusalNamesItsCause(unittest.TestCase):
+    """Round 7: retire the enumeration instead of growing it.
+
+    SKILL.md's table said exit 3 had three causes. `differing_sample` had at
+    least six, three of them returning `None` in total silence — so the operator
+    applied the table, picked one of the two silent listed causes, and told the
+    user something that was not true. Growing a closed list is what round 6 did
+    and it drifted again in the same commit.
+
+    A list that must be kept in step with the code is the wrong shape. Every
+    refusal states its own cause on stderr, and the table then needs no list at
+    all: read stderr, it always says why. Same move as the negative denominator.
+
+    Two of those silent causes were real defects, not just undocumented:
+
+      - a dict keyed on `start` collapsed duplicate timestamps, so two DIFFERENT
+        segments were offered as one line written two ways — round 5's
+        fabricated comparison, through a new mechanism;
+      - two clean files whose timelines simply differ shared no key at all, so
+        the loop found nothing and returned `None`, which the table reads as
+        "the two versions are identical".
+    """
+
+    def _preview(self, polish: str, verbatim: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_duplicate_start_times_do_not_fabricate_a_pair(self):
+        proc = self._preview(
+            "[00:00] S: polished FIRST\n[00:00] S: polished SECOND\n",
+            "[00:00] S: verbatim FIRST\n[00:00] S: verbatim SECOND\n")
+        self.assertNotIn("verbatim SECOND", proc.stdout,
+                         f"a dict keyed on start collapsed the duplicates and "
+                         f"paired two different segments: {proc.stdout!r}")
+
+    def test_differing_timelines_say_so_rather_than_going_quiet(self):
+        proc = self._preview("[00:01] S: polished A\n[00:11] S: polished B\n",
+                             "[00:00] S: verbatim A\n[00:10] S: verbatim B\n")
+        self.assertEqual(3, proc.returncode)
+        self.assertTrue(proc.stderr.strip(),
+                        "the two sources have different timelines and the tool "
+                        "exited 3 in silence, which the operator's table reads "
+                        "as 'the two versions are identical'")
+
+    def test_every_exit_three_states_a_reason(self):
+        """The property that replaces the list."""
+        cases = {
+            "no polish": (None, "[00:00] S: a\n"),
+            "polish empty": ("", "[00:00] S: a\n"),
+            "identical": ("[00:00] S: a\n", "[00:00] S: a\n"),
+            "polish parses to nothing": ("not a cue at all\n", "[00:00] S: a\n"),
+            "timelines differ": ("[00:01] S: a\n", "[00:00] S: b\n"),
+            "one side dropped": ("[99999:00] S: a\n[00:00] S: b\n", "[00:00] S: b\n"),
+        }
+        for label, (polish, verbatim) in cases.items():
+            with self.subTest(cause=label):
+                with tempfile.TemporaryDirectory() as d:
+                    cache = pathlib.Path(d)
+                    (cache / "polish").mkdir()
+                    (cache / "abc123.md").write_text(
+                        "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim,
+                        encoding="utf-8")
+                    if polish is not None:
+                        (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+                    proc = subprocess.run(
+                        [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                        capture_output=True, text=True, env=cli_env(cache))
+                if proc.returncode != 3:
+                    continue          # this case produced a pair; not a refusal
+                self.assertTrue(
+                    proc.stderr.strip(),
+                    f"exit 3 for {label!r} with nothing on stderr. The operator "
+                    f"cannot tell it apart from any other cause and will state "
+                    f"one of them to the user")
+
+    def test_a_real_difference_is_still_offered(self):
+        proc = self._preview("[00:00] S: thinned\n", "[00:00] S: um, thinned\n")
+        self.assertEqual(0, proc.returncode, f"{proc.stdout!r} {proc.stderr!r}")

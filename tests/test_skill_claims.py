@@ -756,19 +756,56 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
                          "SKILL.md still quotes the pre-inversion wording, so the "
                          "operator relays a prose line as 'timestamped'")
 
-    def test_the_exit_three_causes_are_all_listed(self):
-        """A third cause was added and the closed table was not grown."""
-        text = self._skill_text()
-        self.assertIn("refused", text.lower(),
-                      "`--preview-sources` can now exit 3 because the comparison "
-                      "was REFUSED after a drop, and the decision table still "
-                      "says exit 3 means 'no polish, or identical' — so the "
-                      "operator is told not to ask and never surfaces it")
+    def test_the_exit_three_row_enumerates_nothing(self):
+        """Round 7: the list is gone, because a list drifts.
 
-    def test_the_enumeration_count_matches_the_list(self):
-        """'Two things' outlived the second thing once already."""
+        The row named three causes when the code had six, and three of those
+        exited 3 in silence — so the operator applied the table and told the
+        user one of the listed causes, which was not what happened. Growing the
+        list is what round 6 did, and it was wrong again in the same commit.
+
+        The tool now prints a reason on every refusal, so the row points at
+        stderr instead of enumerating. This test fails if an enumeration comes
+        back: a row that counts its causes has to be kept in step with the code,
+        and nothing keeps it.
+        """
+        row = next(l for l in self._skill_text().splitlines()
+                   if "`--preview-sources` exits 3" in l)
+        for counting in ("two causes", "three causes", "four causes",
+                         "Two causes", "Three causes", "Four causes"):
+            self.assertNotIn(counting, row,
+                             f"the exit-3 row enumerates again ({counting!r}). "
+                             f"Every count it has ever stated went stale within "
+                             f"one commit")
+        self.assertIn("no source comparison to show", row,
+                      "the row does not quote the sentence the tool actually "
+                      "prints, so the operator has nothing to relay")
+
+    def test_the_refusal_sentence_is_what_the_tool_prints(self):
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "scripts" / "to_srt.py").read_text(encoding="utf-8")
+        self.assertIn("no source comparison to show", src,
+                      "this test's reference is stale — the tool no longer "
+                      "prints the sentence SKILL.md quotes")
+
+    def test_step_four_counts_nothing(self):
+        """Round 7: stop counting. Every count has gone stale within one commit.
+
+        "Two things to surface" outlived the second thing. "Three things" was
+        wrong before the commit that wrote it had finished — the same commit
+        added a fourth warning. A section that states how many signals exist has
+        to be kept in step with the code, and nothing keeps it, so it is now an
+        instruction to relay whatever is there plus a glossary of meanings.
+        Adding a warning does not invalidate a glossary.
+        """
         text = self._skill_text()
-        self.assertNotIn(
-            "Two things to surface", text,
-            "the list says 'Two things' — it has three members. A stale count is "
-            "how the third one got left out in the first place")
+        for counting in ("Two things to surface", "Three things to surface",
+                         "Four things to surface", "Five things to surface"):
+            self.assertNotIn(counting, text,
+                             f"step 4 enumerates again ({counting!r}). Every count "
+                             f"this section has ever stated was wrong within a "
+                             f"commit or two of being written")
+        self.assertIn("Surface every", text,
+                      "step 4 no longer tells the operator to relay everything on "
+                      "stderr, so a warning the glossary does not mention reaches "
+                      "nobody")
