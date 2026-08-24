@@ -248,7 +248,7 @@ def strip_frontmatter(text: str) -> str:
 
 
 def parse_transcript(text: str, *, expect_frontmatter: bool = False
-                     ) -> tuple[list[dict], list[str], list[str]]:
+                     ) -> tuple[list[dict], list[str], list[str], list[str]]:
     """One pass over the body. Returns (cues, lines that produced no cue).
 
     Both halves come from the SAME traversal, and that is the whole point.
@@ -277,6 +277,7 @@ def parse_transcript(text: str, *, expect_frontmatter: bool = False
 
     cues: list[dict] = []
     skipped: list[str] = []
+    lost_ends: list[str] = []
     for line in body_lines:
         m = SEGMENT.match(line)
         if m:
@@ -296,6 +297,12 @@ def parse_transcript(text: str, *, expect_frontmatter: bool = False
                     end = parse_timestamp(raw_end)
                 except ValueError:
                     end = None
+                    # A discarded end is a loss too — smaller than a lost line,
+                    # and until round 8 it landed in no bucket at all: the cue
+                    # counted as a cue, the line was not dropped, and a time the
+                    # producer wrote was thrown away in silence while
+                    # `build_cues` invented a replacement from the next start.
+                    lost_ends.append(line)
             cues.append({
                 "start": start,
                 "end": end,
@@ -304,7 +311,7 @@ def parse_transcript(text: str, *, expect_frontmatter: bool = False
             })
         elif line.strip():
             skipped.append(line)
-    return cues, skipped, front
+    return cues, skipped, front, lost_ends
 
 
 def parse_segments(body: str) -> list[dict]:
@@ -316,7 +323,7 @@ def parse_segments(body: str) -> list[dict]:
     that needs to know what was dropped must call `parse_transcript` — the count
     and the cues have to come from the same traversal or neither can be trusted.
     """
-    cues, _, _ = parse_transcript(body)
+    cues, _, _, _ = parse_transcript(body)
     return cues
 
 
@@ -489,7 +496,13 @@ def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
 
 
 def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
-    """A file's cues as (start, text), and how many lines produced none.
+    """A file's cues as (start, text), and how many lines it lost.
+
+    "Lost" counts a line the parser refused AND a cue-shaped line the header
+    swallowed. Both remove content from one side of a comparison that pairs the
+    two sides positionally, so both make a pair a statement about two different
+    moments — which the operator then quotes to the user and stores as a
+    preference.
 
     The drop count is returned, not discarded, because the caller pairs two of
     these BY INDEX and a drop on either side shifts every later pair. Round 3
@@ -501,15 +514,22 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
         return [], 0
     # Same "the caller knows" rule as `main`: only the top-level transcript
     # carries frontmatter, so only it may have a block consumed.
-    cues, dropped, _ = parse_transcript(
+    cues, dropped, front, _ = parse_transcript(
         path.read_text(encoding="utf-8-sig"),
         expect_frontmatter=path.parent == CACHE_DIR)
+    # `front` was discarded here through round 7, so a header that had eaten a
+    # legitimate cue was invisible to the comparison even after `main` learned to
+    # report it. One root cause, two exits: fixing the first and not the second
+    # is the shape of half this issue's history.
+    header_ate = [l for l in front if SEGMENT.match(l)]
     # The START comes back with the text. Round 5 returned text alone, so the
     # caller pairing two of these had nothing to check alignment WITH — and a
     # guard that only knew about parser drops could not see two clean files
     # whose moments simply differ. The timestamps were always available; not
     # returning them was the whole gap.
-    return [(c["start"], t) for c, t in zip(cues, [x["text"] for x in build_cues(cues)])], len(dropped)
+    return ([(c["start"], t)
+             for c, t in zip(cues, [x["text"] for x in build_cues(cues)])],
+            len(dropped) + len(header_ate))
 
 
 def differing_sample(rec_id: str) -> dict | None:
@@ -661,35 +681,54 @@ def main() -> None:
     # go blind where the first does. Four rounds of #50 were spent making a
     # separate count agree with this one; each version shared a step with the
     # parser, and the shared step was the blind spot. See `parse_transcript`.
-    segments, dropped, front = parse_transcript(raw, expect_frontmatter=expect_front)
+    segments, dropped, front, lost_ends = parse_transcript(
+        raw, expect_frontmatter=expect_front)
     unparsed = len(dropped)
+    header = [line for line in front if line.strip()]
 
-    # ACCOUNTING. Every line lands in exactly one of three buckets — header,
-    # cue, dropped — and every bucket has to be reportable. Six rounds removed
-    # something from the input before or beside the count and reported the
-    # removal to nobody: look-like tests were one way to remove it, a position
-    # rule was another, and the silence was identical. `front` was returned and
-    # unpacked and never read.
+    # ACCOUNTING, and it is NEGATIVE now.
     #
-    # What is reported is a FACT about what was removed — how many consumed
-    # lines the parser would have taken as cues — not a judgement about whether
-    # the region looked like a header. Judging the region by shape is the test
-    # that failed in rounds 1, 2, 3 and 5; this asks nothing about shape, it
-    # counts what was lost.
+    # Round 7 made the header bucket reportable and then gated the report on
+    # `SEGMENT.match` — so the header reported only the subset the parser
+    # already accepts, and every shape the parser cannot read stayed invisible
+    # to the very thing written to report the parser's blindness. That is the
+    # construct rounds 1, 2 and 3 failed on, reintroduced inside its own fix,
+    # and it swallowed the five prefixes named in `CUE_SHAPED`'s comment above.
     #
-    # Silent when there is nothing to say: real frontmatter is `key: value`
-    # lines, none of which the parser would accept, so an ordinary file stays
-    # quiet. A header that swallowed cues is exactly the case worth a sentence.
-    header_cues = [line for line in front if SEGMENT.match(line)]
-    if header_cues:
-        print(f"⚠ {len(header_cues)} of {len(front)} lines taken as a header in "
-              f"{path.name!r} would have parsed as cues — they are NOT in the "
-              f"subtitles and are not counted among the dropped lines below.\n"
-              f"  first one: {shape_of(header_cues[0])}\n"
-              f"  The header is the block from the first '---' to the next one. "
-              f"If this file has no header, its first line should not be '---'; "
-              f"if it does, the block ended later than intended.",
-              file=sys.stderr)
+    # A COUNT needs no shape test. Cues, dropped and header are all stated, so
+    # the three close the ledger against every non-blank line and a reader needs
+    # to trust no judgement about what the consumed lines looked like.
+    #
+    # The sharper sentence survives on top of the number, because "some of what
+    # the header ate was speech" is worth more than a bare count — but it is no
+    # longer the only signal, so being wrong about it now costs precision rather
+    # than silence.
+    #
+    # Quiet on the ordinary case: a cache transcript whose header `cache.py`
+    # wrote itself, with nothing else wrong. Silence is allowed only where the
+    # kind AND the writer are both known.
+    if header:
+        ate = [line for line in header if SEGMENT.match(line)]
+        if ate or args.file:
+            detail = (f" — {len(ate)} of them would have parsed as cues, so that "
+                      f"much speech is in neither the subtitles nor the dropped "
+                      f"count (first: {shape_of(ate[0])})"
+                      if ate else
+                      " — none of them look like cues, which is what a header "
+                      "normally holds")
+            print(f"⚠ {len(header)} line(s) in {path.name!r} were taken as the "
+                  f"file's header and not read{detail}.\n"
+                  f"  The header is the block from the first '---' to the next "
+                  f"one. If this file has no header, its first line should not "
+                  f"be '---'.", file=sys.stderr)
+
+    # A discarded end is a loss with no line attached to it, so it needs its own
+    # sentence: the cue counts as a cue, the line is not dropped, and until now
+    # a time the producer wrote was thrown away while `build_cues` invented a
+    # replacement from the next start.
+    for line in lost_ends:
+        print(f"⚠ a declared end time was discarded and replaced with a guess: "
+              f"{shape_of(line)}", file=sys.stderr)
 
     if not segments:
         stamped = [l for l in dropped if CUE_SHAPED.match(l)]
@@ -787,7 +826,17 @@ def main() -> None:
     # did not become cues, and after the inversion most of them carry no
     # timestamp at all — round 4 shipped stdout calling them timestamped while
     # stderr, in the same run, said they carried none.
-    note = f" ({unparsed} content line(s) dropped — see stderr)" if unparsed > 0 else ""
+    # The ledger, on the line a caller actually reads. Every non-blank input line
+    # is a cue, a dropped line, or a header line, and all three are stated here
+    # so the three add up without anyone having to trust a judgement about what
+    # the header contained. Round 7 put the header behind a `SEGMENT.match` gate
+    # and the shapes the parser cannot read went unmentioned again.
+    parts = []
+    if header:
+        parts.append(f"{len(header)} header")
+    if unparsed > 0:
+        parts.append(f"{unparsed} content line(s) dropped — see stderr")
+    note = f" ({', '.join(parts)})" if parts else ""
     if args.output:
         pathlib.Path(args.output).write_text(srt)
         # The drop count rides along with the cue count, on the same stream, in

@@ -124,19 +124,24 @@ another one. What each means:
   and it is also short. Report both, and lead with the loss — a 7.4-hour
   recording once produced 57 perfectly-formed cues out of 281 segments and was
   reported as a success (#50). When this fires, stdout says
-  `wrote N cues (K content line(s) dropped — see stderr)`; pass that whole
-  sentence on rather than just the number. Without `-o` there is no success
+  `wrote N cues (H header, K content line(s) dropped — see stderr)`; pass that
+  whole sentence on rather than just the number. The three numbers are a ledger:
+  cues plus dropped plus header accounts for every non-blank line in the file,
+  so a header far larger than a handful of `key: value` lines is worth a second
+  look even when nothing else is reported. Without `-o` there is no success
   line — stdout is the subtitle file itself — so the same sentence arrives on
   stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
 - **`⚠ marked incomplete` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
-- **`⚠ N of M lines taken as a header … would have parsed as cues`** — the block
-  from the first `---` to the next one was treated as the file's header, and
-  some of what it swallowed looks like speech. Those lines are in neither the
-  subtitles nor the dropped count. Usually it means a file with no header whose
-  first line happens to be `---`, or a header whose closing delimiter is later
-  than intended.
+- **`⚠ N line(s) … were taken as the file's header and not read`** — the block
+  from the first `---` to the next one was treated as the header. It says how
+  many of those lines would have parsed as cues, when any would. Usually this
+  means a file with no header whose first line happens to be `---`, or a header
+  whose closing delimiter is later than intended.
+- **`⚠ a declared end time was discarded`** — the producer wrote an end for that
+  cue and it could not be read, so the cue's duration is inferred instead. The
+  words are all there; one timing is a guess that looks like a measurement.
 - **`no timestamped segments`** — the cached transcript has no timestamps, so
   subtitles are impossible from it. This exits non-zero rather than writing an
   empty `.srt`, which would look like success and produce a silent video.

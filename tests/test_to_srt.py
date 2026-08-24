@@ -535,7 +535,7 @@ class TestTheCountComesFromOnePass(unittest.TestCase):
         This fixture is a POLISH body — no frontmatter, because `cache.py`
         writes none for that kind — so nothing here may be consumed as one.
         """
-        cues, skipped, front = to_srt.parse_transcript(
+        cues, skipped, front, _ = to_srt.parse_transcript(
             "---\n[00:00] S: one\n[00:10] S: two\n---\n[00:20] S: three\n",
             expect_frontmatter=False)
         self.assertEqual([], front)
@@ -551,7 +551,7 @@ class TestTheCountComesFromOnePass(unittest.TestCase):
 
     def test_the_skipped_lines_come_from_the_same_pass_as_the_cues(self):
         """The property itself: one traversal, both halves."""
-        cues, skipped, _ = to_srt.parse_transcript(
+        cues, skipped, _, _ = to_srt.parse_transcript(
             "[00:00] S: kept\n"
             "- [00:10] S: bullet\n"
             "not a cue at all\n"
@@ -1720,7 +1720,7 @@ class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
 
     def test_a_bare_body_keeps_lines_that_look_like_frontmatter(self):
         """Polish files have no frontmatter, so nothing may be consumed as it."""
-        cues, skipped, front = to_srt.parse_transcript(
+        cues, skipped, front, _ = to_srt.parse_transcript(
             "---\nAlice: [00:00] opening statement\n---\n[00:20] S: real\n",
             expect_frontmatter=False)
         self.assertEqual([], front, "a bare body had lines eaten as frontmatter")
@@ -1731,7 +1731,7 @@ class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
 
     def test_a_transcript_block_is_taken_whole_whatever_it_contains(self):
         """By position. `Alice:` and `[00:01]` alike — the region is the region."""
-        cues, skipped, front = to_srt.parse_transcript(
+        cues, skipped, front, _ = to_srt.parse_transcript(
             "---\nAlice: [00:00] opening\n[00:01] metadata\n---\n[00:20] S: real\n",
             expect_frontmatter=True)
         self.assertEqual(4, len(front),
@@ -1742,12 +1742,12 @@ class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
 
     def test_the_frontmatter_count_is_never_invisible(self):
         """Whatever the region turns out to be, the caller is told its size."""
-        _, _, front = to_srt.parse_transcript(self.FRONT + "[00:00] S: a\n",
+        _, _, front, _ = to_srt.parse_transcript(self.FRONT + "[00:00] S: a\n",
                                               expect_frontmatter=True)
         self.assertEqual(5, len(front), f"{front!r}")
 
     def test_an_unterminated_delimiter_is_content_not_frontmatter(self):
-        cues, skipped, front = to_srt.parse_transcript(
+        cues, skipped, front, _ = to_srt.parse_transcript(
             "---\nid: abc\n[00:00] S: a\n", expect_frontmatter=True)
         self.assertEqual([], front, "a block with no closing delimiter was consumed")
         self.assertEqual(1, len(cues))
@@ -1842,7 +1842,7 @@ class TestEveryLineEndsInExactlyOneReportableBucket(unittest.TestCase):
                      "no header at all\n[00:00] S: x\n"):
             for expect in (True, False):
                 with self.subTest(body=body[:20], expect_frontmatter=expect):
-                    cues, dropped, front = to_srt.parse_transcript(
+                    cues, dropped, front, _ = to_srt.parse_transcript(
                         body, expect_frontmatter=expect)
                     non_blank = [l for l in body.splitlines() if l.strip()]
                     accounted = len(cues) + len(dropped) + len(
@@ -1935,6 +1935,132 @@ class TestEveryPreviewRefusalNamesItsCause(unittest.TestCase):
                     f"cannot tell it apart from any other cause and will state "
                     f"one of them to the user")
 
+    def test_a_cue_eaten_by_a_header_refuses_too(self):
+        """`_cue_lines` threw `front` away, so the preview could not see this.
+
+        One root cause, two exits: round 7 taught `main` to read the header and
+        left the second call site unchanged. A transcript whose header swallowed
+        a real cue has one fewer moment than the polish beside it, which is the
+        same asymmetry a parser drop creates and the same fabricated pair at the
+        end of it — quoted to the user, then stored as a preference.
+
+        Caught by mutation, not by reading: setting `header_ate = []` left the
+        whole suite green.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n"
+                "[00:00] S: swallowed by the header\n"
+                "---\n[00:10] S: um so the budget\n", encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(
+                "[00:10] S: so the budget\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertEqual(3, proc.returncode,
+                         f"a header ate a cue on one side and the comparison went "
+                         f"ahead anyway: {proc.stdout!r}")
+        self.assertTrue(proc.stderr.strip(), "refused without saying why")
+
     def test_a_real_difference_is_still_offered(self):
         proc = self._preview("[00:00] S: thinned\n", "[00:00] S: um, thinned\n")
         self.assertEqual(0, proc.returncode, f"{proc.stdout!r} {proc.stderr!r}")
+
+
+class TestTheHeaderBucketIsReportedNegatively(unittest.TestCase):
+    """Round 8: the reporter was a positive test, one region over.
+
+    Round 7 made the header bucket reportable — but gated the report on
+    `SEGMENT.match`, so the header reported only the subset the parser already
+    accepts. Every shape the parser cannot read was invisible to the thing
+    written to report the parser's blindness. That is the round-1/2/3 construct,
+    reintroduced inside its own fix, and it swallowed the five prefixes this
+    branch itself names.
+
+    The size of the header needs no shape test. It is a number, it is always
+    true, and stating it makes the ledger close: cues + dropped + header ==
+    every non-blank line, with all three visible.
+    """
+
+    def _run(self, body: str, *args: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt"), *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_the_five_prefixes_inside_a_header_are_accounted_for(self):
+        """Round 7's CRITICAL, on the cache path."""
+        proc = self._run("---\n"
+                         "id: abc123\n"
+                         "complete: true\n"
+                         "- [00:00] S: eaten one\n"
+                         "> [00:10] S: eaten two\n"
+                         "1. [00:20] S: eaten three\n"
+                         "---\n"
+                         "[00:30] S: kept\n")
+        combined = proc.stdout + proc.stderr
+        self.assertIn("7 header", combined,
+                      f"seven lines were consumed as a header, three of them "
+                      f"speech, and neither stream states the region's size: "
+                      f"out={proc.stdout!r} err={proc.stderr!r}")
+        # The LEDGER is the guarantee: 1 cue + 0 dropped + 7 header accounts for
+        # every line, so a reader can see that seven lines went somewhere and ask
+        # why. The sharper "three of those were speech" does NOT fire here, and
+        # cannot: `- [00:00] …` is not a shape any parser in this file accepts,
+        # so calling it speech is a judgement, not a fact. Round 7 made that
+        # judgement the ONLY signal and the whole loss went silent. It is a bonus
+        # on top of the count now, and the count is what closes.
+        self.assertIn("wrote 1 cues", proc.stdout)
+
+    def test_a_line_the_parser_cannot_read_is_still_counted(self):
+        """The gate was `SEGMENT.match`; this line fails it and is still content."""
+        proc = self._run("---\nid: abc123\nAlice: [00:00] opening statement\n---\n"
+                         "[00:20] S: kept\n")
+        self.assertIn("header", (proc.stdout + proc.stderr).lower(),
+                      f"round 5's exact fixture, consumed by a header, silent again: "
+                      f"out={proc.stdout!r} err={proc.stderr!r}")
+
+    def test_the_ledger_closes(self):
+        """cues + dropped + header == every non-blank line, and all three shown."""
+        proc = self._run("---\nid: abc123\nAlice: [00:00] eaten\n---\n"
+                         "[00:20] S: kept\nprose line\n")
+        combined = proc.stdout + proc.stderr
+        for n, what in (("3", "header lines"), ("1", "dropped"), ("1", "cue")):
+            self.assertIn(n, combined, f"{what} missing from {combined!r}")
+
+    def test_a_clean_run_still_reads_cleanly(self):
+        """Accounting must not turn every success into a wall of numbers."""
+        proc = self._run("---\nid: abc123\nname: \"x\"\ncomplete: true\n---\n\n"
+                         "[00:00] S: a\n[00:10] S: b\n")
+        self.assertEqual("", proc.stderr.strip(),
+                         f"a normal file warned: {proc.stderr!r}")
+        self.assertIn("wrote 2 cues", proc.stdout)
+
+
+class TestADiscardedEndIsNotSilent(unittest.TestCase):
+    """A range whose end will not parse loses a declared time and says nothing.
+
+    The line survives — that trade is deliberate and right, words over timing.
+    But the discarded end lands in no bucket: the cue is counted as a cue, the
+    line is not dropped, and nothing mentions that a time the producer wrote was
+    thrown away. `build_cues` then invents a replacement from the next cue's
+    start, so the output carries a fabricated duration with no marker.
+    """
+
+    def test_a_malformed_end_is_reported(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n"
+                "[00:00 - banana] S: the declared end is gone\n"
+                "[00:10] S: fine\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertIn("end", proc.stderr.lower(),
+                      f"a declared end was discarded and replaced with a guess, "
+                      f"silently: {proc.stderr!r}")
