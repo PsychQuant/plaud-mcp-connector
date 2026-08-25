@@ -721,40 +721,66 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
             "that does not reach the user (#50)")
 
     def test_every_quoted_string_is_one_the_tool_actually_prints(self):
-        """Read the format strings OUT of to_srt.py rather than hardcoding them.
+        """Walk what SKILL.md QUOTES. The earlier version walked the reverse.
 
-        The previous version asserted `"dropped — see stderr"`, a substring that
-        survived the code changing "timestamped line(s)" to "content line(s)" —
-        so the suite stayed green while the only document that reads this tool
-        told the operator to relay a sentence the tool never prints, using the
-        very word the same commit had removed. An assertion that cannot fail
-        when the thing it guards changes is not guarding it.
+        Its name promised that every string SKILL.md quotes is one the tool
+        prints. Its body iterated a hardcoded three-element tuple and asserted
+        each appeared in both files — so SKILL.md could quote a string that does
+        not exist, and did: `no timestamped segments` was retired in #40
+        precisely because that phrasing sent people to debug the wrong thing,
+        and it sat in the glossary for two rounds with the suite green.
+
+        A hand-maintained list standing in for a property is the construct the
+        two sibling tests here exist to forbid. It was removed from the prose in
+        the same commit and reintroduced inside the guard written to protect the
+        prose.
+
+        Placeholders are the reason this needs care rather than a plain
+        substring check: the glossary writes `N`, `M`, `K`, `H` where the tool
+        writes numbers, so the comparison is on the FIXED fragments between them.
         """
-        import re as _re
-        src = (pathlib.Path(__file__).resolve().parent.parent
+        raw = (pathlib.Path(__file__).resolve().parent.parent
                / "scripts" / "to_srt.py").read_text(encoding="utf-8")
+        # Rejoin adjacent f-string fragments. The tool's messages are written as
+        # `f"...the " f"file's header..."` across lines, so a literal that IS
+        # printed contiguously does not appear contiguously in the source. An
+        # earlier draft of this test searched the raw source and would have
+        # reported drift for wording that was perfectly correct — a guard that
+        # cries wolf gets deleted, which is how the last one ended up checking
+        # the reverse direction instead.
+        src = re.sub(r'"\s*\n\s*f?"', "", raw)
+        src = re.sub(r"\s+", " ", src)
         text = self._skill_text()
-        # Every literal the CLI can put on a stream, reduced to its fixed part.
-        # Phrases SKILL.md quotes VERBATIM. The long stderr warning is elided
-        # with `…` there, which is fine for a checklist and would make an
-        # exact-match assertion a formatting test — so only the fragments the
-        # operator is told to relay word for word are pinned.
-        for fixed in ("content line(s) dropped — see stderr",
-                      "content lines",
-                      "did not parse"):
-            with self.subTest(phrase=fixed):
-                self.assertIn(fixed, src,
-                              f"{fixed!r} is no longer what the tool prints — this "
-                              f"test's own reference is stale")
-                self.assertIn(fixed, text,
-                              f"SKILL.md does not quote {fixed!r}, which the tool "
-                              f"prints. The operator is a model following that "
-                              f"checklist; a sentence absent from it does not reach "
-                              f"the user, and a sentence that DIFFERS from it gets "
-                              f"relayed wrong")
-        self.assertNotIn("timestamped line", text,
-                         "SKILL.md still quotes the pre-inversion wording, so the "
-                         "operator relays a prose line as 'timestamped'")
+        step4 = text[text.index("### 4. Report honestly"):
+                     text.index("## How the timing works")]
+
+        for quoted in re.findall(r"`([^`\n]+)`", step4):
+            # Only strings that are meant to be tool OUTPUT — a warning, or the
+            # success line. Prose backticks (`key: value`, `plaud-index`) are
+            # not claims about what is printed.
+            if not (quoted.startswith("⚠") or quoted.startswith("wrote ")):
+                continue
+            # Split on placeholders and elisions; each remaining run of >= 12
+            # characters is a fixed fragment the tool must contain verbatim.
+            for fragment in re.split(r"[…]|\b[NMKH]\b", quoted):
+                # Template punctuation belongs to the glossary, not the tool.
+                fragment = " ".join(fragment.strip(" ⚠()").split())
+                if len(fragment) < 12:
+                    continue
+                with self.subTest(fragment=fragment[:40]):
+                    self.assertIn(
+                        fragment, src,
+                        f"SKILL.md quotes {fragment!r} and scripts/to_srt.py "
+                        f"never prints it. The operator is a model told to relay "
+                        f"these strings; one that does not exist is one it will "
+                        f"never match, and one that has DRIFTED gets relayed "
+                        f"wrong")
+
+    def test_the_glossary_does_not_quote_the_retired_wording(self):
+        """#40 retired it for sending people to debug the wrong thing."""
+        self.assertNotIn("no timestamped segments", self._skill_text(),
+                         "SKILL.md still quotes the phrasing #40 removed from "
+                         "the tool; nothing on stderr will ever match it")
 
     def test_the_exit_three_row_enumerates_nothing(self):
         """Round 7: the list is gone, because a list drifts.

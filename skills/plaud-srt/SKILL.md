@@ -142,9 +142,13 @@ another one. What each means:
 - **`⚠ a declared end time was discarded`** — the producer wrote an end for that
   cue and it could not be read, so the cue's duration is inferred instead. The
   words are all there; one timing is a guess that looks like a measurement.
-- **`no timestamped segments`** — the cached transcript has no timestamps, so
-  subtitles are impossible from it. This exits non-zero rather than writing an
-  empty `.srt`, which would look like success and produce a silent video.
+- **`error: no lines in … looked like segments`** — nothing in the file became a
+  cue, so subtitles are impossible from it. This exits non-zero rather than
+  writing an empty `.srt`, which would look like success and produce a silent
+  video. The message states how many content lines and how many header lines
+  were present, and only guesses "most likely a recording without timestamps"
+  when there is no header that could be to blame — read those numbers before
+  repeating the guess.
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.

@@ -10,6 +10,7 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -2064,3 +2065,264 @@ class TestADiscardedEndIsNotSilent(unittest.TestCase):
         self.assertIn("end", proc.stderr.lower(),
                       f"a declared end was discarded and replaced with a guess, "
                       f"silently: {proc.stderr!r}")
+
+
+class TestTheLedgerNumbersAreTheOnesMeasured(unittest.TestCase):
+    """Round 10: the guarantee's own arithmetic was unverified.
+
+    Round 8 called the stdout line a ledger and said it was the guarantee. Three
+    of its four numbers could be corrupted by +40 with the whole suite green, and
+    the fourth — the one test that did assert a header count — asserted it as a
+    SUBSTRING: `"47 header"` contains `"7 header"`, so it passed under corruption
+    too.
+
+    A substring assertion on a number is very nearly no assertion. Most of the
+    numeric checks this branch accumulated over nine rounds have that shape: they
+    assert a word appears, not that a value is right. Nothing was checking the
+    checkers.
+
+    These parse the ledger and compare exact integers, on every shape that prints
+    one.
+    """
+
+    # Greedy to the LAST `)`. The first version stopped at the first one, which
+    # is inside `content line(s)`, so the dropped count was silently cut off —
+    # a parser that stops where it should not, verifying a parser that stopped
+    # where it should not. Substring assertions never hit this class of bug
+    # because they check almost nothing.
+    LEDGER = re.compile(r"wrote (?P<cues>\d+) cues(?: to stdout)?"
+                        r"(?: \((?P<parts>.*)\))?")
+
+    def _ledger(self, out: str) -> dict:
+        m = self.LEDGER.search(out)
+        self.assertIsNotNone(m, f"no ledger line in {out!r}")
+        got = {"cues": int(m.group("cues")), "header": 0, "dropped": 0}
+        for part in (m.group("parts") or "").split(","):
+            n = re.search(r"(\d+)", part)
+            if not n:
+                continue
+            if "header" in part:
+                got["header"] = int(n.group(1))
+            elif "dropped" in part:
+                got["dropped"] = int(n.group(1))
+        return got
+
+    def _run(self, body: str, *args: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    CASES = [
+        # body, cues, header, dropped
+        # header counts NON-BLANK lines in the region, so the blank line after
+        # the closing `---` belongs to nobody — which is right, and is why the
+        # sum below is against non-blank lines too.
+        ("---\nid: abc123\ncomplete: true\n---\n\n[00:00] S: a\n[00:10] S: b\n",
+         2, 4, 0),
+        ("---\nid: abc123\ncomplete: true\n---\n\n[00:00] S: a\nprose\n",
+         1, 4, 1),
+        ("---\nid: abc123\n- [00:00] S: eaten\n---\n[00:20] S: kept\n",
+         1, 4, 0),
+        ("[00:00] S: a\n[00:10] S: b\nprose\n",
+         2, 0, 1),
+    ]
+
+    def test_the_numbers_are_exact_with_an_output_file(self):
+        for body, cues, header, dropped in self.CASES:
+            with self.subTest(body=body[:26]):
+                with tempfile.TemporaryDirectory() as d:
+                    cache = pathlib.Path(d)
+                    (cache / "abc123.md").write_text(body, encoding="utf-8")
+                    proc = subprocess.run(
+                        [sys.executable, str(SCRIPT), "abc123",
+                         "-o", str(cache / "o.srt")],
+                        capture_output=True, text=True, env=cli_env(cache))
+                self.assertEqual({"cues": cues, "header": header, "dropped": dropped},
+                                 self._ledger(proc.stdout),
+                                 f"ledger wrong: {proc.stdout!r}")
+
+    def test_the_numbers_are_exact_when_streaming(self):
+        """Streaming puts the ledger on stderr; it was pinned by nothing."""
+        for body, cues, header, dropped in self.CASES:
+            if not header and not dropped:
+                continue          # nothing to print, and that is correct
+            with self.subTest(body=body[:26]):
+                proc = self._run(body)
+                self.assertEqual({"cues": cues, "header": header, "dropped": dropped},
+                                 self._ledger(proc.stderr),
+                                 f"streaming ledger wrong: {proc.stderr!r}")
+
+    def test_the_ledger_sums_to_every_non_blank_line(self):
+        """The identity the ledger exists to make checkable, checked."""
+        for body, *_ in self.CASES:
+            with self.subTest(body=body[:26]):
+                with tempfile.TemporaryDirectory() as d:
+                    cache = pathlib.Path(d)
+                    (cache / "abc123.md").write_text(body, encoding="utf-8")
+                    proc = subprocess.run(
+                        [sys.executable, str(SCRIPT), "abc123",
+                         "-o", str(cache / "o.srt")],
+                        capture_output=True, text=True, env=cli_env(cache))
+                got = self._ledger(proc.stdout)
+                self.assertEqual(
+                    len([l for l in body.splitlines() if l.strip()]),
+                    got["cues"] + got["header"] + got["dropped"],
+                    f"the three numbers do not account for every line: {got} "
+                    f"from {proc.stdout!r}")
+
+
+class TestNoDiagnosticAssertsMoreThanItMeasured(unittest.TestCase):
+    """Round 10: two messages said things that were false.
+
+    Round 8 replaced silence with misinformation, twice, and both times through
+    the same inference: `ate` being empty means THE PARSER DID NOT RECOGNISE
+    THEM, and it was read as THEY WERE NOT CONTENT.
+
+      - the zero-cue exit announced "0 content line(s) were present" for a file
+        whose header had swallowed five, then named the wrong hypothesis;
+      - the header sentence said "none of them look like cues, which is what a
+        header normally holds" about lines that were speech.
+
+    A wrong reassurance is worse than the silence it replaced: silence leaves
+    the question open, "this is normal" stops the reader looking.
+    """
+
+    def _run(self, body: str, *args: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt"),
+                 *args], capture_output=True, text=True, env=cli_env(cache))
+
+    ALL_SWALLOWED = ("---\nid: abc123\n"
+                     "- [101:05] S: swallowed one\n"
+                     "- [101:35] S: swallowed two\n"
+                     "- [102:05] S: swallowed three\n"
+                     "---\n")
+
+    def test_the_zero_cue_exit_counts_the_header(self):
+        proc = self._run(self.ALL_SWALLOWED)
+        self.assertNotIn("0 content line(s) and 0 header", proc.stderr)
+        self.assertIn("6 header line(s)", proc.stderr,
+                      f"six lines were consumed as a header and the diagnostic "
+                      f"does not mention the region: {proc.stderr!r}")
+
+    def test_the_zero_cue_exit_does_not_guess_when_a_header_could_be_to_blame(self):
+        proc = self._run(self.ALL_SWALLOWED)
+        self.assertNotIn("most likely a recording without them", proc.stderr,
+                         f"the diagnostic named the wrong hypothesis for a file "
+                         f"whose problem is a region one: {proc.stderr!r}")
+
+    def test_the_hypothesis_survives_where_it_is_true(self):
+        """It is the right guess for a file that genuinely has no timestamps."""
+        proc = self._run("just some prose\nand more prose\n")
+        self.assertIn("most likely a recording without them", proc.stderr,
+                      f"the useful hypothesis was lost: {proc.stderr!r}")
+
+    def test_the_header_sentence_claims_nothing_about_speech(self):
+        """`--file` is the shape where this sentence prints at all."""
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "drift.md"
+            f.write_text("---\n- [00:00] S: bullet speech\n---\n[00:20] S: kept\n",
+                         encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(f),
+                 "-o", str(pathlib.Path(d) / "o.srt")],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        self.assertNotIn("which is what a header normally holds", proc.stderr,
+                         f"the sentence reassured about lines that are speech: "
+                         f"{proc.stderr!r}")
+        self.assertIn("says nothing about whether they were speech", proc.stderr,
+                      f"the sentence draws a conclusion its test cannot support: "
+                      f"{proc.stderr!r}")
+
+
+class TestNoPathReachesAStreamUnescaped(unittest.TestCase):
+    """Round 10: the channel was named in a comment and fixed at one outlet.
+
+    The drop warning's comment says the filename is attacker-controlled through
+    `--file` and that `\x1b[1A\x1b[2K` in it erases the line reporting the
+    problem. Three other outlets kept interpolating the path raw, including the
+    stdout ledger — the line round 8 designated as the guarantee. One root
+    cause, four exits, and only the one being written at the time was closed.
+    """
+
+    EVIL = "a\x1b[2K\x1b[1Ab\u202ec"
+
+    def test_the_not_found_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            missing = pathlib.Path(d) / f"{self.EVIL}.md"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(missing)],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        self.assertNotIn("\x1b", proc.stderr, f"raw escape: {proc.stderr!r}")
+
+    def test_the_zero_segment_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / f"{self.EVIL}.md"
+            f.write_text("no timestamps here\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(f)],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        self.assertNotIn("\x1b", proc.stderr, f"raw escape: {proc.stderr!r}")
+
+    def test_the_stdout_ledger(self):
+        """The line the ledger design calls the guarantee."""
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "ok.md"
+            f.write_text("[00:00] S: x\n", encoding="utf-8")
+            out = pathlib.Path(d) / f"{self.EVIL}.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(f), "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        self.assertNotIn("\x1b", proc.stdout, f"raw escape: {proc.stdout!r}")
+
+
+class TestDuplicateStartsRefuseRatherThanGuess(unittest.TestCase):
+    """Equal starts say nothing about WHICH segment inside a duplicate run.
+
+    Round 7 paired by walking both sequences and requiring equal starts. That
+    fixes a displacement between groups and does nothing within one: two cues at
+    `00:00` on each side pair positionally, so a displacement inside the group
+    still offers two different segments as one line written two ways. The test
+    written for this used sides in the same order and could not fail on it.
+    """
+
+    def _preview(self, polish: str, verbatim: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_a_displacement_inside_a_duplicate_group_refuses(self):
+        proc = self._preview(
+            "[00:00] S: polished FIRST\n[00:00] S: polished SECOND\n",
+            "[00:00] S: verbatim SECOND\n[00:00] S: verbatim THIRD\n")
+        self.assertEqual(3, proc.returncode,
+                         f"two different segments were offered as one line "
+                         f"written two ways: {proc.stdout!r}")
+        self.assertIn("same timestamp", proc.stderr,
+                      f"refused without naming the reason: {proc.stderr!r}")
+
+    def test_duplicates_in_the_same_order_also_refuse(self):
+        """The earlier fixture. It happened to pair correctly; that was luck."""
+        proc = self._preview(
+            "[00:00] S: polished FIRST\n[00:00] S: polished SECOND\n",
+            "[00:00] S: verbatim FIRST\n[00:00] S: verbatim SECOND\n")
+        self.assertEqual(3, proc.returncode,
+                         "duplicate starts cannot be matched by time at all, so "
+                         "pairing them correctly is not something the code knows")
+
+    def test_distinct_starts_still_compare(self):
+        proc = self._preview("[00:00] S: thinned\n[00:10] S: b\n",
+                             "[00:00] S: um, thinned\n[00:10] S: b\n")
+        self.assertEqual(0, proc.returncode, f"{proc.stdout!r} {proc.stderr!r}")

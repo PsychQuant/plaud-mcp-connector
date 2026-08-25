@@ -288,9 +288,12 @@ nothing else makes it visible.
   *looked* like, and each one either ate content or turned metadata into
   subtitles (#50).
 
-  **The three numbers are a ledger.** `wrote N cues (H header, K dropped)`
-  accounts for every non-blank line in the file, so nothing the tool removed
-  goes unmentioned. When some of what the header swallowed would have parsed as
+  **The three numbers are a ledger, and the tests check the numbers.** `wrote N
+  cues (H header, K dropped)` accounts for every non-blank line in the file, so
+  nothing the tool removed goes unmentioned. Three of those four counts could
+  once be corrupted with the suite still green — the assertions checked that a
+  word appeared, not that a value was right — so they are compared as integers
+  now. When some of what the header swallowed would have parsed as
   a cue, stderr says how many — but the count does not depend on that judgement,
   which is the point: an earlier version reported the header *only* when its
   contents were cue-shaped, so every shape the parser could not read stayed

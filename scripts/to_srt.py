@@ -586,6 +586,19 @@ def differing_sample(rec_id: str) -> dict | None:
     # duplicate timestamps and pairs different segments (round 6). Together they
     # do neither, and a timeline that has genuinely diverged is refused by name
     # instead of returning None in silence.
+    # Equal starts prove the Nth cues share a timestamp. Inside a run of
+    # duplicates that proves nothing about WHICH segment, so a displacement
+    # within the group still pairs two different ones — round 6's fabricated
+    # comparison surviving the round-7 repair. The test written for this used a
+    # fixture whose sides were in the same order, so it could not fail on the
+    # defect it named.
+    for side, name in ((polished, "polished"), (verbatim, "verbatim")):
+        starts = [start for start, _ in side]
+        if len(set(starts)) != len(starts):
+            return _refuse(f"the {name} transcript has more than one cue at the "
+                           f"same timestamp, so matching by time cannot say which "
+                           f"segment is which and any pair shown might be two "
+                           f"different moments.")
     if len(polished) != len(verbatim):
         return _refuse(f"the two versions have different cue counts "
                        f"({len(polished)} polished, {len(verbatim)} verbatim), so "
@@ -668,7 +681,12 @@ def main() -> None:
         expect_front = path.parent == CACHE_DIR
 
     if not path.is_file():
-        sys.exit(f"error: {path} not found — run the plaud-index skill first")
+        # `!r`, like the other outlets. `--file` makes this path
+        # attacker-controlled and a control character in it erases or forges the
+        # line reporting it. The comment beside the drop warning named this
+        # channel and only the one sentence being written at the time was fixed
+        # — one root cause, three exits, two of them left open for two rounds.
+        sys.exit(f"error: {str(path)!r} not found — run the plaud-index skill first")
 
     # `utf-8-sig`, so a byte-order mark is consumed rather than left on line 1
     # where it defeats `SEGMENT`'s `^\[`. This matters most for polish files:
@@ -710,12 +728,20 @@ def main() -> None:
     if header:
         ate = [line for line in header if SEGMENT.match(line)]
         if ate or args.file:
-            detail = (f" — {len(ate)} of them would have parsed as cues, so that "
-                      f"much speech is in neither the subtitles nor the dropped "
-                      f"count (first: {shape_of(ate[0])})"
+            # No conclusion in either branch. `ate` being empty means THE PARSER
+            # DID NOT RECOGNISE THEM — it does not mean they were not content,
+            # and the earlier wording said "which is what a header normally
+            # holds" about lines that were speech. A wrong reassurance is worse
+            # than silence: silence leaves the question open, "this is normal"
+            # stops the reader looking. This branch has made that trade twice
+            # (round 5 turned silent deletion into silent fabrication), and both
+            # times by reading "not recognised" as "not content".
+            detail = (f" — {len(ate)} of them would have parsed as cues "
+                      f"(first: {shape_of(ate[0])})"
                       if ate else
-                      " — none of them look like cues, which is what a header "
-                      "normally holds")
+                      f" — none of them are shapes this parser accepts, which "
+                      f"says nothing about whether they were speech (first: "
+                      f"{shape_of(header[0])})")
             print(f"⚠ {len(header)} line(s) in {path.name!r} were taken as the "
                   f"file's header and not read{detail}.\n"
                   f"  The header is the block from the first '---' to the next "
@@ -731,15 +757,28 @@ def main() -> None:
               f"{shape_of(line)}", file=sys.stderr)
 
     if not segments:
+        # The ledger, on the exit that never printed one. This branch used to
+        # read `dropped` alone and announce "0 content line(s) were present" for
+        # a file whose header had swallowed five of them, then name the wrong
+        # hypothesis — "most likely a recording without timestamps" — for a file
+        # whose problem is exactly a region one. It counts both buckets now, and
+        # the hypothesis is conditional on there being no header to blame.
         stamped = [l for l in dropped if CUE_SHAPED.match(l)]
-        detail = (f"\n{len(stamped)} line(s) DID carry a timestamp and none of "
-                  f"them parsed; the first is {shape_of(stamped[0])}."
-                  if stamped else
-                  f"\n{len(dropped)} content line(s) were present and none "
-                  f"carried a recognisable timestamp, so this is most likely a "
-                  f"recording without them rather than a shape problem.")
+        counts = (f"\n{len(dropped)} content line(s) and {len(header)} header "
+                  f"line(s) were present.")
+        if stamped:
+            why = (f" {len(stamped)} of the content lines DID carry a timestamp "
+                   f"and none parsed; the first is {shape_of(stamped[0])}.")
+        elif header:
+            why = (f" The header is the block from the first '---' to the next "
+                   f"one; if this file has no header, its first line should not "
+                   f"be '---'. First header line: {shape_of(header[0])}.")
+        else:
+            why = (" None carried a recognisable timestamp, so this is most "
+                   "likely a recording without them rather than a shape problem.")
+        detail = counts + why
         sys.exit(
-            f"error: no lines in {path} looked like segments.\n"
+            f"error: no lines in {str(path)!r} looked like segments.\n"
             f"Expected '[00:12:03] Speaker 1: ...' or '[01:01 - 01:55] Speaker 1: ...'."
             f"{detail}\n"
             f"Either the recording genuinely has no timestamps, or it was cached in "
@@ -845,7 +884,10 @@ def main() -> None:
         # plausible and alone. A warning on stderr does not fix that for
         # anything reading only the success line — so the success line carries
         # its own caveat.
-        print(f"wrote {len(segments)} cues{note} → {args.output}")
+        # The ledger is the line round 8 designated as the guarantee, and it
+        # ended in a raw path: a control character in `-o` erases or forges the
+        # guarantee itself.
+        print(f"wrote {len(segments)} cues{note} → {str(args.output)!r}")
     else:
         # Streaming: stdout IS the subtitle file, so there is no success line to
         # attach anything to and writing one would corrupt the .srt. The count
