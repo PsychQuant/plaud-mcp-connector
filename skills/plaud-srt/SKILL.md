@@ -135,10 +135,13 @@ another one. What each means:
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
 - **`⚠ N line(s) … were taken as the file's header and not read`** — the block
-  from the first `---` to the next one was treated as the header. It says how
-  many of those lines would have parsed as cues, when any would. Usually this
-  means a file with no header whose first line happens to be `---`, or a header
-  whose closing delimiter is later than intended.
+  from the first `---` to the next one was treated as the header. **The sentence
+  continues past the count and the rest is the part that matters** — it says what
+  those lines look like, whether any of them would have parsed as cues, and
+  whether the block is the shape `cache.py` actually writes. Relay it whole; do
+  not summarise it down to N, and do not read a large N on its own as harmless.
+  Usually this means a file with no header whose first line happens to be `---`,
+  or a header whose closing delimiter is later than intended.
 - **`⚠ a declared end time was discarded`** — the producer wrote an end for that
   cue and it could not be read, so the cue's duration is inferred instead. The
   words are all there; one timing is a guess that looks like a measurement.
