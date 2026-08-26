@@ -34,6 +34,7 @@ import importlib.util
 import os
 import pathlib
 import re
+import unicodedata
 import sys
 
 # These scripts are run directly (`python3 scripts/to_srt.py`), never imported as
@@ -136,25 +137,76 @@ _STAMP_ONLY = re.compile(rf"\A(?:{_STAMP})\Z")
 # time would have failed the same way. The COUNT is negative now. This pattern
 # survives only to pick which advice the warning gives, where being wrong costs
 # a sentence rather than a silent truncation.
-CUE_SHAPED = re.compile(r"^[﻿\s]*[\[(]?\s*\d+\s*:\s*\d+")
+# The two whitespace runs used to be separated only by an OPTIONAL bracket,
+# so on a line of leading spaces with no digits after them the engine tried
+# every split point and re-scanned the tail each time: 0.86s at 16k spaces,
+# and this runs over EVERY dropped line. Putting the second run inside the
+# bracket group means it executes at most once. Verified linear to 64k and
+# identical on 3020 shapes including 3000 random ones.
+CUE_SHAPED = re.compile(r"^[﻿\s]*(?:[\[(][﻿\s]*)?\d+\s*:\s*\d+")
 
 
-# Anything that could move a cursor, clear a line, set a colour, reorder what is
-# displayed, or hide itself. Stripped rather than escaped: the point is that
-# untrusted transcript text must not be able to address the terminal at all.
+# Which characters may not reach an output stream.
 #
-# C0/C1 alone was not that. Bidi overrides reorder a whole line — `\u202e` can
-# make a filename or a quoted cue read backwards — and zero-width characters
-# hide inside words. Both survived into the two outlets this expression was
-# introduced to protect, which is the recurring shape here: the class is named
-# correctly and drawn too small.
-_CONTROL = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f-\x9f"      # C0 and C1
-    r"\u200b-\u200f"                        # zero-width, LRM/RLM
-    r"\u2028\u2029"                          # line/paragraph separators
-    r"\u202a-\u202e"                        # bidi embedding and overrides
-    r"\u2066-\u2069"                        # bidi isolates
-    r"\ufeff]")                              # BOM as a mid-text character
+# Two rounds drew this as a list of ranges and both were wrong, in opposite
+# directions AT THE SAME TIME. Round 14 widened it to `\u200b-\u200f` and took
+# ZWNJ and ZWJ with it — U+200C is the difference between two Persian spellings
+# and U+200D is what makes an emoji family one glyph — so the class deleted
+# meaning; and it still passed the Tag block (U+E0000–E007F, the standard
+# invisible-text smuggling vector), the Arabic letter mark and the word joiner,
+# which is what it was drawn to stop. A range list is a positive enumeration,
+# and a positive enumeration of a hostile input space always has a next member.
+#
+# So the RULE is negative — every character whose Unicode general category is a
+# control, format, surrogate, private-use, unassigned, or line/paragraph
+# separator — and the EXEMPTIONS are a short closed list of characters that
+# carry text meaning.
+#
+# The asymmetry is the whole design. An exemption list that goes stale fails
+# LOUD: a meaningful format character missing from it is removed AND COUNTED,
+# so the loss is reported like every other loss here. A strip list that goes
+# stale fails SILENT: the next hostile character simply passes. Being wrong in
+# the direction that reports itself is what makes it safe to be wrong.
+_STRIP_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+_STRIP_KEEP = frozenset(
+    "\t"                # a tab is layout, not addressing
+    "\u200c\u200d"      # ZWNJ / ZWJ — orthographic; also emoji sequences
+    "\u200e\u200f")     # LRM / RLM — the standard, non-overriding marks
+
+
+def sanitise(text: str) -> tuple[str, int]:
+    """Strip what may not reach a stream. Returns the text and how many went.
+
+    The count is not decoration. This issue's remedy is that content removed
+    from a transcript must be audible, and characters are content: round 14
+    added this filter as a security fix and forgot it was also a DELETION, so
+    a cue could lose a joiner between the cache and the `.srt` with no number
+    anywhere. That is the failure this branch exists to end, one unit down.
+
+    `str.isprintable()` is false for exactly the categories above (plus
+    non-space `Zs`, which is kept anyway), so the common case costs one C-level
+    scan and the per-character walk runs only on text that has something in it.
+    """
+    if text.isprintable():
+        return text, 0
+    kept = [c for c in text
+            if c in _STRIP_KEEP or unicodedata.category(c) not in _STRIP_CATEGORIES]
+    return "".join(kept), len(text) - len(kept)
+
+
+def header_oddities(lines: list[str]) -> list[str]:
+    """Header lines that are neither a delimiter, a blank, nor `key: value`.
+
+    Negative by construction, and used by both callers that need it. `main`
+    asks it whether a block is the shape `cache.py` writes; `_cue_lines` asks
+    it how much a header may have swallowed, where it replaced a
+    `SEGMENT.match` gate — a gate the parser also applies is blind exactly
+    where the parser is, which is the construct round 8 removed from `main`
+    for this reason and which survived here until round 16.
+    """
+    return [l for l in lines
+            if l.strip() and l.strip() != "---"
+            and not re.match(r"^[A-Za-z_][\w-]*\s*:", l)]
 
 
 def shape_of(line: str) -> str:
@@ -181,9 +233,32 @@ def shape_of(line: str) -> str:
     its contents was never what made it diagnosable.
     """
     head = re.match(r"^[﻿\s]*[^\w\s]*\s*[\d:.,\s-]*", line)
-    opener = _CONTROL.sub("", head.group(0)) if head else ""
-    redacted = re.sub(r"\d+", lambda m: f"d{{{len(m.group(0))}}}", opener)
-    return f"{len(line)} chars, opens with {redacted!r}"
+    opener = sanitise(head.group(0))[0] if head else ""
+    out: list[str] = []
+    i = 0
+    while i < len(opener):
+        ch = opener[i]
+        if ch.isdigit():
+            j = i
+            while j < len(opener) and opener[j].isdigit():
+                j += 1
+            out.append(f"d{{{j - i}}}")
+        elif ch.isspace():
+            j = i
+            while j < len(opener) and opener[j].isspace():
+                j += 1
+            out.append(" " if j - i == 1 else f"s{{{j - i}}}")
+        elif ch.isascii() and not ch.isalnum():
+            out.append(ch)
+            j = i + 1
+        else:
+            out.append("p")
+            j = i + 1
+        i = j
+    shape = "".join(out)
+    if len(shape) > _SHAPE_CAP:
+        shape = shape[:_SHAPE_CAP - 1] + "\u2026"
+    return f"{len(line)} chars, opens with {shape!r}"
 
 
 def parse_timestamp(raw: str) -> float:
@@ -410,16 +485,21 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
         # The `.srt` gets the same treatment: a subtitle has no legitimate use
         # for a cursor movement, and a file that carries one is a file that
         # attacks whatever displays it next.
-        text = _CONTROL.sub("", seg["text"])
+        text, gone = sanitise(seg["text"])
         if show_speaker and seg["speaker"]:
-            text = f"{_CONTROL.sub('', seg['speaker'])}: {text}"
-        cues.append({"start": seg["start"], "end": end, "text": text})
+            speaker, gone_s = sanitise(seg["speaker"])
+            text = f"{speaker}: {text}"
+            gone += gone_s
+        cues.append({"start": seg["start"], "end": end, "text": text,
+                     "stripped": gone})
     return cues
 
 
 # Readability conventions differ by script, and one number for all of them is
 # wrong twice over: 42 characters is a long-but-standard Latin line and roughly
 # double what a CJK line should carry, because each glyph is full-width.
+_SHAPE_CAP = 48
+
 LINE_LIMITS = {"latin": 42, "cjk": 20}
 
 _CJK = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
@@ -546,7 +626,7 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
     # legitimate cue was invisible to the comparison even after `main` learned to
     # report it. One root cause, two exits: fixing the first and not the second
     # is the shape of half this issue's history.
-    header_ate = [l for l in front if SEGMENT.match(l)]
+    header_ate = header_oddities(front)
     # The START comes back with the text. Round 5 returned text alone, so the
     # caller pairing two of these had nothing to check alignment WITH — and a
     # guard that only knew about parser drops could not see two clean files
@@ -599,9 +679,16 @@ def differing_sample(rec_id: str) -> dict | None:
         return _refuse("the transcript produced no cues, so there is nothing to "
                        "compare. Run to_srt on it to see why.")
     if polish_drops or verbatim_drops:
-        which = "polished" if polish_drops else "verbatim"
-        n = polish_drops or verbatim_drops
-        return _refuse(f"the {which} transcript dropped {n} line(s), so the two "
+        # Reporting one side's count when both dropped understates the loss and
+        # points the user at one of two broken files. On a branch whose subject
+        # is that a stated count which is wrong is worse than no count, a count
+        # wrong by construction in a reachable case is worth two extra lines.
+        which = ("polished and verbatim transcripts dropped "
+                 f"{polish_drops} and {verbatim_drops}") if (
+                     polish_drops and verbatim_drops) else (
+                 f"polished transcript dropped {polish_drops}"
+                 if polish_drops else f"verbatim transcript dropped {verbatim_drops}")
+        return _refuse(f"the {which} line(s), so the two "
                        f"sides no longer line up and any pair shown would be two "
                        f"different moments. Fix the shape first — see the "
                        f"contract in scripts/cache.py (#50).")
@@ -699,8 +786,8 @@ def main() -> None:
         # `.srt` (where escaping would corrupt the file): per SKILL.md the
         # operator quotes these two lines to the user and then stores the answer
         # as a preference, so forged content becomes persisted configuration.
-        print(f"polished: {_CONTROL.sub('', sample['polished'])}")
-        print(f"verbatim: {_CONTROL.sub('', sample['verbatim'])}")
+        print(f"polished: {sanitise(sample['polished'])[0]}")
+        print(f"verbatim: {sanitise(sample['verbatim'])[0]}")
         return
 
     if args.file:
@@ -779,8 +866,7 @@ def main() -> None:
         # statement about the block's SHAPE, which is safe to make here because
         # being wrong costs a sentence, while the ledger's count, which is not a
         # judgement, still closes underneath it.
-        odd = [l for l in header
-               if l.strip() != "---" and not re.match(r"^[A-Za-z_][\w-]*\s*:", l)]
+        odd = header_oddities(header)
         if ate or odd or args.file:
             # No conclusion in either branch. `ate` being empty means THE PARSER
             # DID NOT RECOGNISE THEM — it does not mean they were not content,
@@ -935,11 +1021,21 @@ def main() -> None:
     # whose subject is "partial loss must not be silent" had a second silent
     # correction in the function it feeds.
     trims: list[str] = []
-    srt = render_srt(build_cues(segments,
-                                show_speaker=not args.no_speaker,
-                                tail_seconds=args.tail_seconds,
-                                warnings=trims),
-                     limits=cfg["srt_line_limits"])
+    built = build_cues(segments,
+                       show_speaker=not args.no_speaker,
+                       tail_seconds=args.tail_seconds,
+                       warnings=trims)
+    # Characters removed from the words themselves. `build_cues` has stripped
+    # them since round 14 and reported nothing, so a cue could lose a joiner
+    # between the cache and the `.srt` with no number anywhere — a silent
+    # partial loss, in the tool written to end silent partial loss.
+    stripped_chars = sum(c["stripped"] for c in built)
+    if stripped_chars:
+        print(f"⚠ {stripped_chars} invisible character(s) were removed from the "
+              f"cue text — control, format or unassigned code points, which a "
+              f"subtitle has no use for and which can address the terminal or "
+              f"hide text. The words are otherwise unchanged.", file=sys.stderr)
+    srt = render_srt(built, limits=cfg["srt_line_limits"])
     for note in trims:
         print(f"⚠ {note}", file=sys.stderr)
 
@@ -952,11 +1048,25 @@ def main() -> None:
     # so the three add up without anyone having to trust a judgement about what
     # the header contained. Round 7 put the header behind a `SEGMENT.match` gate
     # and the shapes the parser cannot read went unmentioned again.
+    # The first three are a LINE ledger and close: cues + dropped + header is
+    # every non-blank input line. The rest are losses in other units, which is
+    # why they are named rather than folded in — a discarded end time costs no
+    # line and a stripped character costs no cue, so adding them to the same
+    # sum would break the one arithmetic a caller can check.
+    #
+    # A discarded end reached stderr and stopped there, which left the ledger
+    # clean for a file where the producer's own timings were thrown away and
+    # replaced with guesses — and a batch harness reading only stdout is the
+    # exact caller the ledger was built for (#50 opens with one).
     parts = []
     if header:
         parts.append(f"{len(header)} header")
     if unparsed > 0:
         parts.append(f"{unparsed} content line(s) dropped — see stderr")
+    if lost_ends:
+        parts.append(f"{len(lost_ends)} declared end(s) discarded — see stderr")
+    if stripped_chars:
+        parts.append(f"{stripped_chars} invisible char(s) removed — see stderr")
     note = f" ({', '.join(parts)})" if parts else ""
     if args.output:
         pathlib.Path(args.output).write_text(srt)

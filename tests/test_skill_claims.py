@@ -872,3 +872,35 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
                       "step 4 no longer tells the operator to relay everything on "
                       "stderr, so a warning the glossary does not mention reaches "
                       "nobody")
+
+
+class TestStepFourQuotesToolOutputInBackticks(unittest.TestCase):
+    """Backticks are the only quoting style the sibling guard can read.
+
+    `test_every_quoted_string_is_one_the_tool_actually_prints` scans backtick
+    fragments. A retired zero-cue message sat in step 4 inside ASCII double
+    quotes for two rounds with that guard green — it was written for exactly
+    that defect and could not see the punctuation the sentence happened to use.
+
+    Widening it to more quote characters is the wrong repair: step 4 is prose
+    and prose legitimately uses quotes, so every widening trades one blind spot
+    for a crop of false positives. Requiring one style instead makes the
+    sibling guard's coverage of this section total, which no amount of
+    widening can do.
+    """
+
+    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+
+    def test_step_four_uses_no_ascii_double_quotes(self):
+        text = self.SKILL.read_text(encoding="utf-8")
+        step4 = text[text.index("### 4. Report honestly"):
+                     text.index("## How the timing works")]
+        stray = re.findall(r'"([^"]+)"', step4, re.S)
+        self.assertEqual(
+            [], stray,
+            f"step 4 quotes {len(stray)} fragment(s) with ASCII double quotes: "
+            f"{stray}. Use backticks — anything quoted here is a claim about "
+            f"what the tool prints, and the guard that checks those claims "
+            f"reads backticks only. This is how "
+            f"'most likely a recording without timestamps' survived in this "
+            f"section after the tool stopped printing it.")

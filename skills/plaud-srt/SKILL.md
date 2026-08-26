@@ -149,9 +149,11 @@ another one. What each means:
   cue, so subtitles are impossible from it. This exits non-zero rather than
   writing an empty `.srt`, which would look like success and produce a silent
   video. The message states how many content lines and how many header lines
-  were present, and only guesses "most likely a recording without timestamps"
-  when there is no header that could be to blame — read those numbers before
-  repeating the guess.
+  were present, and its closing sentence is deliberately **two-sided** about
+  the cause: it does not know whether the recording carries no timestamps or
+  carries a shape the contract does not cover. Relay both halves and read the
+  two numbers first. A one-sided guess sends somebody off to re-record a file
+  that was fine.
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.

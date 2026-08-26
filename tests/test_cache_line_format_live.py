@@ -250,10 +250,19 @@ class TestTheOracleCannotGoBlindWhereTheParserDoes(unittest.TestCase):
 
     def test_no_shape_test_survives_in_the_oracle(self):
         src = pathlib.Path(__file__).read_text(encoding="utf-8")
-        body = src[src.index("def content_lines("):src.index("class ")]
-        for shape in ("\\d", "[0-9]", "TIMESTAMPED", ":"):
-            if shape == ":":
-                continue          # the header delimiter check is positional
+        # To the end of the ORACLE, not to the first `class` — that slice ran
+        # ~700 characters past `content_lines` and swept in the `ANSI` regex,
+        # so this guard policed code it does not describe and would have gone
+        # red for a reason its message does not give. A guard imprecise about
+        # its own subject is how the enumerations here went stale before.
+        start = src.index("def content_lines(")
+        body = src[start:src.index("\n\n\n", start)]
+        # `":"` used to be in this tuple with an unconditional `continue`
+        # underneath it — a member that could never assert anything, which
+        # reads as coverage of the header-delimiter case and is not. The
+        # positional check it stood for is `test_blank_lines_and_a_header_are
+        # _not_content` above; listing it here as well was theatre.
+        for shape in ("\\d", "[0-9]", "TIMESTAMPED"):
             self.assertNotIn(shape, body,
                              f"{shape!r} is back in the oracle. A test for what a "
                              f"cue LOOKS LIKE is the construct that failed three "

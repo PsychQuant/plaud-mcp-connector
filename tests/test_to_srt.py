@@ -10,6 +10,7 @@ import io
 import json
 import os
 import pathlib
+import ast
 import re
 import subprocess
 import sys
@@ -78,6 +79,15 @@ _NUMBER_PATTERNS = {
     "refusal_verbatim":  r"different cue counts \(\d+ polished, (\d+) verbatim",
     "refusal_ambiguous": r"uses more than once \((\d+) such\)",
     "header_odd":        r"— (\d+) of them are not `key: value` lines",
+    # Round 16. `lost_ends` and the stripped-character count reached stderr and
+    # stopped; `refusal_dropped`'s sentence was reworded to name both sides.
+    "lost_ends":         r"(\d+) declared end\(s\) discarded",
+    "stripped_ledger":   r"(\d+) invisible char\(s\) removed",
+    "stripped_warn":     r"⚠ (\d+) invisible character\(s\) were removed",
+    "refusal_drop_a":    r"transcripts? dropped (\d+)",
+    "refusal_drop_b":    r"transcripts dropped \d+ and (\d+)",
+    "shape_digits":      r"opens with '[^']*?d\{(\d+)\}",
+    "shape_spaces":      r"opens with '[^']*?s\{(\d+)\}",
 }
 
 
@@ -241,6 +251,17 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
         )
         stripped = to_srt.strip_frontmatter(body)
         bracket_lines = sum(1 for line in stripped.splitlines() if line.startswith("["))
+        # A FLOOR, so the comparison cannot pass as 0 == 0. Both sides run
+        # through `strip_frontmatter` first, and that shared step is round 4's
+        # blind spot in miniature: replace its body with `return ""` and the
+        # assertion below goes green on an empty file while claiming every
+        # bracket line became a cue. The independent oracle stops being
+        # independent the moment the thing it counts can be zeroed by the code
+        # under test — which is the #42 circularity this class's own docstring
+        # says it avoids.
+        self.assertEqual(4, bracket_lines,
+                         "the fixture's own bracket lines went missing, so the "
+                         "comparison below would compare nothing to nothing")
         segments = to_srt.parse_segments(stripped)
         self.assertEqual(
             bracket_lines, len(segments),
@@ -778,9 +799,19 @@ class TestEveryCorrectionReachesSomebody(unittest.TestCase):
                       f"a cue was silently given a synthetic duration: {err!r}")
 
     def test_the_reported_end_is_the_one_actually_written(self):
-        """A correction that misreports itself is not a correction anyone can judge."""
+        """A correction that misreports itself is not a correction anyone can judge.
+
+        This was `assertNotIn("00:00:10,000", err)` for three rounds, which
+        excludes ONE wrong answer and requires no right one — so rebinding
+        `end` to anything else left it green while the registry entry naming
+        this test read as coverage. Exactly `header_odd`'s shape, and found the
+        same way it should have been: by `tests/mutate.py`, not by reading.
+        """
         err = self._stderr("[00:20 - 09:59] S: declared end runs long",
                            "[00:10 - 00:30] S: and the next cue starts BEFORE it")
+        self.assertIn("cue at 00:00:20,000 trimmed and then clamped to "
+                      "00:00:20,500", err,
+                      f"the correction must name the end it actually wrote: {err!r}")
         self.assertNotIn("00:00:10,000", err,
                          f"the message named the next cue's start as the new end, but "
                          f"the clamp then moved it — so the value reported was never "
@@ -1943,6 +1974,22 @@ class TestEveryPreviewRefusalNamesItsCause(unittest.TestCase):
         proc = self._preview("[00:01] S: polished A\n[00:11] S: polished B\n",
                              "[00:00] S: verbatim A\n[00:10] S: verbatim B\n")
         self.assertEqual(3, proc.returncode)
+        # "stderr is non-empty" is not a check on the moment it names. The
+        # timestamp is the whole content of this refusal — it is where the user
+        # is told to look — and rebinding either side left this green.
+        self.assertIn("diverge at 00:00:00,000", proc.stderr,
+                      f"the refusal must name the earliest moment the two "
+                      f"sides disagree: {proc.stderr!r}")
+        # And from the other side. With only the case above, `min(p_start,
+        # v_start)` always resolves to `v_start`, so mutating `p_start` cannot
+        # change the printed value and the assertion is untestable rather than
+        # passing — a distinction `tests/mutate.py` reports but cannot make for
+        # you. Reversing which side is earlier makes both names load-bearing.
+        rev = self._preview("[00:00] S: polished A\n[00:10] S: polished B\n",
+                            "[00:01] S: verbatim A\n[00:11] S: verbatim B\n")
+        self.assertIn("diverge at 00:00:00,000", rev.stderr,
+                      f"with the polished side earlier, the refusal must still "
+                      f"name the earliest moment: {rev.stderr!r}")
         self.assertTrue(proc.stderr.strip(),
                         "the two sources have different timelines and the tool "
                         "exited 3 in silence, which the operator's table reads "
@@ -2467,67 +2514,96 @@ class TestEveryPrintedCountIsChecked(unittest.TestCase):
 
 
 class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
-    """The check that makes "every printed value is checked" verifiable.
+    """Every interpolation in the tool is registered, and every registration bites.
 
-    That claim has been made three times and been a proper subset three times —
-    round 10 covered one surface of three, round 12 four of eight, each declared
-    complete. The reason was mechanical and is worth naming: the evidence was a
-    mutation matrix built from `_NUMBER_PATTERNS`' own key set, so it enumerated
-    what the extractor covered and could never find what it omitted. **The
-    evidence and the claim were the same object.**
+    Round 14 built this to end a specific loop: three times a claim that every
+    printed value was checked had turned out to cover a subset, because the
+    evidence was a mutation matrix built from the extractor's own key set — it
+    enumerated what the extractor covered and could never find what it omitted.
 
-    This is the other direction. It reads the tool's AST, finds every value-
-    bearing interpolation that reaches a stream, and requires each one to be
-    registered below with the assertion that covers it. A new `print` with a
-    count in it turns the suite red until somebody says where it is checked.
+    Round 15 found the guard had inherited the defect twice over.
 
-    It cannot prove an assertion is a good one. It can prove no site was
-    forgotten, which is the failure this branch has actually had.
+    First, its DETECTOR was a positive enumeration. It considered only
+    interpolations whose expression contained `len(`, `unparsed` or
+    `format_timestamp`, or was exactly `n`; a new stderr print spelled any
+    other way was added in silence, all tests green. That is the construct the
+    drop counter took four rounds to retire, rebuilt inside the guard written
+    to end it. It now takes EVERY `FormattedValue` in the module, with no
+    filter on spelling and no reachability argument — the two buckets below are
+    exhaustive, so adding anything forces a choice.
+
+    Second, a registration named an EXTRACTOR KEY rather than an assertion, so
+    an entry could point at nothing. `header_odd` had a pattern here and an
+    entry here and no test read it: injecting `odd = odd * 3` left all 594
+    tests green while the README said otherwise. Every `numbers_in:` entry is
+    now required to name a key that some test actually consumes.
+
+    And the sweep that certified round 14 could not have found either, because
+    it mutated the interpolation TEXT (`{x}` → `{x+40}`) — which is exactly
+    what this test watches, so this test fired at every site by construction:
+
+        len(odd)+40    → 1 failing test, and it was this one
+        len(ate)+40    → 3 failing,  1 of them this one
+        len(header)+40 → 2 failing,  1 of them this one
+
+    A green-to-red conversion at every site, proving nothing about any value
+    assertion. `tests/mutate.py` exists so the honest version is a command
+    rather than a memory: it changes values on their own line and reports the
+    failure count with this test excluded.
     """
 
-    # Keyed on the MESSAGE, not on (function, expression).
-    #
-    # The first version keyed on the function and the expression, so a NEW print
-    # in `main` reusing `len(segments)` was already "registered" by an existing
-    # entry and slipped straight through — the same too-coarse-a-key shape this
-    # branch has hit repeatedly, in the guard written to end it. Caught by
-    # testing the guard's own teeth rather than by reading it.
-    #
-    # The key is the first stretch of the message's literal text, which
-    # identifies the sentence and survives the line moving.
-    COVERED = {
+    # A value a test verifies → the assertion that fails when it is wrong.
+    # `numbers_in: <key>` means the check goes through that extractor key, and
+    # the key must be consumed by some test below.
+    CHECKED = {
         ("build_cues", "cue at to —", "format_timestamp(end)"):
             "TestEveryCorrectionReachesSomebody.test_the_reported_end_is_the_one_actually_written",
         ("build_cues", "cue at to —", "format_timestamp(seg['start'])"):
             "TestEveryCorrectionReachesSomebody",
         ("differing_sample", "every line that differs sits at a timestamp th", "len(ambiguous)"):
             "numbers_in: refusal_ambiguous",
-        ("differing_sample", "the transcript dropped line(s), so the two sid", "n"):
-            "numbers_in: refusal_dropped",
+        ("differing_sample", "polished and verbatim transcripts dropped and", "polish_drops"):
+            "numbers_in: refusal_drop_a",
+        ("differing_sample", "polished and verbatim transcripts dropped and", "verbatim_drops"):
+            "numbers_in: refusal_drop_b",
+        ("differing_sample", "polished transcript dropped", "polish_drops"):
+            "numbers_in: refusal_drop_a",
+        ("differing_sample", "verbatim transcript dropped", "verbatim_drops"):
+            "numbers_in: refusal_drop_a",
         ("differing_sample", "the two versions diverge at — one has a segmen", "format_timestamp(min(p_start, v_start))"):
             "TestEveryPreviewRefusalNamesItsCause.test_differing_timelines_say_so_rather_than_going_quiet",
         ("differing_sample", "the two versions have different cue counts ( p", "len(polished)"):
             "numbers_in: refusal_polished",
         ("differing_sample", "the two versions have different cue counts ( p", "len(verbatim)"):
             "numbers_in: refusal_verbatim",
+        ("format_timestamp", "::,", "hours"):   "TestTimestampFormatting",
+        ("format_timestamp", "::,", "minutes"): "TestTimestampFormatting",
+        ("format_timestamp", "::,", "secs"):    "TestTimestampFormatting",
+        ("format_timestamp", "::,", "millis"):  "TestTimestampFormatting",
         ("main", "content line(s) and header line(s) were presen", "len(dropped)"):
             "numbers_in: zero_body",
         ("main", "content line(s) and header line(s) were presen", "len(header)"):
             "numbers_in: zero_head",
         ("main", "content line(s) dropped — see stderr", "unparsed"):
             "numbers_in: dropped",
+        ("main", "declared end(s) discarded — see stderr", "len(lost_ends)"):
+            "numbers_in: lost_ends",
         ("main", "header", "len(header)"):
             "numbers_in: header (the ledger)",
+        ("main", "invisible char(s) removed — see stderr", "stripped_chars"):
+            "numbers_in: stripped_ledger",
         ("main", "of the content lines DID carry a timestamp and", "len(stamped)"):
             "numbers_in: zero_stamped",
         ("main", "wrote cues to stdout", "len(segments)"):
             "numbers_in: cues, streaming",
         ("main", "wrote cues →", "len(segments)"):
             "numbers_in: cues, -o",
-        ("main", "— of them would have parsed as cues (first: )", "len(ate)"):
-            "numbers_in: header_ate",
         ("main", "— of them are not `key: value` lines, so this ", "len(odd)"):
             "numbers_in: header_odd",
+        ("main", "— of them would have parsed as cues (first: )", "len(ate)"):
+            "numbers_in: header_ate",
+        ("main", "⚠ invisible character(s) were removed from the", "stripped_chars"):
+            "numbers_in: stripped_warn",
         ("main", "⚠ line(s) in were taken as the file's header a", "len(header)"):
             "numbers_in: header_all",
         ("main", "⚠ of content lines in did not parse as segment", "unparsed"):
@@ -2539,19 +2615,73 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("render_srt", "-->", "n"):                              "TestRender: cue numbering",
         ("shape_of", "chars, opens with", "len(line)"):
             "TestTheWarningDoesNotPublishSomebodysWords",
-        ("shape_of", "d{}", "len(m.group(0))"):
-            "TestTheWarningDoesNotPublishSomebodysWords: the redaction width",
+        # The two run widths. A heuristic sorting this census by "looks like a
+        # count" put both of these in the other bucket — and they are the
+        # redaction widths, the numbers round 2 introduced so that digits could
+        # be described without being published. The classification is hand-made
+        # for exactly this reason.
+        ("shape_of", "d{}", "j - i"): "numbers_in: shape_digits",
+        ("shape_of", "s{}", "j - i"): "numbers_in: shape_spaces",
     }
 
-    def test_every_value_bearing_interpolation_is_registered(self):
-        import ast
+    # Carries no value an assertion could be wrong about → why that is fine.
+    # Being in this bucket is a claim, not a default: it says the interpolation
+    # is text whose exact content no caller computes with.
+    UNCHECKED = {
+        ("<module>", "\\A(?:)\\Z", "_STAMP"):                     "regex assembly, not output",
+        ("<module>", "^\\[\\s*(?P<ts>)\\s*(?:-\\s*(?P<end>[^\\]]*?)\\s*)?\\", "_STAMP"): "regex assembly",
+        ("_refuse", "⚠ no source comparison to show:", "why"):     "the cause sentence; each caller's wording is tested",
+        ("build_cues", ":", "speaker"):                            "the speaker label itself",
+        ("build_cues", ":", "text"):                               "the cue words themselves",
+        ("build_cues", "cue at to —", "what"):                     "which correction, tested by name",
+        ("build_cues", "cue at to —", "why"):                      "the reason clause, tested by name",
+        ("differing_sample", ".md", "rec_id"):                     "a path fragment",
+        ("differing_sample", "the line(s), so the two sides no longer line u", "which"): "the composed side-name clause",
+        ("main", "()", "', '.join(parts)"):                        "the ledger clauses, each checked on its own",
+        ("main", ".md", "args.id"):                                "a path fragment",
+        ("main", "None matched the rough timestamp hint, which m", "shape_of(dropped[0])"): "a shape, and shape_of is tested",
+        ("main", "The header is the block from the first '---' t", "shape_of(header[0])"):  "a shape",
+        ("main", "config: PLAUD_SUBTITLE_SOURCE= is not one of —", "', '.join(config.SUBTITLE_SOURCES)"): "a constant list",
+        ("main", "config: PLAUD_SUBTITLE_SOURCE= is not one of —", "config.DEFAULTS['subtitle_source']"): "a constant",
+        ("main", "config: PLAUD_SUBTITLE_SOURCE= is not one of —", "prefer"): "echoes the bad value",
+        ("main", "error: no lines in looked like segments. Expec", "detail"):   "the composed diagnostic, checked by its parts",
+        ("main", "error: no lines in looked like segments. Expec", "str(path)"): "a path",
+        ("main", "error: not found — run the plaud-index skill f", "str(path)"): "a path",
+        ("main", "error: refusing unsafe recording id:", "args.id"):            "echoes the rejected id",
+        ("main", "note: could not read to check whether this rec", "exc.strerror"): "an OS message",
+        ("main", "note: could not read to check whether this rec", "transcript.name"): "a filename",
+        ("main", "of the content lines DID carry a timestamp and", "shape_of(stamped[0])"): "a shape",
+        ("main", "polished:", "sanitise(sample['polished'])[0]"):   "the sampled line itself",
+        ("main", "verbatim:", "sanitise(sample['verbatim'])[0]"):   "the sampled line itself",
+        ("main", "wrote cues to stdout", "note"):                   "the ledger, checked clause by clause",
+        ("main", "wrote cues →", "note"):                           "the ledger, checked clause by clause",
+        ("main", "wrote cues →", "str(args.output)"):               "the output path",
+        ("main", "— of them are not `key: value` lines, so this ", "shape_of(odd[0])"): "a shape",
+        ("main", "— of them would have parsed as cues (first: )", "shape_of(ate[0])"):  "a shape",
+        ("main", "⚠", "note"):                                      "a trim/clamp sentence, tested by name",
+        ("main", "⚠ a declared end time was discarded and replac", "shape_of(line)"): "a shape",
+        ("main", "⚠ is marked incomplete — these subtitles cover", "path.name"):       "a filename",
+        ("main", "⚠ line(s) in were taken as the file's header a", "detail"):          "the composed clause, checked by its parts",
+        ("main", "⚠ line(s) in were taken as the file's header a", "path.name"):       "a filename",
+        ("main", "⚠ of content lines in did not parse as segment", "path.name"):       "a filename",
+        ("main", "⚠ of content lines in did not parse as segment", "remedy"):          "the advice clause, tested by name",
+        ("main", "⚠ of content lines in did not parse as segment", "shape_of(first_bad)"): "a shape",
+        ("parse_timestamp", "unrecognised timestamp:", "raw"):       "echoes the rejected stamp into an exception",
+        ("render_srt", "-->", "wrap_cue_text(cue['text'], limits)"): "the wrapped words; wrapping is tested",
+        ("shape_of", "chars, opens with", "shape"):                  "the assembled shape string",
+        ("subtitle_source", ".md", "rec_id"):                        "a path fragment",
+        ("wrap_cue_text", "", "current"):                            "a partial line",
+        ("wrap_cue_text", "", "word"):                               "a word",
+    }
+
+    @staticmethod
+    def _sites():
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         owner = {}
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef):
                 for child in ast.walk(node):
                     owner[id(child)] = node.name
-
         found = set()
         for node in ast.walk(tree):
             if not isinstance(node, ast.JoinedStr):
@@ -2560,31 +2690,186 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
                 v.value for v in node.values
                 if isinstance(v, ast.Constant) and isinstance(v.value, str)).split())[:46]
             for value in node.values:
-                if not isinstance(value, ast.FormattedValue):
-                    continue
-                expr = ast.unparse(value.value)
-                if not (any(k in expr for k in ("len(", "unparsed", "format_timestamp"))
-                        or expr == "n"):
-                    continue
-                found.add((owner.get(id(node), "?"), literal, expr))
+                if isinstance(value, ast.FormattedValue):
+                    found.add((owner.get(id(node), "<module>"), literal,
+                               ast.unparse(value.value)))
+        return found
 
-        unregistered = found - set(self.COVERED)
+    def test_every_interpolation_is_registered(self):
+        found = self._sites()
+        registered = set(self.CHECKED) | set(self.UNCHECKED)
+        unregistered = found - registered
         self.assertEqual(
             set(), unregistered,
-            f"{len(unregistered)} value(s) reach a stream with nothing recorded "
-            f"about how they are checked: {sorted(unregistered)}\n\n"
-            f"Register each in COVERED with the assertion that would fail if the "
-            f"value were wrong — and if there is no such assertion, write it "
-            f"first. Three rounds running, a claim that every printed value was "
-            f"checked turned out to cover a subset, because the evidence was "
-            f"built from the same list as the claim.")
-
-        stale = set(self.COVERED) - found
+            f"{len(unregistered)} interpolation(s) reach a stream with nothing "
+            f"recorded about them: {sorted(unregistered)}\n\n"
+            f"Put each in CHECKED with the assertion that would fail if the "
+            f"value were wrong — writing that assertion first if there is none "
+            f"— or in UNCHECKED with the reason it carries no such value. "
+            f"There is no third option and no filter on how the expression is "
+            f"spelled: round 15 added a count spelled without `len(` and this "
+            f"guard, which enumerated spellings, let it through.")
+        stale = registered - found
         self.assertEqual(
             set(), stale,
-            f"COVERED names {len(stale)} site(s) that no longer exist: "
-            f"{sorted(stale)}. A registry that outlives what it registers starts "
-            f"granting coverage to nothing.")
+            f"{len(stale)} registration(s) name a site that no longer exists: "
+            f"{sorted(stale)}. A registry that outlives what it registers "
+            f"starts granting coverage to nothing.")
+        self.assertEqual(set(), set(self.CHECKED) & set(self.UNCHECKED),
+                         "a site cannot be both checked and unchecked")
+
+    def test_every_registration_names_something_that_exists(self):
+        """The teeth. An entry may not point at nothing.
+
+        `header_odd` had a pattern, had an entry naming that pattern, and no
+        test read it — so `odd * 3` was invisible while the registry read as
+        covered. Naming an extractor key is not coverage; the key has to be
+        consumed somewhere.
+        """
+        module = ast.parse(pathlib.Path(__file__).read_text(encoding="utf-8"))
+
+        def is_own_registry(node):
+            return isinstance(node, ast.ClassDef) and node.name == type(self).__name__
+
+        def is_pattern_table(node):
+            # `_NUMBER_PATTERNS` lives in the module body, so a naive walk
+            # collects its own keys and every key looks consumed — a check
+            # reading its own answer, which is the shape this whole class
+            # exists to refuse. The table is where keys are DECLARED; being
+            # declared is not being read.
+            return (isinstance(node, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == "_NUMBER_PATTERNS"
+                            for t in node.targets))
+
+        consumed = set()
+        for node in module.body:
+            if is_own_registry(node) or is_pattern_table(node):
+                continue
+            for child in ast.walk(node):
+                if isinstance(child, ast.Constant) and isinstance(child.value, str):
+                    consumed.add(child.value)
+
+        missing_key, missing_test, unused = [], [], []
+        for site, where in self.CHECKED.items():
+            if where.startswith("numbers_in:"):
+                key = where.split(":", 1)[1].strip().split()[0].rstrip(",")
+                if key not in _NUMBER_PATTERNS:
+                    missing_key.append((site, key))
+                elif key not in consumed:
+                    unused.append((site, key))
+            else:
+                cls = where.split(":")[0].strip().split(".")[0]
+                if cls not in globals():
+                    missing_test.append((site, cls))
+        self.assertEqual([], missing_key,
+                         f"registration names a `numbers_in` key that is not in "
+                         f"_NUMBER_PATTERNS: {missing_key}")
+        self.assertEqual([], unused,
+                         f"registration names a `numbers_in` key that NO TEST "
+                         f"READS, so it grants coverage to nothing: {unused}. "
+                         f"This is the exact state `header_odd` was in when a "
+                         f"3x error in the printed count passed the suite.")
+        self.assertEqual([], missing_test,
+                         f"registration names a test class that does not exist: "
+                         f"{missing_test}")
+
+
+class TestRoundSixteensCountsAreCheckedToo(unittest.TestCase):
+    """The ten counts round 15 found registered against nothing.
+
+    `header_odd` is the one that mattered: it had a `_NUMBER_PATTERNS` entry
+    and a registry entry naming that entry, and no test read it, so injecting
+    `odd = odd * 3` left all 594 tests green while the README said every
+    printed count was compared as an integer. The other nine are counts this
+    round adds or rewords, held to the same standard before they ship rather
+    than a round later.
+    """
+
+    def _run(self, body: str, *args: str, cache_id: str = "abc123"):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / f"{cache_id}.md").write_text(body, encoding="utf-8")
+            out = cache / "o.srt"
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), cache_id, "-o", str(out), *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def _preview(self, polish: str, verbatim: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_the_header_warning_states_the_odd_count_exactly(self):
+        proc = self._run("---\nid: abc123\n"
+                         "somebody was speaking here\n"
+                         "and here too\n"
+                         "---\n[00:01] S: one\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(2, got.get("header_odd"), f"{proc.stderr!r}")
+        self.assertEqual(5, got.get("header_all"), f"{proc.stderr!r}")
+
+    def test_an_ordinary_header_reports_no_oddities(self):
+        """The other direction. A count that is always 2 is not a count."""
+        proc = self._run("---\nid: abc123\ncomplete: true\n\n---\n"
+                         "[00:01] S: one\n")
+        self.assertNotIn("are not `key: value` lines", proc.stderr,
+                         f"a blank line inside an ordinary header was counted "
+                         f"as speech the header swallowed: {proc.stderr!r}")
+
+    def test_discarded_ends_reach_the_stdout_ledger(self):
+        proc = self._run("---\nid: abc123\n---\n"
+                         "[00:01 - 00:412] S: one\n"
+                         "[00:20 - 99:99] S: two\n"
+                         "[00:40 - 00:45] S: three\n")
+        self.assertEqual(2, numbers_in(proc.stdout).get("lost_ends"),
+                         f"stdout: {proc.stdout!r}")
+
+    def test_stripped_characters_are_counted_on_both_streams(self):
+        proc = self._run("---\nid: abc123\n---\n"
+                         "[00:01] S: one\x07two\x08three\n"
+                         "[00:20] S: plain\n")
+        self.assertEqual(2, numbers_in(proc.stdout).get("stripped_ledger"),
+                         f"stdout: {proc.stdout!r}")
+        self.assertEqual(2, numbers_in(proc.stderr).get("stripped_warn"),
+                         f"stderr: {proc.stderr!r}")
+
+    def test_a_clean_file_reports_no_stripping(self):
+        proc = self._run("---\nid: abc123\n---\n[00:01] S: 你好 — ok?\n")
+        self.assertNotIn("invisible", proc.stdout + proc.stderr,
+                         f"{proc.stdout!r} {proc.stderr!r}")
+
+    def test_when_both_sides_drop_the_refusal_names_both_counts(self):
+        proc = self._preview(
+            "[99999:00] S: a\n[88888:00] S: b\n[00:00] S: c\n",
+            "[77777:00] S: a\n[00:00] S: c\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(3, proc.returncode)
+        self.assertEqual(2, got.get("refusal_drop_a"), f"{proc.stderr!r}")
+        self.assertEqual(1, got.get("refusal_drop_b"), f"{proc.stderr!r}")
+
+    def test_when_one_side_drops_the_refusal_names_that_side(self):
+        proc = self._preview("[99999:00] S: a\n[00:00] S: c\n",
+                             "[00:00] S: c\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(1, got.get("refusal_drop_a"), f"{proc.stderr!r}")
+        self.assertIsNone(got.get("refusal_drop_b"), f"{proc.stderr!r}")
+
+    def test_the_shape_widths_are_the_widths(self):
+        """`d{n}` and `s{n}` are the redaction. A wrong n publishes a wrong
+        claim about the producer's format, and an unchecked n is how the
+        digits themselves crept back in once already."""
+        proc = self._run("---\nid: abc123\n---\n"
+                         "[00:01] S: fine\n"
+                         "   [12345:678] S: not a stamp\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(5, got.get("shape_digits"), f"{proc.stderr!r}")
+        self.assertEqual(3, got.get("shape_spaces"), f"{proc.stderr!r}")
 
 
 class TestTheRefusalCountsAreCheckedToo(unittest.TestCase):

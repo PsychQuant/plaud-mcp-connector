@@ -127,6 +127,32 @@ then `446:12` at seven hours) and the parser had been built for two. If you
 produced subtitles from a long recording before v0.10.1, redo them: the old file
 looks complete and is not. See #50.
 
+**Five other things changed in the same release**, each out of a review round on
+that fix, and none of them announced by the paragraph above until a reviewer
+pointed out that a user upgrading was not being told their subtitles now go
+through a filter:
+
+- **A malformed timestamp is now rejected rather than guessed.** `00:412` used
+  to come back as 412 seconds and `10000:00` as 600000 — plausible numbers, in
+  a function whose docstring said those raise. A malformed *start* now drops
+  the line (and is counted); a malformed *end* is discarded with a warning and
+  the duration inferred. See #53.
+- **Cue text is filtered.** Control, format, surrogate, private-use, unassigned
+  and separator characters are removed from every cue, so a transcript cannot
+  address your terminal or hide text in a subtitle file. Characters that carry
+  meaning — ZWJ, ZWNJ, LRM, RLM — are kept. **Anything removed is counted**, on
+  stderr and in the ledger.
+- **Losses that used to reach only stderr now ride the success line**: discarded
+  end times and removed characters, alongside the dropped-line count.
+- **`--preview-sources` declines more often, and says why.** It now refuses when
+  either side dropped a line, when the two cue counts differ, when the timelines
+  diverge, and when a timestamp is used twice — cases where the pair it used to
+  show was two different moments.
+- **The `⚠ marked incomplete` warning can fire on the default path.** It read
+  the transcript's frontmatter flag from whichever file was being subtitled,
+  and the default is the polish, which has no frontmatter — so on the shipped
+  path it could never fire at all.
+
 Before this was fixed, the CLI path produced **no subtitles at all** — the two
 paths write different timestamp shapes and only one was understood, so the
 recommended way to index was the one that could not be captioned (#40).
