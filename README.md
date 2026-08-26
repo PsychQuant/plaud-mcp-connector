@@ -290,10 +290,12 @@ nothing else makes it visible.
 
   **The three numbers are a ledger, and the tests check the numbers.** `wrote N
   cues (H header, K dropped)` accounts for every non-blank line in the file, so
-  nothing the tool removed goes unmentioned. Three of those four counts could
-  once be corrupted with the suite still green — the assertions checked that a
-  word appeared, not that a value was right — so they are compared as integers
-  now. When some of what the header swallowed would have parsed as
+  nothing the tool removed goes unmentioned. Every count the tool prints — the
+  ledger, the drop warning, the header warning, the zero-cue diagnostic — is
+  compared as an integer by the suite, and each one turns it red when corrupted.
+  Twice this was claimed of numbers nothing was checking: first the assertions
+  looked for a word rather than a value, then they were fixed on one of three
+  surfaces and declared fixed everywhere. When some of what the header swallowed would have parsed as
   a cue, stderr says how many — but the count does not depend on that judgement,
   which is the point: an earlier version reported the header *only* when its
   contents were cue-shaped, so every shape the parser could not read stayed

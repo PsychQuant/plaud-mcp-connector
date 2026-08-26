@@ -29,6 +29,7 @@ Usage:
 """
 
 import argparse
+from collections import Counter
 import importlib.util
 import os
 import pathlib
@@ -592,18 +593,22 @@ def differing_sample(rec_id: str) -> dict | None:
     # comparison surviving the round-7 repair. The test written for this used a
     # fixture whose sides were in the same order, so it could not fail on the
     # defect it named.
-    for side, name in ((polished, "polished"), (verbatim, "verbatim")):
-        starts = [start for start, _ in side]
-        if len(set(starts)) != len(starts):
-            return _refuse(f"the {name} transcript has more than one cue at the "
-                           f"same timestamp, so matching by time cannot say which "
-                           f"segment is which and any pair shown might be two "
-                           f"different moments.")
+    # Ambiguous GROUPS are skipped; the rest still compare. Refusing the whole
+    # file was correct in principle and wrong in scope: measured on the nine
+    # real cache files, THREE have at least one duplicated start, so one
+    # repeated timestamp in a 338-cue recording disabled the source-preference
+    # flow for all of it. The fabricated pair that refusal prevents has never
+    # been observed on real data — only constructed — and no answer to a
+    # question that should have been asked is its own kind of wrong.
+    ambiguous = {start for side in (polished, verbatim)
+                 for start, n in Counter(s for s, _ in side).items() if n > 1}
     if len(polished) != len(verbatim):
         return _refuse(f"the two versions have different cue counts "
                        f"({len(polished)} polished, {len(verbatim)} verbatim), so "
                        f"they cannot be lined up sentence by sentence.")
     for (p_start, tidy), (v_start, raw) in zip(polished, verbatim):
+        if p_start in ambiguous or v_start in ambiguous:
+            continue          # same timestamp twice: cannot say which is which
         if p_start != v_start:
             return _refuse(f"the two versions diverge at "
                            f"{format_timestamp(min(p_start, v_start))} — one has a "
@@ -611,6 +616,11 @@ def differing_sample(rec_id: str) -> dict | None:
                            f"point is the same moment.")
         if tidy != raw:
             return {"polished": tidy, "verbatim": raw}
+    if ambiguous:
+        return _refuse(f"every line that differs sits at a timestamp the file "
+                       f"uses more than once ({len(ambiguous)} such), so there is "
+                       f"no pair that can be shown as certainly the same moment. "
+                       f"Everything unambiguous was identical.")
     return _refuse("the two versions are identical — there is no choice to "
                    "offer, and asking would present the same line twice.")
 
@@ -658,8 +668,15 @@ def main() -> None:
             # would be indistinguishable from a caller branching on success, and
             # would go on to offer a choice between two things it never found.
             sys.exit(3)
-        print(f"polished: {sample['polished']}")
-        print(f"verbatim: {sample['verbatim']}")
+        # Sanitised. `_CONTROL`'s comment says untrusted transcript text must
+        # not be able to address the terminal at all, and this was the one
+        # outlet still handing it over raw — while the class added to close
+        # those outlets checked only the PATH. It matters more here than in the
+        # `.srt` (where escaping would corrupt the file): per SKILL.md the
+        # operator quotes these two lines to the user and then stores the answer
+        # as a preference, so forged content becomes persisted configuration.
+        print(f"polished: {_CONTROL.sub('', sample['polished'])}")
+        print(f"verbatim: {_CONTROL.sub('', sample['verbatim'])}")
         return
 
     if args.file:
@@ -773,9 +790,21 @@ def main() -> None:
             why = (f" The header is the block from the first '---' to the next "
                    f"one; if this file has no header, its first line should not "
                    f"be '---'. First header line: {shape_of(header[0])}.")
+        elif dropped:
+            # No conclusion. Round 10 made this conditional on `header`; the
+            # condition it needed was "and nothing here is a cue in ANY shape",
+            # which `CUE_SHAPED` cannot supply — it misses the markdown bullet,
+            # the blockquote, the numbered list, the fullwidth and the angle
+            # bracket, which are the five shapes this file's own comments
+            # enumerate. A file that is 100% bullet-prefixed speech was told it
+            # was "most likely a recording without timestamps".
+            why = (f" None matched the rough timestamp hint, which misses several "
+                   f"known shapes — so this may be a recording without timestamps "
+                   f"OR a shape the contract does not cover. First line: "
+                   f"{shape_of(dropped[0])}.")
         else:
-            why = (" None carried a recognisable timestamp, so this is most "
-                   "likely a recording without them rather than a shape problem.")
+            why = (" The file has no content lines at all, so there is nothing "
+                   "to convert.")
         detail = counts + why
         sys.exit(
             f"error: no lines in {str(path)!r} looked like segments.\n"
@@ -842,7 +871,19 @@ def main() -> None:
     if not args.file and args.id:
         transcript = CACHE_DIR / f"{args.id}.md"
         if transcript.is_file() and transcript != path:
-            completeness_source = transcript.read_text(encoding="utf-8-sig")[:400]
+            # Best-effort, and never fatal. This read was added to make the
+            # incomplete warning reach the polish path; unguarded, one bad byte
+            # in a file we are NOT converting killed a conversion that would
+            # otherwise have succeeded — an unhandled traceback and no `.srt` at
+            # all. A check that cannot fire is a defect; a check that takes the
+            # whole command down with it is a worse one.
+            try:
+                with transcript.open(encoding="utf-8-sig", errors="replace") as fh:
+                    completeness_source = fh.read(400)
+            except OSError as exc:
+                print(f"note: could not read {transcript.name!r} to check whether "
+                      f"this recording was fully indexed ({exc.strerror}); the "
+                      f"subtitles below are unaffected.", file=sys.stderr)
     if "complete: false" in completeness_source[:400]:
         print(f"⚠ {path.name!r} is marked incomplete — these subtitles cover only the "
               f"part that was fetched. Re-run plaud-index first.", file=sys.stderr)

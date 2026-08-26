@@ -49,6 +49,40 @@ to_srt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(to_srt)
 
 
+# Every number the tool prints, extracted by the pattern that prints it.
+#
+# Round 10 built a ledger parser for `wrote N cues (...)` and claimed the numbers
+# were "compared as integers on every shape that prints one". They were compared
+# on ONE shape. The zero-cue exit and the header warning were never parsed by
+# anything, so `+40` on either left the suite green — round 9's finding fixed on
+# one surface of three and declared fixed everywhere.
+#
+# Anything that prints a count goes in here, and every assertion about a count
+# goes through it. A test suite that cannot detect a `+40` is not evidence.
+_NUMBER_PATTERNS = {
+    "cues":       r"wrote (\d+) cues",
+    "header":     r"\((?:[^)]*?, )?(\d+) header",
+    "dropped":    r"(\d+) content line\(s\) dropped",
+    "header_ate": r"— (\d+) of them would have parsed as cues",
+    "header_all": r"⚠ (\d+) line\(s\) in .* were taken as the",
+    "zero_body":  r"\n(\d+) content line\(s\) and \d+ header",
+    "zero_head":  r"\n\d+ content line\(s\) and (\d+) header",
+    "warn_bad":   r"⚠ (\d+) of \d+ content lines",
+    "warn_all":   r"⚠ \d+ of (\d+) content lines",
+}
+
+
+def numbers_in(text: str) -> dict:
+    """Parse every count the tool can print. Absent keys are simply absent."""
+    got = {}
+    for name, pattern in _NUMBER_PATTERNS.items():
+        m = re.search(pattern, text)
+        if m:
+            got[name] = int(m.group(1))
+    return got
+
+
+
 class TestTimestampParsing(unittest.TestCase):
     def test_accepts_the_forms_the_cache_actually_contains(self) -> None:
         cases = {
@@ -1824,9 +1858,9 @@ class TestEveryLineEndsInExactlyOneReportableBucket(unittest.TestCase):
         self.assertIn("header", (proc.stdout + proc.stderr).lower(),
                       f"two cue-shaped lines were consumed as a header and "
                       f"nothing said so: out={proc.stdout!r} err={proc.stderr!r}")
-        self.assertIn("2", proc.stderr,
-                      f"the count of consumed cue-shaped lines is not stated: "
-                      f"{proc.stderr!r}")
+        self.assertEqual(2, numbers_in(proc.stderr)["header_ate"],
+                         f"the count of consumed cue-shaped lines is wrong: "
+                         f"{proc.stderr!r}")
 
     def test_an_ordinary_header_is_not_worth_a_word(self):
         """The accounting must not turn every clean run into a warning."""
@@ -2029,9 +2063,14 @@ class TestTheHeaderBucketIsReportedNegatively(unittest.TestCase):
         """cues + dropped + header == every non-blank line, and all three shown."""
         proc = self._run("---\nid: abc123\nAlice: [00:00] eaten\n---\n"
                          "[00:20] S: kept\nprose line\n")
-        combined = proc.stdout + proc.stderr
-        for n, what in (("3", "header lines"), ("1", "dropped"), ("1", "cue")):
-            self.assertIn(n, combined, f"{what} missing from {combined!r}")
+        # Exact integers. The first version asserted the SUBSTRING "3" for a
+        # header that is 4, and passed because `abc123.md` contains a 3 — the
+        # antipattern this very file documents as a round-1 finding, inside the
+        # class written to retire it, under a docstring claiming it demonstrated
+        # the sum. It demonstrated neither.
+        self.assertEqual({"cues": 1, "header": 4, "dropped": 1},
+                         numbers_in(proc.stdout),
+                         f"ledger wrong: {proc.stdout!r}")
 
     def test_a_clean_run_still_reads_cleanly(self):
         """Accounting must not turn every success into a wall of numbers."""
@@ -2217,11 +2256,35 @@ class TestNoDiagnosticAssertsMoreThanItMeasured(unittest.TestCase):
                          f"the diagnostic named the wrong hypothesis for a file "
                          f"whose problem is a region one: {proc.stderr!r}")
 
-    def test_the_hypothesis_survives_where_it_is_true(self):
-        """It is the right guess for a file that genuinely has no timestamps."""
+    def test_the_hypothesis_names_both_possibilities(self):
+        """Round 11: it named ONE, and named it for a file that was all speech.
+
+        `CUE_SHAPED` misses the markdown bullet, the blockquote, the numbered
+        list, the fullwidth and the angle bracket — the five shapes this file's
+        own comments enumerate — so "none matched" cannot support "there are no
+        timestamps here". Two lines of bullet-prefixed speech were told they were
+        probably a recording without timestamps.
+        """
         proc = self._run("just some prose\nand more prose\n")
-        self.assertIn("most likely a recording without them", proc.stderr,
-                      f"the useful hypothesis was lost: {proc.stderr!r}")
+        self.assertIn("rough timestamp hint", proc.stderr,
+                      f"the diagnostic states a conclusion its test cannot "
+                      f"support: {proc.stderr!r}")
+        self.assertIn("OR a shape the contract does not cover", proc.stderr,
+                      f"only one of the two possibilities is named: {proc.stderr!r}")
+
+    def test_bullet_prefixed_speech_is_not_called_untimestamped(self):
+        """The case round 11 reproduced: 100% timestamped speech, misdiagnosed."""
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "bullets.md"
+            f.write_text("- [00:00] S: bullet speech one\n"
+                         "- [00:10] S: bullet speech two\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(f),
+                 "-o", str(pathlib.Path(d) / "o.srt")],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        self.assertNotIn("most likely a recording without them", proc.stderr,
+                         f"two lines that both carry a timestamp were reported as "
+                         f"probably having none: {proc.stderr!r}")
 
     def test_the_header_sentence_claims_nothing_about_speech(self):
         """`--file` is the shape where this sentence prints at all."""
@@ -2303,26 +2366,91 @@ class TestDuplicateStartsRefuseRatherThanGuess(unittest.TestCase):
                 [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
                 capture_output=True, text=True, env=cli_env(cache))
 
-    def test_a_displacement_inside_a_duplicate_group_refuses(self):
+    def test_a_displacement_inside_a_duplicate_group_is_never_shown(self):
+        """Ambiguous groups are skipped, so no pair from one can be offered."""
         proc = self._preview(
             "[00:00] S: polished FIRST\n[00:00] S: polished SECOND\n",
             "[00:00] S: verbatim SECOND\n[00:00] S: verbatim THIRD\n")
         self.assertEqual(3, proc.returncode,
                          f"two different segments were offered as one line "
                          f"written two ways: {proc.stdout!r}")
-        self.assertIn("same timestamp", proc.stderr,
+        self.assertIn("more than once", proc.stderr,
                       f"refused without naming the reason: {proc.stderr!r}")
 
-    def test_duplicates_in_the_same_order_also_refuse(self):
-        """The earlier fixture. It happened to pair correctly; that was luck."""
+    def test_an_unambiguous_difference_survives_a_duplicate_elsewhere(self):
+        """Round 11: refusing the whole file cost 1 in 3 real recordings.
+
+        One repeated timestamp in a 338-cue file disabled the source-preference
+        flow for all of it — to prevent a fabricated pair that has never been
+        observed outside a constructed fixture. The ambiguous group is skipped;
+        everything else still compares.
+        """
         proc = self._preview(
-            "[00:00] S: polished FIRST\n[00:00] S: polished SECOND\n",
-            "[00:00] S: verbatim FIRST\n[00:00] S: verbatim SECOND\n")
-        self.assertEqual(3, proc.returncode,
-                         "duplicate starts cannot be matched by time at all, so "
-                         "pairing them correctly is not something the code knows")
+            "[00:00] S: dup A\n[00:00] S: dup B\n[00:10] S: thinned\n",
+            "[00:00] S: dup A\n[00:00] S: dup B\n[00:10] S: um, thinned\n")
+        self.assertEqual(0, proc.returncode,
+                         f"a clean difference at 00:10 was thrown away because "
+                         f"00:00 is duplicated: {proc.stderr!r}")
+        self.assertIn("thinned", proc.stdout)
+        self.assertNotIn("dup", proc.stdout,
+                         f"a pair from the ambiguous group was shown: {proc.stdout!r}")
 
     def test_distinct_starts_still_compare(self):
         proc = self._preview("[00:00] S: thinned\n[00:10] S: b\n",
                              "[00:00] S: um, thinned\n[00:10] S: b\n")
         self.assertEqual(0, proc.returncode, f"{proc.stdout!r} {proc.stderr!r}")
+
+
+class TestEveryPrintedCountIsChecked(unittest.TestCase):
+    """The suite must be able to detect a `+40` on any number the tool prints.
+
+    Round 10 pinned the `-o` ledger and said "every shape that prints one".
+    Round 11 mutated the zero-cue exit and the header warning by +40 and the
+    suite stayed green — the claim was true of one shape out of three.
+
+    These cover the remaining two. The mutation matrix in the commit message is
+    the evidence for the claim; this class is what makes the matrix red.
+    """
+
+    def _run(self, body: str, *args: str, cache_id: str = "abc123"):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / f"{cache_id}.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), cache_id, *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_the_zero_cue_exit_states_both_counts_exactly(self):
+        proc = self._run("---\nid: abc123\n"
+                         "- [101:05] S: one\n- [101:35] S: two\n"
+                         "---\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(0, got.get("zero_body"), f"{proc.stderr!r}")
+        self.assertEqual(5, got.get("zero_head"), f"{proc.stderr!r}")
+
+    def test_the_zero_cue_exit_counts_a_body_with_no_header(self):
+        proc = self._run("just prose\nand more prose\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(2, got.get("zero_body"), f"{proc.stderr!r}")
+        self.assertEqual(0, got.get("zero_head"), f"{proc.stderr!r}")
+
+    def test_the_header_warning_states_both_counts_exactly(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = pathlib.Path(d) / "drift.md"
+            f.write_text("---\nid: x\n[00:00] S: eaten\n[00:10] S: also eaten\n"
+                         "---\n[00:20] S: kept\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "--file", str(f),
+                 "-o", str(pathlib.Path(d) / "o.srt")],
+                capture_output=True, text=True, env=cli_env(pathlib.Path(d)))
+        got = numbers_in(proc.stderr)
+        self.assertEqual(5, got.get("header_all"), f"{proc.stderr!r}")
+        self.assertEqual(2, got.get("header_ate"), f"{proc.stderr!r}")
+
+    def test_the_partial_drop_warning_states_both_counts_exactly(self):
+        proc = self._run("---\nid: abc123\ncomplete: true\n---\n\n"
+                         "[00:00] S: ok\nprose one\nprose two\n",
+                         "-o", "/dev/null")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(2, got.get("warn_bad"), f"{proc.stderr!r}")
+        self.assertEqual(3, got.get("warn_all"), f"{proc.stderr!r}")

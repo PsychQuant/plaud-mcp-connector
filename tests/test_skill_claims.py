@@ -739,27 +739,59 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
         substring check: the glossary writes `N`, `M`, `K`, `H` where the tool
         writes numbers, so the comparison is on the FIXED fragments between them.
         """
-        raw = (pathlib.Path(__file__).resolve().parent.parent
-               / "scripts" / "to_srt.py").read_text(encoding="utf-8")
-        # Rejoin adjacent f-string fragments. The tool's messages are written as
-        # `f"...the " f"file's header..."` across lines, so a literal that IS
-        # printed contiguously does not appear contiguously in the source. An
-        # earlier draft of this test searched the raw source and would have
-        # reported drift for wording that was perfectly correct — a guard that
-        # cries wolf gets deleted, which is how the last one ended up checking
-        # the reverse direction instead.
-        src = re.sub(r'"\s*\n\s*f?"', "", raw)
-        src = re.sub(r"\s+", " ", src)
+        # The oracle is the tool's STRING LITERALS, not its source text.
+        #
+        # Searching the whole file accepts wording the tool never prints,
+        # because this file's documented habit is to keep retired wording in
+        # comments explaining why it was retired. Verified: SKILL.md quoting
+        # `0 content line(s) were present` passed, because that phrase survives
+        # at to_srt.py:761 inside the round-10 comment saying the old message
+        # was wrong. A guard whose oracle includes the graveyard cannot tell the
+        # living from the dead.
+        #
+        # `ast` gives the literals and nothing else — no comments, no
+        # docstrings that are not also messages — and adjacent f-string
+        # fragments arrive already joined, which the previous regex had to
+        # reconstruct by hand.
+        import ast
+        tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
+                          / "scripts" / "to_srt.py").read_text(encoding="utf-8"))
+        pieces = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                pieces.append(node.value)
+            elif isinstance(node, ast.JoinedStr):
+                pieces.append("".join(
+                    v.value for v in node.values
+                    if isinstance(v, ast.Constant) and isinstance(v.value, str)))
+        # Docstrings are Constants too, so drop the ones that are statements:
+        # a message is never a bare expression at the top of a block.
+        for node in ast.walk(tree):
+            doc = ast.get_docstring(node) if isinstance(
+                node, (ast.Module, ast.FunctionDef, ast.ClassDef)) else None
+            if doc and doc in pieces:
+                pieces.remove(doc)
+        src = re.sub(r"\s+", " ", " ".join(pieces))
         text = self._skill_text()
         step4 = text[text.index("### 4. Report honestly"):
                      text.index("## How the timing works")]
 
         for quoted in re.findall(r"`([^`\n]+)`", step4):
-            # Only strings that are meant to be tool OUTPUT — a warning, or the
-            # success line. Prose backticks (`key: value`, `plaud-index`) are
-            # not claims about what is printed.
-            if not (quoted.startswith("⚠") or quoted.startswith("wrote ")):
+            # Which quotes count as claims about output was itself a closed
+            # list: `⚠` or `wrote `. `0 content line(s) were present` starts
+            # with neither, so the retired wording round 11 found was skipped
+            # entirely — the oracle was narrowed and the INPUT SELECTION was
+            # still an enumeration, one line away.
+            #
+            # Anything sentence-shaped is checked now: long enough to be a
+            # message, with a space in it. `key: value` and `plaud-index` fall
+            # under that on length and shape, and erring toward checking more is
+            # the right direction for a guard whose failure mode has twice been
+            # "did not look".
+            if len(quoted) < 20 or " " not in quoted:
                 continue
+            if quoted.startswith("-") or quoted.startswith("python3"):
+                continue          # flag rows and command lines, not messages
             # Split on placeholders and elisions; each remaining run of >= 12
             # characters is a fixed fragment the tool must contain verbatim.
             for fragment in re.split(r"[…]|\b[NMKH]\b", quoted):
