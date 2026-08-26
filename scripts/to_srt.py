@@ -167,9 +167,34 @@ CUE_SHAPED = re.compile(r"^[﻿\s]*(?:[\[(][﻿\s]*)?\d+\s*:\s*\d+")
 # so the loss is reported like every other loss here. A strip list that goes
 # stale fails SILENT: the next hostile character simply passes. Being wrong in
 # the direction that reports itself is what makes it safe to be wrong.
-_STRIP_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+# `Cn` is NOT in this set, though it was for one round. `Cn` is not a property
+# of a character — it is a property of the running interpreter's Unicode
+# tables. `unicodedata.unidata_version` is 15.1 on Python 3.13, 14.0 on 3.10,
+# so a letter assigned in Unicode 16.0 is `Cn` here and a real letter on the
+# next machine. It was deleting Todhri letters and 16.0 emoji outright, and on
+# 3.10/3.11 it would delete CJK Extension H and I — a whole block of Chinese.
+#
+# Nor is this set complete, and it cannot be made complete: variation
+# selectors are `Mn`, and so is every combining mark in half the world's
+# scripts, so widening by category would delete more than it protects. What
+# makes an incomplete rule safe here is not coverage but the COUNT — anything
+# it removes is reported, so being wrong is visible rather than silent. That
+# is the same argument as the exemption list below, in the other direction.
+_STRIP_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
+# `\t` is exempt HERE and normalised by `collapse_runs` instead. It was
+# exempt here alone for one round, on the grounds that "a tab is layout, not
+# addressing" — and `wrap_cue_text`, a hundred lines further down, deleted it
+# anyway via `text.split()`, silently, and only for cues over the line limit.
+# Two halves of one file disagreeing about one character, the losing half
+# unable to say so.
+#
+# Deleting it here instead is worse, not better: a tab is a SEPARATOR, so
+# removing it joins the words on either side — `word\tafter` became
+# `wordafter`, which is a new word nobody said. Whitespace belongs to the
+# function that understands whitespace, and that function counts what it
+# changes. The two halves agree by one deferring to the other.
 _STRIP_KEEP = frozenset(
-    "\t"                # a tab is layout, not addressing
+    "\t"                # whitespace — `collapse_runs` normalises it, and counts it
     "\u200c\u200d"      # ZWNJ / ZWJ — orthographic; also emoji sequences
     "\u200e\u200f")     # LRM / RLM — the standard, non-overriding marks
 
@@ -192,6 +217,45 @@ def sanitise(text: str) -> tuple[str, int]:
     kept = [c for c in text
             if c in _STRIP_KEEP or unicodedata.category(c) not in _STRIP_CATEGORIES]
     return "".join(kept), len(text) - len(kept)
+
+
+def collapse_runs(text: str) -> tuple[str, int]:
+    """Each whitespace run becomes its FIRST character; the ends go entirely.
+
+    Nothing is substituted — a run's survivor is a character that was already
+    there — so `len(before) - len(after)` is an exact and complete account of
+    what went, which is what lets the character-unit closure test close.
+
+    This is here rather than in `wrap_cue_text` for two reasons the round it
+    was written both learned the hard way. `wrap_cue_text` returned early for
+    text under the line limit, so the same tab survived in a short cue and
+    vanished from a long one — one file, two treatments of one character, no
+    explanation anywhere. And its CJK branch breaks by width with no regard
+    for content, so a run of twenty separators became a WHITESPACE-ONLY LINE
+    inside the cue — which is SRT's cue terminator, so ffmpeg dropped
+    everything after it while the tool reported `wrote N cues` and exited 0.
+    That is this issue's own signature, one layer below the line ledger.
+
+    Doing it here means the count lives with every other count, and
+    `wrap_cue_text` receives text it cannot lose anything from.
+    """
+    out, changed = [], 0
+    runs = list(re.finditer(r"\s+|\S+", text))
+    for i, m in enumerate(runs):
+        run = m.group(0)
+        if not run[0].isspace():
+            out.append(run)
+            continue
+        if i == 0 or i == len(runs) - 1:
+            changed += len(run)          # leading and trailing go entirely
+            continue
+        # One plain space. A character is preserved only if it was already
+        # exactly that, so a tab or an ideographic space counts as changed
+        # even though the length does not move — a count that only tracks
+        # length would call a substitution "nothing happened".
+        out.append(" ")
+        changed += len(run) - (1 if run[0] == " " else 0)
+    return "".join(out), changed
 
 
 def header_oddities(lines: list[str]) -> list[str]:
@@ -337,7 +401,15 @@ def strip_frontmatter(text: str) -> str:
 
 def parse_transcript(text: str, *, expect_frontmatter: bool = False
                      ) -> tuple[list[dict], list[str], list[str], list[str]]:
-    """One pass over the body. Returns (cues, lines that produced no cue).
+    """One pass over the body.
+
+    Returns `(cues, lines that produced no cue, header lines, lines whose
+    declared end could not be read)`. The docstring said "(cues, lines that
+    produced no cue)" for eight rounds while the signature said four — and the
+    two it left out are precisely the ones the ledger, the header warning and
+    the corpus test are built on. A reader trusting the prose would not know
+    the discarded ends were available at all, which is how the corpus test
+    came to check two of the three numbers its own docstring named.
 
     Both halves come from the SAME traversal, and that is the whole point.
 
@@ -486,10 +558,13 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
         # for a cursor movement, and a file that carries one is a file that
         # attacks whatever displays it next.
         text, gone = sanitise(seg["text"])
+        text, collapsed = collapse_runs(text)
+        gone += collapsed
         if show_speaker and seg["speaker"]:
             speaker, gone_s = sanitise(seg["speaker"])
+            speaker, collapsed_s = collapse_runs(speaker)
             text = f"{speaker}: {text}"
-            gone += gone_s
+            gone += gone_s + collapsed_s
         cues.append({"start": seg["start"], "end": end, "text": text,
                      "stripped": gone})
     return cues
@@ -499,6 +574,9 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
 # wrong twice over: 42 characters is a long-but-standard Latin line and roughly
 # double what a CJK line should carry, because each glyph is full-width.
 _SHAPE_CAP = 48
+
+# How many examples a per-cue warning shows before it says "and N more".
+_SAMPLE = 3
 
 LINE_LIMITS = {"latin": 42, "cjk": 20}
 
@@ -548,8 +626,13 @@ def wrap_cue_text(text: str, limits: dict | None = None) -> str:
         # break in a script that does not separate words.
         return "\n".join(text[i:i + limit] for i in range(0, len(text), limit))
 
+    # `text.split()` here — splitting on ANY whitespace and discarding it —
+    # is what deleted tabs and collapsed repeated spaces with no count. The
+    # text arrives collapsed now, so splitting on the plain space is lossless:
+    # a non-breaking space is simply carried inside its token, making one line
+    # slightly longer rather than making a character disappear.
     lines, current = [], ""
-    for word in text.split():
+    for word in (w for w in text.split(" ") if w):
         candidate = f"{current} {word}".strip()
         if current and len(candidate) > limit:
             lines.append(current)
@@ -616,7 +699,7 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
     `main`'s counter exists, so nothing said so.
     """
     if not path.is_file() or path.stat().st_size == 0:
-        return [], 0
+        return [], 0, 0
     # Same "the caller knows" rule as `main`: only the top-level transcript
     # carries frontmatter, so only it may have a block consumed.
     cues, dropped, front, _ = parse_transcript(
@@ -632,9 +715,14 @@ def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
     # guard that only knew about parser drops could not see two clean files
     # whose moments simply differ. The timestamps were always available; not
     # returning them was the whole gap.
+    # The two counts stay SEPARATE. Adding them meant a header holding one
+    # note said "the verbatim transcript dropped 1 line(s)" — the transcript
+    # dropped nothing, and the user was sent to look for a parse failure that
+    # is not there. Both still refuse the comparison, and now each says which
+    # of the two it is.
     return ([(c["start"], t)
              for c, t in zip(cues, [x["text"] for x in build_cues(cues)])],
-            len(dropped) + len(header_ate))
+            len(dropped), len(header_ate))
 
 
 def differing_sample(rec_id: str) -> dict | None:
@@ -666,8 +754,8 @@ def differing_sample(rec_id: str) -> dict | None:
         print(f"⚠ no source comparison to show: {why}", file=sys.stderr)
         return None
 
-    polished, polish_drops = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
-    verbatim, verbatim_drops = _cue_lines(CACHE_DIR / f"{rec_id}.md")
+    polished, polish_drops, polish_odd = _cue_lines(CACHE_DIR / "polish" / f"{rec_id}.md")
+    verbatim, verbatim_drops, verbatim_odd = _cue_lines(CACHE_DIR / f"{rec_id}.md")
 
     if not (CACHE_DIR / "polish" / f"{rec_id}.md").is_file():
         return _refuse("this recording has no polished version, so there is "
@@ -678,6 +766,12 @@ def differing_sample(rec_id: str) -> dict | None:
     if not verbatim:
         return _refuse("the transcript produced no cues, so there is nothing to "
                        "compare. Run to_srt on it to see why.")
+    if polish_odd or verbatim_odd:
+        return _refuse(f"a header block holds {polish_odd + verbatim_odd} line(s) "
+                       f"that are not `key: value`, so some of what the file "
+                       f"says may have been taken as header and not read. The "
+                       f"two sides cannot be lined up until that is settled — "
+                       f"run to_srt on each to see the block.")
     if polish_drops or verbatim_drops:
         # Reporting one side's count when both dropped understates the loss and
         # points the user at one of two broken files. On a branch whose subject
@@ -717,9 +811,18 @@ def differing_sample(rec_id: str) -> dict | None:
         return _refuse(f"the two versions have different cue counts "
                        f"({len(polished)} polished, {len(verbatim)} verbatim), so "
                        f"they cannot be lined up sentence by sentence.")
+    hidden = 0
     for (p_start, tidy), (v_start, raw) in zip(polished, verbatim):
         if p_start in ambiguous or v_start in ambiguous:
-            continue          # same timestamp twice: cannot say which is which
+            # Same timestamp twice: cannot say which is which. Count the ones
+            # that ACTUALLY differed — the refusal below used to fire on the
+            # mere existence of a duplicate, so two identical files with one
+            # repeated timestamp were told "every line that differs sits at an
+            # ambiguous timestamp" when no line differed at all. A refusal
+            # that describes a problem the file does not have sends somebody
+            # to fix nothing.
+            hidden += tidy != raw
+            continue
         if p_start != v_start:
             return _refuse(f"the two versions diverge at "
                            f"{format_timestamp(min(p_start, v_start))} — one has a "
@@ -727,7 +830,7 @@ def differing_sample(rec_id: str) -> dict | None:
                            f"point is the same moment.")
         if tidy != raw:
             return {"polished": tidy, "verbatim": raw}
-    if ambiguous:
+    if hidden:
         return _refuse(f"every line that differs sits at a timestamp the file "
                        f"uses more than once ({len(ambiguous)} such), so there is "
                        f"no pair that can be shown as certainly the same moment. "
@@ -867,7 +970,15 @@ def main() -> None:
         # being wrong costs a sentence, while the ledger's count, which is not a
         # judgement, still closes underneath it.
         odd = header_oddities(header)
-        if ate or odd or args.file:
+        # `args.file` used to force this too, on the grounds that a caller
+        # passing an arbitrary path may not know the file has a header. But
+        # the ledger already says `(N header)`, and SKILL.md now tells the
+        # operator to relay EVERY `⚠` — so an ordinary transcript produced a
+        # warning whose own text said nothing was wrong ("all of them are
+        # `key: value` lines, which is what a header holds"), and the operator
+        # was instructed to pass it on. A warning that fires when nothing is
+        # wrong teaches its reader to ignore warnings.
+        if ate or odd:
             # No conclusion in either branch. `ate` being empty means THE PARSER
             # DID NOT RECOGNISE THEM — it does not mean they were not content,
             # and the earlier wording said "which is what a header normally
@@ -896,9 +1007,17 @@ def main() -> None:
     # sentence: the cue counts as a cue, the line is not dropped, and until now
     # a time the producer wrote was thrown away while `build_cues` invented a
     # replacement from the next start.
-    for line in lost_ends:
+    # First few and a count, not one line per cue. This file's own convention
+    # everywhere else is "the first one, plus how many"; here it printed one
+    # line per affected cue, which on a long recording buries every other
+    # warning and on a hostile file is unbounded output from untrusted input.
+    for line in lost_ends[:_SAMPLE]:
         print(f"⚠ a declared end time was discarded and replaced with a guess: "
               f"{shape_of(line)}", file=sys.stderr)
+    if len(lost_ends) > _SAMPLE:
+        print(f"⚠ and {len(lost_ends) - _SAMPLE} more declared end(s) "
+              f"discarded — the count on the success line is the whole total.",
+              file=sys.stderr)
 
     if not segments:
         # The ledger, on the exit that never printed one. This branch used to
@@ -1031,13 +1150,21 @@ def main() -> None:
     # partial loss, in the tool written to end silent partial loss.
     stripped_chars = sum(c["stripped"] for c in built)
     if stripped_chars:
-        print(f"⚠ {stripped_chars} invisible character(s) were removed from the "
-              f"cue text — control, format or unassigned code points, which a "
-              f"subtitle has no use for and which can address the terminal or "
-              f"hide text. The words are otherwise unchanged.", file=sys.stderr)
+        # It said "invisible" and "the words are otherwise unchanged" for one
+        # round, while the rule it described was deleting assigned letters the
+        # running Python had not heard of. Both claims were false about the
+        # user's data, in the sentence whose job is to be true about it.
+        print(f"⚠ {stripped_chars} character(s) were removed from the cue text: "
+              f"control and format code points, which a subtitle has no use for "
+              f"and which can address the terminal or hide text, and repeated "
+              f"whitespace collapsed to one. Letters and punctuation are "
+              f"untouched.", file=sys.stderr)
     srt = render_srt(built, limits=cfg["srt_line_limits"])
-    for note in trims:
+    for note in trims[:_SAMPLE]:
         print(f"⚠ {note}", file=sys.stderr)
+    if len(trims) > _SAMPLE:
+        print(f"⚠ and {len(trims) - _SAMPLE} more cue end(s) corrected — the "
+              f"count on the success line is the whole total.", file=sys.stderr)
 
     # "content line(s)", not "timestamped line(s)". The count is of lines that
     # did not become cues, and after the inversion most of them carry no
@@ -1066,7 +1193,13 @@ def main() -> None:
     if lost_ends:
         parts.append(f"{len(lost_ends)} declared end(s) discarded — see stderr")
     if stripped_chars:
-        parts.append(f"{stripped_chars} invisible char(s) removed — see stderr")
+        parts.append(f"{stripped_chars} char(s) removed — see stderr")
+    if trims:
+        # A trim or a clamp REPLACES a time the producer wrote, which is the
+        # same kind of loss as a discarded end and was the only one still kept
+        # off the success line. On #50's own recording it is also the most
+        # frequent: thirty of them across the local corpus, ten in that file.
+        parts.append(f"{len(trims)} cue end(s) corrected — see stderr")
     note = f" ({', '.join(parts)})" if parts else ""
     if args.output:
         pathlib.Path(args.output).write_text(srt)

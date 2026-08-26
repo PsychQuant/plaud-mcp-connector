@@ -131,7 +131,8 @@ another one. What each means:
   look even when nothing else is reported. Without `-o` there is no success
   line — stdout is the subtitle file itself — so the same sentence arrives on
   stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
-- **`⚠ marked incomplete` on stderr** — the cache holds only part of this
+- **`is marked incomplete — these subtitles cover only the part that was
+  fetched` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
 - **`⚠ N line(s) … were taken as the file's header and not read`** — the block
@@ -142,6 +143,9 @@ another one. What each means:
   not summarise it down to N, and do not read a large N on its own as harmless.
   Usually this means a file with no header whose first line happens to be `---`,
   or a header whose closing delimiter is later than intended.
+- **`and more declared end(s) discarded`** / **`and more cue end(s)
+  corrected`** — only the first few of each are shown; the counts on the
+  success line are the whole total. Quote the total, not the examples.
 - **`⚠ a declared end time was discarded`** — the producer wrote an end for that
   cue and it could not be read, so the cue's duration is inferred instead. The
   words are all there; one timing is a guess that looks like a measurement.
@@ -154,6 +158,13 @@ another one. What each means:
   carries a shape the contract does not cover. Relay both halves and read the
   two numbers first. A one-sided guess sends somebody off to re-record a file
   that was fine.
+- **`character(s) were removed from the cue text`** — the words are all
+  there, but some characters in them were not: control and format code points,
+  which a subtitle cannot use and which can address the terminal or hide text,
+  and repeated whitespace collapsed to one. Letters and punctuation are
+  untouched. Worth relaying when the recording is in a script where invisible
+  characters carry meaning — the count is exact, so a large one on a short
+  recording is worth a look.
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.

@@ -121,6 +121,7 @@ false positives get manufactured.
 from __future__ import annotations
 
 import pathlib
+import ast
 import re
 import unittest
 
@@ -703,8 +704,18 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
     plausible-looking cue count kept going to stdout with exit 0 — which is
     precisely the shape of the "6 succeeded / 0 failed" report #50 opens with.
 
-    This test pins the correspondence rather than the wording: every warning
+    This class pins the correspondence rather than the wording: every warning
     the CLI can print must be findable in the skill that reads it.
+
+    That sentence was here for six rounds with **no test doing it**. The six
+    tests were one hardcoded warning, one walk in the REVERSE direction (every
+    string SKILL.md quotes must exist in the tool), one retired-wording check
+    and three enumeration-shape checks — none of them tool → skill. It was
+    already stale inside the round that wrote it: the tool had grown
+    `⚠ N character(s) were removed from the cue text` and the glossary did not
+    mention it, exactly the history the paragraph above recounts, with the
+    guard green. `test_every_warning_the_tool_emits_has_a_glossary_entry`
+    below is the sentence, as a test.
     """
 
     SKILL = pathlib.Path(__file__).resolve().parent.parent / "skills" / "plaud-srt" / "SKILL.md"
@@ -904,3 +915,147 @@ class TestStepFourQuotesToolOutputInBackticks(unittest.TestCase):
             f"reads backticks only. This is how "
             f"'most likely a recording without timestamps' survived in this "
             f"section after the tool stopped printing it.")
+
+
+class TestEveryWarningReachesTheGlossary(unittest.TestCase):
+    """Tool → skill. The direction the sibling class named and never walked.
+
+    Its docstring said "every warning the CLI can print must be findable in
+    the skill that reads it" while every test in it walked skill → tool. The
+    difference is not academic: the reverse direction catches a glossary that
+    quotes something retired, and only this direction catches a glossary that
+    is missing something new. #50's own history is the second kind twice over
+    — a warning added, the list not grown, and the fix's entire user-visible
+    output terminating at a line the operator's checklist said to skip.
+    """
+
+    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+    SCRIPT = REPO_ROOT / "scripts" / "to_srt.py"
+
+    def _warnings(self) -> list[str]:
+        """Every `⚠ …` the tool can print, from its syntax tree.
+
+        f-strings arrive in pieces; the interpolations are dropped and the
+        literal fragments joined, which is the same shape the sibling guard
+        compares against and for the same reason — the numbers differ per run
+        and the words do not.
+        """
+        tree = ast.parse(self.SCRIPT.read_text(encoding="utf-8"))
+        # `ast.walk` reaches a JoinedStr AND the Constants inside it, so the
+        # literal chunk before an interpolation — `⚠ and ` — arrived as a
+        # warning of its own and was too short to check. The named-exclusion
+        # assertion below is what surfaced it; a silent length filter would
+        # have swallowed a defect in the extractor as "nothing to see".
+        inside = {id(v) for node in ast.walk(tree)
+                  if isinstance(node, ast.JoinedStr) for v in node.values}
+        out = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.JoinedStr):
+                parts = [v.value for v in node.values
+                         if isinstance(v, ast.Constant) and isinstance(v.value, str)]
+            elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                  and id(node) not in inside):
+                parts = [node.value]
+            else:
+                continue
+            joined = " ".join("".join(parts).split())
+            if joined.startswith("⚠"):
+                out.append(joined)
+        return sorted(set(out))
+
+    #: A glossary fragment writes `N`, `M`, `K`, `H` and `…` where the tool
+    #: writes numbers and filenames, so the comparison is on the FIXED pieces
+    #: between them — the same treatment the sibling guard gives the reverse
+    #: direction, for the same reason.
+    PLACEHOLDER = re.compile(r"[NMKH]\b|…|\.\.\.|\d+|'[^']*'|<[^>]+>")
+
+    def _fixed_pieces(self, fragment: str) -> list[str]:
+        return [" ".join(p.split())
+                for p in self.PLACEHOLDER.split(" ".join(fragment.split()))]
+
+    def test_every_warning_the_tool_emits_has_a_glossary_entry(self):
+        # The WHOLE skill, not step 4. `⚠ no source comparison to show:` is
+        # documented in step 2's table, where it belongs — the property is
+        # that a warning is findable by the operator, not that every warning
+        # lives in one section.
+        #
+        # Fenced blocks come out FIRST. With ```` ``` ```` still in the text,
+        # `[^`]+` pairs a fence with the next stray backtick and swallows the
+        # single-backtick fragments between them into one blob — widening the
+        # search from one section to the file made every warning MISS, which
+        # is a guard reporting the opposite of the truth because of its own
+        # lexer. Caught only because three entries that had matched stopped
+        # matching; a check that had been failing all along would have looked
+        # like it was simply still failing.
+        whole = re.sub(r"```.*?```", " ", self.SKILL.read_text(encoding="utf-8"),
+                       flags=re.S)
+        pieces = [p for q in re.findall(r"`([^`]+)`", whole, re.S)
+                  for p in self._fixed_pieces(q) if len(p) >= 12]
+        missing, too_short = [], []
+        for warning in self._warnings():
+            # A wrapper like `print(f"⚠ {note}")` carries no words of its own;
+            # its sentences are built elsewhere and are checked there. Named
+            # rather than dropped, because a filter that quietly removes what
+            # it cannot judge is how these lists went stale before.
+            if len(warning) < 8:
+                too_short.append(warning)
+                continue
+            if not any(p in warning for p in pieces):
+                missing.append(warning)
+        self.assertEqual(
+            [], missing,
+            f"{len(missing)} warning(s) the tool can print have no entry in "
+            f"SKILL.md step 4: {missing}\n\nThe operator is a model reading "
+            f"that section. A signal absent from it is a signal that does not "
+            f"reach the user, which is the shape of #50 itself — a plausible "
+            f"cue count on stdout, exit 0, and the loss on a line nobody was "
+            f"told to look at.")
+        self.assertEqual(
+            ["⚠"], too_short,
+            f"the set of warnings this check cannot judge changed: {too_short}. "
+            f"Each one carries no words of its own, so it has to be checked "
+            f"wherever its sentences are actually built — decide that for the "
+            f"new one rather than letting it sit here unexamined.")
+
+    def _step4(self) -> str:
+        text = self.SKILL.read_text(encoding="utf-8")
+        return text[text.index("### 4. Report honestly"):
+                    text.index("## How the timing works")]
+
+    def test_the_guard_can_actually_fail(self):
+        """A guard whose oracle is empty passes everything."""
+        self.assertGreaterEqual(
+            len(self._warnings()), 5,
+            "the extractor found almost no warnings, so the check above is "
+            "vacuous — it would pass an empty glossary")
+
+
+class TestEveryWarningInTheSkillIsQuotedWhereTheGuardsCanSeeIt(unittest.TestCase):
+    """`⚠` in prose is a claim about tool output. It has to be in backticks.
+
+    The skill → tool guard reads backtick fragments; the tool → skill guard
+    matches against them. A `⚠` sentence written as plain prose, or in ASCII
+    or curly quotes, is invisible to both — so a retired warning can sit in
+    the file, and a new one can be missing from it, with everything green.
+
+    Round 16 closed one character of this (ASCII double quotes in step 4) and
+    round 17 pointed out that single quotes, curly quotes and unquoted prose
+    reopen the same hole. Enumerating quote characters is the losing move.
+    Requiring the one form the guards can read is not.
+    """
+
+    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+
+    def test_no_warning_text_sits_outside_backticks(self):
+        text = re.sub(r"```.*?```", " ", self.SKILL.read_text(encoding="utf-8"),
+                      flags=re.S)
+        # Blank out every backticked span, then look for survivors.
+        outside = re.sub(r"`[^`]*`", " ", text)
+        stray = [line.strip() for line in outside.splitlines() if "⚠" in line]
+        self.assertEqual(
+            [], stray,
+            f"{len(stray)} line(s) mention ⚠ outside backticks: {stray}\n\n"
+            f"Both guards over this file read backtick fragments. Text that "
+            f"claims to be tool output and is not in backticks is checked by "
+            f"neither, which is how a retired message survived here for two "
+            f"rounds.")

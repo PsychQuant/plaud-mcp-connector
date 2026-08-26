@@ -146,8 +146,10 @@ through a filter:
   end times and removed characters, alongside the dropped-line count.
 - **`--preview-sources` declines more often, and says why.** It now refuses when
   either side dropped a line, when the two cue counts differ, when the timelines
-  diverge, and when a timestamp is used twice — cases where the pair it used to
-  show was two different moments.
+  diverge, and when every line that differs sits at a timestamp the recording
+  uses more than once — cases where the pair it used to show was two different
+  moments. A repeated timestamp on its own does not stop it: if some other line
+  differs at an unambiguous moment, that pair is shown.
 - **The `⚠ marked incomplete` warning can fire on the default path.** It read
   the transcript's frontmatter flag from whichever file was being subtitled,
   and the default is the polish, which has no frontmatter — so on the shipped

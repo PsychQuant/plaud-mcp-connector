@@ -82,10 +82,14 @@ _NUMBER_PATTERNS = {
     # Round 16. `lost_ends` and the stripped-character count reached stderr and
     # stopped; `refusal_dropped`'s sentence was reworded to name both sides.
     "lost_ends":         r"(\d+) declared end\(s\) discarded",
-    "stripped_ledger":   r"(\d+) invisible char\(s\) removed",
-    "stripped_warn":     r"⚠ (\d+) invisible character\(s\) were removed",
+    "stripped_ledger":   r"(\d+) char\(s\) removed",
+    "stripped_warn":     r"⚠ (\d+) character\(s\) were removed",
     "refusal_drop_a":    r"transcripts? dropped (\d+)",
     "refusal_drop_b":    r"transcripts dropped \d+ and (\d+)",
+    "refusal_header_odd": r"a header block holds (\d+) line\(s\)",
+    "corrections":       r"(\d+) cue end\(s\) corrected",
+    "more_ends":         r"and (\d+) more declared end\(s\)",
+    "more_trims":        r"and (\d+) more cue end\(s\) corrected",
     "shape_digits":      r"opens with '[^']*?d\{(\d+)\}",
     "shape_spaces":      r"opens with '[^']*?s\{(\d+)\}",
 }
@@ -279,6 +283,13 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
         )
         stripped = to_srt.strip_frontmatter(body)
         bracket_lines = sum(1 for line in stripped.splitlines() if line.startswith("["))
+        # The same floor its sibling got, for the same reason and two lines
+        # after the comment explaining it — zeroing `strip_frontmatter` makes
+        # this pass as 0 == 0 while claiming every bracket line became a cue.
+        # A fix applied to one of two identical constructs is half a fix.
+        self.assertEqual(2, bracket_lines,
+                         "the fixture's own bracket lines went missing, so the "
+                         "comparison below would compare nothing to nothing")
         self.assertEqual(bracket_lines, len(to_srt.parse_segments(stripped)))
 
 
@@ -1335,13 +1346,43 @@ class TestWrapCueText(unittest.TestCase):
 
     def test_no_content_is_lost_for_any_script(self):
         """Checked per script, because "same content" means different things.
-        Latin wraps AT a space, so the newline replaces one — compare tokens.
-        CJK wraps BETWEEN characters with no space involved, so replacing the
-        newline with a space would invent one — compare the raw string."""
-        for text in ["a b c " * 30, "hello"]:
-            self.assertEqual(text.split(), to_srt.wrap_cue_text(text).replace("\n", " ").split(), text)
+        Latin wraps AT a space, so the newline replaces one. CJK wraps BETWEEN
+        characters with no space involved, so replacing the newline with a
+        space would invent one.
+
+        EXACT comparisons. This asserted
+        `text.split() == wrap(text).replace("\n", " ").split()` for four
+        rounds — `.split()` is the transformation under test, applied to the
+        REFERENCE as well as the output, so whitespace collapse and tab
+        deletion were invisible to it by construction and it could not fail on
+        the loss its own name promises to catch. The CJK half two lines below
+        was already exact and would have gone red immediately; the weaker
+        oracle sat on precisely the branch where the loss happened.
+        """
+        for text in ["a b c " * 30, "hello", "a\u00a0b " * 20]:
+            text = text.strip()
+            self.assertEqual(
+                text, to_srt.wrap_cue_text(text).replace("\n", " "),
+                f"the latin wrap lost or altered something: {text!r}")
         for text in ["預算" * 40, "よろしく" * 20]:
             self.assertEqual(text, to_srt.wrap_cue_text(text).replace("\n", ""), text)
+
+    def test_the_wrap_cannot_produce_a_blank_line_inside_a_cue(self):
+        """A blank line is SRT's cue terminator, so one inside a cue truncates
+        it in every player. The CJK branch breaks by width with no regard for
+        content, so a run of `limit` separators became exactly that — and
+        ffmpeg dropped everything after it while the tool said `wrote N cues`
+        and exited 0. #50's own signature, one layer below the line ledger."""
+        for raw in ["你好" + "\u3000" * 44 + "世界", "a" + " " * 90 + "b",
+                    "\u3000" * 60, "預算" * 40]:
+            collapsed, _ = to_srt.collapse_runs(to_srt.sanitise(raw)[0])
+            if not collapsed:
+                continue
+            for line in to_srt.wrap_cue_text(collapsed).split("\n"):
+                self.assertTrue(
+                    line.strip(),
+                    f"a whitespace-only line inside the cue terminates it: "
+                    f"{raw[:20]!r} -> {to_srt.wrap_cue_text(collapsed)!r}")
 
     def test_wrapping_is_applied_when_rendering(self):
         cues = [{"start": 0.0, "end": 4.0,
@@ -2018,8 +2059,17 @@ class TestEveryPreviewRefusalNamesItsCause(unittest.TestCase):
                     proc = subprocess.run(
                         [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
                         capture_output=True, text=True, env=cli_env(cache))
-                if proc.returncode != 3:
-                    continue          # this case produced a pair; not a refusal
+                # `continue` here meant a case that STOPPED refusing was
+                # silently dropped from the property — all six could turn into
+                # pairs and this would still pass. Every case in the table is
+                # chosen because it has nothing to offer; if one starts
+                # offering something, that is the finding, not an exemption.
+                self.assertEqual(
+                    3, proc.returncode,
+                    f"{label!r} no longer refuses — it returned "
+                    f"{proc.returncode} with {proc.stdout!r}. Either the case "
+                    f"is no longer causeless, or the tool now shows a pair it "
+                    f"cannot justify; decide which rather than skipping it")
                 self.assertTrue(
                     proc.stderr.strip(),
                     f"exit 3 for {label!r} with nothing on stderr. The operator "
@@ -2590,8 +2640,16 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             "numbers_in: lost_ends",
         ("main", "header", "len(header)"):
             "numbers_in: header (the ledger)",
-        ("main", "invisible char(s) removed — see stderr", "stripped_chars"):
+        ("differing_sample", "a header block holds line(s) that are not `key", "polish_odd + verbatim_odd"):
+            "numbers_in: refusal_header_odd",
+        ("main", "char(s) removed — see stderr", "stripped_chars"):
             "numbers_in: stripped_ledger",
+        ("main", "cue end(s) corrected — see stderr", "len(trims)"):
+            "numbers_in: corrections",
+        ("main", "⚠ and more declared end(s) discarded — the cou", "len(lost_ends) - _SAMPLE"):
+            "numbers_in: more_ends",
+        ("main", "⚠ and more cue end(s) corrected — the count on", "len(trims) - _SAMPLE"):
+            "numbers_in: more_trims",
         ("main", "of the content lines DID carry a timestamp and", "len(stamped)"):
             "numbers_in: zero_stamped",
         ("main", "wrote cues to stdout", "len(segments)"):
@@ -2602,7 +2660,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             "numbers_in: header_odd",
         ("main", "— of them would have parsed as cues (first: )", "len(ate)"):
             "numbers_in: header_ate",
-        ("main", "⚠ invisible character(s) were removed from the", "stripped_chars"):
+        ("main", "⚠ character(s) were removed from the cue text:", "stripped_chars"):
             "numbers_in: stripped_warn",
         ("main", "⚠ line(s) in were taken as the file's header a", "len(header)"):
             "numbers_in: header_all",
@@ -2620,6 +2678,8 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         # redaction widths, the numbers round 2 introduced so that digits could
         # be described without being published. The classification is hand-made
         # for exactly this reason.
+        ("_refuse", "⚠ no source comparison to show:", "why"):
+            "TestEveryRefusalCauseIsPinned",
         ("shape_of", "d{}", "j - i"): "numbers_in: shape_digits",
         ("shape_of", "s{}", "j - i"): "numbers_in: shape_spaces",
     }
@@ -2630,7 +2690,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
     UNCHECKED = {
         ("<module>", "\\A(?:)\\Z", "_STAMP"):                     "regex assembly, not output",
         ("<module>", "^\\[\\s*(?P<ts>)\\s*(?:-\\s*(?P<end>[^\\]]*?)\\s*)?\\", "_STAMP"): "regex assembly",
-        ("_refuse", "⚠ no source comparison to show:", "why"):     "the cause sentence; each caller's wording is tested",
+
         ("build_cues", ":", "speaker"):                            "the speaker label itself",
         ("build_cues", ":", "text"):                               "the cue words themselves",
         ("build_cues", "cue at to —", "what"):                     "which correction, tested by name",
@@ -2717,6 +2777,39 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             f"starts granting coverage to nothing.")
         self.assertEqual(set(), set(self.CHECKED) & set(self.UNCHECKED),
                          "a site cannot be both checked and unchecked")
+
+    def test_the_tool_builds_messages_only_with_f_strings(self):
+        """What makes the census above exhaustive rather than merely large.
+
+        The detector walks `ast.JoinedStr`. That is a positive enumeration of
+        string-construction SYNTAX: a count printed with `.format()`, with `%`,
+        or by concatenation is forced into neither bucket and is not reported
+        as unmutatable either — the same shape as the expression-spelling
+        filter this class was inverted to remove, one level up.
+
+        Widening the detector to every way Python can build a string is the
+        losing move; there is always another. Narrowing the LANGUAGE is not:
+        the tool uses one construction, so walking that one is total. This
+        test is what turns the census from a sample into a survey.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        offenders = []
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "format"):
+                offenders.append(f"line {node.lineno}: .format()")
+            if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod)
+                    and isinstance(node.left, ast.Constant)
+                    and isinstance(node.left.value, str)):
+                offenders.append(f"line {node.lineno}: %-formatting")
+        self.assertEqual(
+            [], offenders,
+            f"{offenders}\n\nMessages are built with f-strings here, and the "
+            f"registry above walks f-strings. A message built any other way is "
+            f"invisible to it — not flagged, not registered, not reported as "
+            f"unmutatable. Use an f-string, or widen the detector and this "
+            f"test together.")
 
     def test_every_registration_names_something_that_exists(self):
         """The teeth. An entry may not point at nothing.
@@ -3030,3 +3123,271 @@ class TestControlCharactersNeverReachTheOutput(unittest.TestCase):
         self.assertIn("我們把預算拆成兩期 — 好嗎？ 🎧",
                       proc.stdout.replace("\n", ""),
                       f"the sanitiser mangled ordinary text: {proc.stdout!r}")
+
+
+class TestCueTextIsAccountedForCharacterByCharacter(unittest.TestCase):
+    """The closure the line ledger has, at the unit the losses kept escaping to.
+
+    `TestEveryLineEndsInExactlyOneReportableBucket` closes the accounting at
+    the LINE unit: cues plus dropped plus header is every non-blank input
+    line. There was no equivalent at the character unit, which is why the same
+    defect landed twice one level down — round 15 found `sanitise` deleting
+    joiners with no count, round 17 found `wrap_cue_text` deleting tabs and
+    collapsing spaces with no count, both while the line ledger closed.
+
+    The property is not "nothing changes" — normalising whitespace in a
+    subtitle is correct. It is that **the count is zero if and only if nothing
+    changed**, which is exactly what a silent transform violates and what no
+    enumeration of transforms can go stale on.
+    """
+
+    def _cue(self, text: str, speaker: str = "") -> dict:
+        return to_srt.build_cues(
+            [{"start": 0.0, "end": None, "speaker": speaker, "text": text}])[0]
+
+    def test_the_count_is_zero_exactly_when_the_text_is_unchanged(self):
+        cases = [
+            "plain words with single spaces",
+            "你好世界",
+            "emoji 👨‍👩‍👧 family",          # ZWJ is kept
+            "می‌خواهم",                             # ZWNJ is kept
+            "word\tafter-tab",
+            "double  spaces",
+            "  padded  ",
+            "bell\x07inside",
+            "ideographic　space",
+            "a" + "　" * 44 + "b",
+        ]
+        for text in cases:
+            with self.subTest(text=text[:24]):
+                out = self._cue(text)
+                unchanged = out["text"] == text
+                self.assertEqual(
+                    unchanged, out["stripped"] == 0,
+                    f"the count and the text disagree about whether anything "
+                    f"happened: {text!r} -> {out['text']!r}, "
+                    f"stripped={out['stripped']}")
+
+    def test_the_speakers_own_changes_are_counted_too(self):
+        out = self._cue("words", speaker="spea\tker")
+        self.assertEqual("spea ker: words", out["text"])
+        self.assertEqual(1, out["stripped"],
+                         "a change inside the speaker label is still a change "
+                         "to the cue text the user reads")
+
+    def test_no_separator_is_deleted_into_a_word_that_nobody_said(self):
+        """Removing a tab rather than normalising it joins the words on either
+        side. `word\\tafter` became `wordafter` for the length of one fix."""
+        out = self._cue("word\tafter")
+        self.assertEqual("word after", out["text"])
+
+
+class TestEveryRefusalCauseIsPinned(unittest.TestCase):
+    """All eight causes, because half of them were pinned by nothing.
+
+    The registry carried this interpolation as UNCHECKED with the reason
+    "the cause sentence; each caller's wording is tested" — a falsifiable
+    claim, and false. Replacing four of the eight sentences with the word
+    `banana` left all 607 tests green: the no-polish, polish-empty,
+    no-cues and identical causes were read by no assertion at all.
+
+    That matters more than a wording detail because SKILL.md stopped
+    enumerating these causes in round 7 and now tells the operator to **read
+    the sentence** and decide from it — relay it if it points at something the
+    user should fix, stay quiet if it does not. The two branches named there as
+    "stay quiet" (no polish, identical versions) were two of the four nobody
+    checked. A closed list was replaced by a contract on sentences, and half
+    the contract was unenforced.
+    """
+
+    def _preview(self, polish, verbatim, *, header="id: abc123"):
+        """`header` is a parameter because one cause lives IN the header.
+
+        It was easier to drop the header-oddity case from the table below than
+        to reach it through a helper that always wrote its own frontmatter —
+        and a case quietly missing from a table called "all eight causes" is
+        the failure this whole class is about.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                f"---\n{header}\n---\n" + verbatim, encoding="utf-8")
+            if polish is not None:
+                (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    CAUSES = {
+        "no polish":     (None, "[00:00] S: a\n", "has no polished version"),
+        "polish empty":  ("", "[00:00] S: a\n", "empty or produced no cues"),
+        "no cues":       ("[00:00] S: a\n", "nothing parseable here\n",
+                          "produced no cues, so there is nothing to compare"),
+        "identical":     ("[00:00] S: a\n", "[00:00] S: a\n",
+                          "the two versions are identical"),
+        "dropped":       ("[99999:00] S: a\n[00:00] S: b\n", "[00:00] S: b\n",
+                          "transcript dropped"),
+        "cue counts":    ("[00:00] S: a\n[00:10] S: b\n", "[00:00] S: a\n",
+                          "different cue counts"),
+        "diverge":       ("[00:01] S: a\n[00:11] S: b\n",
+                          "[00:00] S: a\n[00:10] S: b\n", "diverge at"),
+        "ambiguous":     ("[00:00] S: A\n[00:00] S: B\n",
+                          "[00:00] S: a\n[00:00] S: b\n",
+                          "uses more than once"),
+    }
+
+    #: The one cause that lives in the header rather than the body.
+    HEADER_CAUSE = ("[00:00] S: a\n", "[00:00] S: a\n",
+                    "id: abc123\n# a note somebody left in the header",
+                    "a header block holds")
+
+    def test_the_header_cause_says_its_own_thing(self):
+        polish, verbatim, header, phrase = self.HEADER_CAUSE
+        proc = self._preview(polish, verbatim, header=header)
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertIn(phrase, proc.stderr, proc.stderr)
+
+    def test_each_cause_says_its_own_thing(self):
+        for label, (polish, verbatim, phrase) in self.CAUSES.items():
+            with self.subTest(cause=label):
+                proc = self._preview(polish, verbatim)
+                self.assertEqual(3, proc.returncode,
+                                 f"{label}: expected a refusal, got "
+                                 f"{proc.returncode} / {proc.stdout!r}")
+                # `assertIn` ONCE, not merely at all. Tripling the cause
+                # string leaves every substring assertion green — the sentence
+                # says the same thing three times and `in` cannot tell. Found
+                # by `tests/mutate.py`, which is the third time on this branch
+                # that an assertion turned out to test a property weaker than
+                # the one its name claims.
+                self.assertEqual(
+                    1, proc.stderr.count(phrase),
+                    f"{label}: expected the cause exactly once. SKILL.md tells "
+                    f"the operator to decide whether to relay this from the "
+                    f"sentence itself, so a sentence that describes the wrong "
+                    f"cause — or says the right one three times — is a wrong "
+                    f"instruction: {proc.stderr!r}")
+                self.assertEqual(
+                    1, proc.stderr.count("no source comparison to show"),
+                    f"{label}: one refusal, one line: {proc.stderr!r}")
+
+    def test_the_causes_are_distinguishable_from_each_other(self):
+        """Eight sentences that all matched would pin nothing."""
+        seen = {}
+        cases = [(l, p, v, None) for l, (p, v, _) in self.CAUSES.items()]
+        cases.append(("header oddity", self.HEADER_CAUSE[0],
+                      self.HEADER_CAUSE[1], self.HEADER_CAUSE[2]))
+        for label, polish, verbatim, header in cases:
+            proc = (self._preview(polish, verbatim, header=header) if header
+                    else self._preview(polish, verbatim))
+            body = proc.stderr.split("show:", 1)[-1].strip()
+            self.assertNotIn(body, seen,
+                             f"{label} and {seen.get(body)} give the same "
+                             f"sentence, so neither is pinned by it")
+            seen[body] = label
+
+    def test_an_identical_pair_is_not_blamed_on_a_repeated_timestamp(self):
+        """Two identical files with one duplicate start said "every line that
+        differs sits at a timestamp used more than once" — when no line
+        differed. A refusal describing a problem the file does not have sends
+        somebody to fix nothing."""
+        proc = self._preview("[00:00] S: a\n[00:00] S: b\n",
+                             "[00:00] S: a\n[00:00] S: b\n")
+        self.assertIn("the two versions are identical", proc.stderr, proc.stderr)
+
+
+class TestRoundEighteensCountsAreCheckedToo(unittest.TestCase):
+    """The two counts this round adds, held to the standard before they ship."""
+
+    def _run(self, body: str, *args: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o",
+                 str(cache / "o.srt"), *args],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_corrections_reach_the_success_line_and_the_count_is_right(self):
+        """A trim or a clamp REPLACES a time the producer wrote — the same
+        kind of loss as a discarded end, and the only one still kept off the
+        success line. On #50's own recording it is also the most frequent."""
+        proc = self._run("---\nid: abc123\n---\n"
+                         "[00:20 - 09:59] S: one\n"
+                         "[00:10 - 00:30] S: two\n"
+                         "[00:40 - 09:59] S: three\n"
+                         "[00:45 - 00:50] S: four\n")
+        self.assertEqual(2, numbers_in(proc.stdout).get("corrections"),
+                         f"stdout: {proc.stdout!r}\nstderr: {proc.stderr!r}")
+
+    def test_a_file_needing_no_correction_says_nothing(self):
+        proc = self._run("---\nid: abc123\n---\n"
+                         "[00:00 - 00:05] S: one\n[00:10 - 00:15] S: two\n")
+        self.assertNotIn("corrected", proc.stdout, proc.stdout)
+
+    def test_the_header_oddity_refusal_counts_both_sides(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\n# one note\n# two notes\n---\n[00:00] S: a\n",
+                encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(
+                "---\n# a third\n---\n[00:00] S: A\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual(2, numbers_in(proc.stderr).get("refusal_header_odd"),
+                         f"only the transcript's header is read for oddities — "
+                         f"polish carries no frontmatter, so its `---` block is "
+                         f"content: {proc.stderr!r}")
+
+
+class TestTheSampledWarningsStateTheRemainder(unittest.TestCase):
+    """`and N more` is a count like any other, and it is the one a reader
+    subtracts. Round 18 capped two per-cue warnings at three examples; an
+    off-by-one in the remainder makes the samples and the ledger disagree,
+    which is worse than either alone."""
+
+    def _run(self, body: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_the_remainder_plus_the_examples_is_the_ledger_total(self):
+        body = "---\nid: abc123\n---\n" + "".join(
+            f"[{i:02d}:00 - 00:412] S: line {i}\n" for i in range(1, 9))
+        proc = self._run(body)
+        total = numbers_in(proc.stdout).get("lost_ends")
+        more = numbers_in(proc.stderr).get("more_ends")
+        shown = proc.stderr.count("a declared end time was discarded")
+        self.assertEqual(8, total, proc.stdout)
+        self.assertEqual(3, shown, proc.stderr)
+        self.assertEqual(5, more, proc.stderr)
+        self.assertEqual(total - shown, more,
+                         f"the examples and the remainder do not add up to the "
+                         f"ledger: {shown} shown + {more} more != {total}")
+
+    def test_corrections_are_sampled_the_same_way(self):
+        rows = []
+        for i in range(1, 7):
+            rows.append(f"[{i * 10:02d}:00 - 99:00] S: long {i}")
+            rows.append(f"[{i * 10:02d}:05 - {i * 10:02d}:09] S: next {i}")
+        proc = self._run("---\nid: abc123\n---\n" + "\n".join(rows) + "\n")
+        total = numbers_in(proc.stdout).get("corrections")
+        more = numbers_in(proc.stderr).get("more_trims")
+        shown = sum(1 for l in proc.stderr.splitlines() if l.startswith("⚠ cue at"))
+        # The ABSOLUTE total as well as the relationship. `total - shown ==
+        # more` is invariant under scaling both sides: tripling `trims` gives
+        # 3T and 3T-3, the equation still balances, and the assertion stays
+        # green while every number printed is wrong. A relational check needs
+        # an anchor or it checks arithmetic rather than data.
+        self.assertEqual(6, total, f"stdout: {proc.stdout!r}")
+        self.assertEqual(3, shown, proc.stderr)
+        self.assertEqual(total - shown, more,
+                         f"{shown} shown + {more} more != {total}")

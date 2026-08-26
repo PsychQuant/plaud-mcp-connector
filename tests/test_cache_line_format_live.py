@@ -77,10 +77,18 @@ from test_cache_line_format import to_srt  # noqa: E402  (same parser as the con
 # So: every non-blank line is content, and content that produced no cue is a
 # drift. No enumeration, nothing to widen, and no shape a producer can invent
 # that this cannot see.
-def content_lines(text: str) -> list[str]:
-    """Every non-blank line, minus a `---`-delimited header if one opens the file."""
+def content_lines(text: str, *, expect_frontmatter: bool = True) -> list[str]:
+    """Every non-blank line, minus a `---`-delimited header if one opens the file.
+
+    `expect_frontmatter` exists because the tool applies the same rule
+    conditionally: only the top-level transcript carries frontmatter, and
+    `cache.py` writes polish as a bare body. An oracle that strips a leading
+    `---` block from a polish file while the parser does not is comparing two
+    different documents, and the difference shows up as a cue-count mismatch
+    blamed on the parser.
+    """
     lines = text.splitlines()
-    if lines and lines[0].strip() == "---":
+    if expect_frontmatter and lines and lines[0].strip() == "---":
         for i in range(1, len(lines)):
             if lines[i].strip() == "---":
                 lines = lines[i + 1:]
