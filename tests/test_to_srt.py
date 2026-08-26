@@ -90,6 +90,10 @@ _NUMBER_PATTERNS = {
     "corrections":       r"(\d+) cue end\(s\) corrected",
     "more_ends":         r"and (\d+) more declared end\(s\)",
     "more_trims":        r"and (\d+) more cue end\(s\) corrected",
+    "emptied_ledger":    r"(\d+) empty cue\(s\) removed",
+    "emptied_warn":      r"⚠ (\d+) cue\(s\) held nothing but",
+    "preview_altered":   r"⚠ (\d+) character\(s\) in the two lines above",
+    "preview_more":      r"…\(\+(\d+) more characters",
     "shape_digits":      r"opens with '[^']*?d\{(\d+)\}",
     "shape_spaces":      r"opens with '[^']*?s\{(\d+)\}",
 }
@@ -2646,15 +2650,23 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             "numbers_in: stripped_ledger",
         ("main", "cue end(s) corrected — see stderr", "len(trims)"):
             "numbers_in: corrections",
+        ("main", "empty cue(s) removed — see stderr", "emptied"):
+            "numbers_in: emptied_ledger",
+        ("main", "⚠ cue(s) held nothing but control or format ch", "emptied"):
+            "numbers_in: emptied_warn",
+        ("main", "⚠ character(s) in the two lines above were rem", "sample['altered']"):
+            "numbers_in: preview_altered",
+        ("main", "…(+ more characters, not shown)", "len(line) - _PREVIEW_CAP"):
+            "numbers_in: preview_more",
         ("main", "⚠ and more declared end(s) discarded — the cou", "len(lost_ends) - _SAMPLE"):
             "numbers_in: more_ends",
         ("main", "⚠ and more cue end(s) corrected — the count on", "len(trims) - _SAMPLE"):
             "numbers_in: more_trims",
         ("main", "of the content lines DID carry a timestamp and", "len(stamped)"):
             "numbers_in: zero_stamped",
-        ("main", "wrote cues to stdout", "len(segments)"):
+        ("main", "wrote cues to stdout", "len(built)"):
             "numbers_in: cues, streaming",
-        ("main", "wrote cues →", "len(segments)"):
+        ("main", "wrote cues →", "len(built)"):
             "numbers_in: cues, -o",
         ("main", "— of them are not `key: value` lines, so this ", "len(odd)"):
             "numbers_in: header_odd",
@@ -2689,7 +2701,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
     # is text whose exact content no caller computes with.
     UNCHECKED = {
         ("<module>", "\\A(?:)\\Z", "_STAMP"):                     "regex assembly, not output",
-        ("<module>", "^\\[\\s*(?P<ts>)\\s*(?:-\\s*(?P<end>[^\\]]*?)\\s*)?\\", "_STAMP"): "regex assembly",
+        ("<module>", "^\\[\\s*(?P<ts>)\\s*(?:-(?P<end>[^\\]]*))?\\]\\s*(?:", "_STAMP"): "regex assembly",
 
         ("build_cues", ":", "speaker"):                            "the speaker label itself",
         ("build_cues", ":", "text"):                               "the cue words themselves",
@@ -2711,8 +2723,9 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("main", "note: could not read to check whether this rec", "exc.strerror"): "an OS message",
         ("main", "note: could not read to check whether this rec", "transcript.name"): "a filename",
         ("main", "of the content lines DID carry a timestamp and", "shape_of(stamped[0])"): "a shape",
-        ("main", "polished:", "sanitise(sample['polished'])[0]"):   "the sampled line itself",
-        ("main", "verbatim:", "sanitise(sample['verbatim'])[0]"):   "the sampled line itself",
+        ("main", ":", "label"):  "which of the two sources this line is",
+        ("main", ":", "shown"):  "the sampled line itself, already capped",
+        ("main", ":", "tail"):   "the composed overflow clause; its count is checked",
         ("main", "wrote cues to stdout", "note"):                   "the ledger, checked clause by clause",
         ("main", "wrote cues →", "note"):                           "the ledger, checked clause by clause",
         ("main", "wrote cues →", "str(args.output)"):               "the output path",
@@ -3391,3 +3404,199 @@ class TestTheSampledWarningsStateTheRemainder(unittest.TestCase):
         self.assertEqual(3, shown, proc.stderr)
         self.assertEqual(total - shown, more,
                          f"{shown} shown + {more} more != {total}")
+
+
+class TestRoundTwentysCountsAreCheckedToo(unittest.TestCase):
+    """The four counts this round adds, pinned before they ship."""
+
+    def _run(self, body: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def _preview(self, polish: str, verbatim: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\n---\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_cues_that_hold_nothing_are_removed_and_counted(self):
+        body = ("---\nid: abc123\n---\n"
+                f"[00:01] S: {chr(0x200b)}{chr(0x7)}\n"
+                "[00:10] S: real words\n"
+                f"[00:20] S: {chr(0xfeff)}\n")
+        proc = self._run(body)
+        self.assertEqual(2, numbers_in(proc.stdout).get("emptied_ledger"),
+                         f"stdout: {proc.stdout!r}")
+        self.assertEqual(2, numbers_in(proc.stderr).get("emptied_warn"),
+                         f"stderr: {proc.stderr!r}")
+        self.assertEqual(1, numbers_in(proc.stdout).get("cues"), proc.stdout)
+
+    def test_a_file_with_no_empty_cues_says_nothing(self):
+        proc = self._run("---\nid: abc123\n---\n[00:01] S: words\n")
+        self.assertNotIn("empty cue", proc.stdout + proc.stderr)
+
+    def test_the_preview_says_when_it_altered_what_it_shows(self):
+        proc = self._preview(f"[00:00] S: we{chr(0x9)}agreed\n",
+                             "[00:00] S: um we agreed\n")
+        self.assertEqual(1, numbers_in(proc.stderr).get("preview_altered"),
+                         f"stderr: {proc.stderr!r}")
+
+    def test_an_unaltered_preview_says_nothing(self):
+        proc = self._preview("[00:00] S: we agreed\n", "[00:00] S: um we agreed\n")
+        self.assertNotIn("before display", proc.stderr, proc.stderr)
+
+    def test_the_preview_is_capped_and_states_the_remainder(self):
+        long = "word " * 200
+        proc = self._preview(f"[00:00] S: {long}\n", "[00:00] S: um different\n")
+        more = numbers_in(proc.stdout).get("preview_more")
+        self.assertIsNotNone(more, f"stdout: {proc.stdout[:200]!r}")
+        shown = max(len(l) for l in proc.stdout.splitlines())
+        self.assertLess(shown, 400,
+                        f"the cap did not bound the line: {shown} chars")
+        polished_line = [l for l in proc.stdout.splitlines()
+                         if l.startswith("polished: ")][0]
+        body = polished_line[len("polished: "):].split(" …(+")[0]
+        self.assertEqual(len(body) + more, len(f"S: {long}".strip()),
+                         "shown + remainder must be the whole line")
+
+
+class TestTheClosureReachesTheFile(unittest.TestCase):
+    """Count the cues in the `.srt`, which is what #50 actually asked for.
+
+    The issue's requested regression test reads 「對每個 cache 檔，**`to_srt`
+    產出的** cue 數必須等於該檔中以 `[` 開頭的行數」 — the count in the
+    PRODUCED FILE. Every closure in this suite measured one layer earlier:
+    `test_local_corpus` calls `parse_transcript` and never renders;
+    `test_the_ledger_sums_to_every_non_blank_line` reads `wrote N cues` off
+    stdout, which was `len(segments)`; the character-unit closure asserts on
+    `build_cues(...)[0]`, before wrapping and before rendering.
+
+    Round 19 asked what unit was left and the answer was the file, and every
+    silent loss it found lived in exactly that unmeasured gap: a separator
+    splitting one line into two cues, a cue that rendered as an empty block,
+    the output written in the locale's encoding.
+
+    So this reads the bytes back off disk. It is the only assertion here whose
+    subject is the artifact rather than the tool's opinion of the artifact.
+    """
+
+    def _convert(self, body: str, *args: str) -> tuple:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(body, encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out), *args],
+                capture_output=True, text=True, env=cli_env(cache))
+            written = out.read_text(encoding="utf-8") if out.exists() else ""
+        return proc, written
+
+    @staticmethod
+    def _cues_in(srt: str) -> int:
+        return srt.count(" --> ")
+
+    def test_the_success_line_counts_the_cues_the_file_holds(self):
+        cases = {
+            "ordinary": "[00:01] S: one\n[00:20] S: two\n",
+            "past ninety-nine minutes":
+                "[100:05] S: one\n[446:12] S: two\n[00:01] S: three\n",
+            "a wordless cue among real ones":
+                f"[00:01] S: {chr(0x200b)}\n[00:10] S: real\n",
+            "a separator inside a cue":
+                f"[00:01] S: before{chr(0x2028)}after\n[00:20] S: next\n",
+            "a line that cannot parse":
+                "[00:01] S: one\n[9999:99] S: bad\n[00:20] S: two\n",
+        }
+        for label, body in cases.items():
+            with self.subTest(case=label):
+                proc, srt = self._convert("---\nid: abc123\n---\n" + body)
+                claimed = numbers_in(proc.stdout).get("cues")
+                self.assertEqual(
+                    self._cues_in(srt), claimed,
+                    f"{label}: stdout claims {claimed} cues, the file holds "
+                    f"{self._cues_in(srt)}. The success line is a claim about "
+                    f"the file.\nstdout: {proc.stdout!r}")
+
+    def test_no_cue_in_the_file_is_missing_its_text_line(self):
+        """A block with a blank text line is SRT's cue terminator sitting
+        inside a cue: some players show a blank flash, some read the file as
+        malformed from there on."""
+        proc, srt = self._convert(
+            "---\nid: abc123\n---\n"
+            f"[00:01] S: {chr(0x200b)}{chr(0x7)}\n[00:10] S: real words\n")
+        for block in [b for b in srt.split("\n\n") if b.strip()]:
+            lines = block.splitlines()
+            self.assertGreaterEqual(len(lines), 3, f"short block: {block!r}")
+            self.assertTrue("".join(lines[2:]).strip(),
+                            f"a cue with no text reached the file: {block!r}")
+
+    def test_every_output_write_names_its_encoding(self):
+        """Checked in the SOURCE, because the runtime check cannot fail here.
+
+        `write_text` with no encoding uses the locale's, while the cache is
+        read as UTF-8 — so on a non-UTF-8 machine the subtitles are mojibake
+        or the write raises, for a file reported as `wrote N cues`.
+
+        The obvious test — run it under `LC_ALL=C` and read the file back —
+        was written first and **passed with the fix reverted**. macOS forces
+        `getpreferredencoding` to UTF-8, and PEP 538 coerces the C locale
+        elsewhere, so the defect cannot reproduce on this platform at all. A
+        test that cannot fail where it runs is not a test of the property; it
+        passes, it counts, and it makes the path look guarded.
+
+        So the property is asserted where it is decidable: no call that writes
+        output may omit `encoding`.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        bare = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in ("write_text", "read_text", "open"):
+                continue
+            if not any(k.arg == "encoding" for k in node.keywords):
+                bare.append(f"line {node.lineno}: .{node.func.attr}()")
+        self.assertEqual(
+            [], bare,
+            f"{bare}\n\nEach of these uses the locale's encoding while the "
+            f"cache is UTF-8. The mismatch is invisible on macOS and silent on "
+            f"the machines where it is not.")
+
+    def test_the_words_survive_a_round_trip(self):
+        """Weaker than its neighbour above and honest about it: this cannot
+        fail on macOS. It stays because it would catch a mangling that has
+        nothing to do with the locale."""
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\n---\n[00:01] S: 講者說了什麼\n", encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+            self.assertEqual(0, proc.returncode, proc.stderr)
+            self.assertIn("講者說了什麼", out.read_text(encoding="utf-8"),
+                          "the words did not survive the write")
+
+    def test_one_separator_does_not_become_two_subtitles(self):
+        """`str.splitlines()` breaks on five characters this format does not
+        use as line breaks. One of them inside a cue produced a second cue —
+        a subtitle nobody said, with the ledger balancing and exit 0."""
+        for cp in (0x2028, 0x2029, 0x85, 0x0B, 0x0C):
+            with self.subTest(sep=hex(cp)):
+                proc, srt = self._convert(
+                    "---\nid: abc123\n---\n"
+                    f"[00:00] S: before{chr(cp)}[00:05] S: fabricated\n")
+                self.assertEqual(
+                    1, self._cues_in(srt),
+                    f"U+{cp:04X} split one transcript line into "
+                    f"{self._cues_in(srt)} cues: {srt!r}")

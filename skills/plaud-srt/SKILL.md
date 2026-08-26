@@ -158,6 +158,15 @@ another one. What each means:
   carries a shape the contract does not cover. Relay both halves and read the
   two numbers first. A one-sided guess sends somebody off to re-record a file
   that was fine.
+- **`cue(s) held nothing but control or format characters and were removed`** —
+  a cue whose entire text was invisible. Dropping it is right (an SRT block
+  with no text line is a blank flash in some players and malformed in others),
+  but it means the cue count is one lower than the cache's line count, so
+  relay it whenever the two are being compared.
+- **`character(s) in the two lines above were removed or normalised before
+  display`** — appears beside `--preview-sources`. The two lines you are about
+  to quote are not byte-for-byte what the cache holds. The words are unchanged;
+  say so if the user is choosing on the strength of punctuation or spacing.
 - **`character(s) were removed from the cue text`** — the words are all
   there, but some characters in them were not: control and format code points,
   which a subtitle cannot use and which can address the terminal or hide text,
