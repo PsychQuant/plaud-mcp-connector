@@ -69,6 +69,15 @@ _NUMBER_PATTERNS = {
     "zero_head":  r"\n\d+ content line\(s\) and (\d+) header",
     "warn_bad":   r"⚠ (\d+) of \d+ content lines",
     "warn_all":   r"⚠ \d+ of (\d+) content lines",
+    # The four `differing_sample` refusals and the zero-cue `stamped` branch.
+    # Round 12 declared "every count" while these five had neither a pattern
+    # nor any mention in tests/ — `grep` for their sentences returned nothing.
+    "zero_stamped":      r"\. (\d+) of the content lines DID carry",
+    "refusal_dropped":   r"transcript dropped (\d+) line\(s\)",
+    "refusal_polished":  r"different cue counts \((\d+) polished",
+    "refusal_verbatim":  r"different cue counts \(\d+ polished, (\d+) verbatim",
+    "refusal_ambiguous": r"uses more than once \((\d+) such\)",
+    "header_odd":        r"— (\d+) of them are not `key: value` lines",
 }
 
 
@@ -2299,9 +2308,10 @@ class TestNoDiagnosticAssertsMoreThanItMeasured(unittest.TestCase):
         self.assertNotIn("which is what a header normally holds", proc.stderr,
                          f"the sentence reassured about lines that are speech: "
                          f"{proc.stderr!r}")
-        self.assertIn("says nothing about whether they were speech", proc.stderr,
-                      f"the sentence draws a conclusion its test cannot support: "
-                      f"{proc.stderr!r}")
+        self.assertIn("not `key: value` lines", proc.stderr,
+                      f"a bullet-prefixed line is not `key: value`, so the header "
+                      f"is not the shape cache.py writes and the message should "
+                      f"say which lines make it so: {proc.stderr!r}")
 
 
 class TestNoPathReachesAStreamUnescaped(unittest.TestCase):
@@ -2454,3 +2464,284 @@ class TestEveryPrintedCountIsChecked(unittest.TestCase):
         got = numbers_in(proc.stderr)
         self.assertEqual(2, got.get("warn_bad"), f"{proc.stderr!r}")
         self.assertEqual(3, got.get("warn_all"), f"{proc.stderr!r}")
+
+
+class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
+    """The check that makes "every printed value is checked" verifiable.
+
+    That claim has been made three times and been a proper subset three times —
+    round 10 covered one surface of three, round 12 four of eight, each declared
+    complete. The reason was mechanical and is worth naming: the evidence was a
+    mutation matrix built from `_NUMBER_PATTERNS`' own key set, so it enumerated
+    what the extractor covered and could never find what it omitted. **The
+    evidence and the claim were the same object.**
+
+    This is the other direction. It reads the tool's AST, finds every value-
+    bearing interpolation that reaches a stream, and requires each one to be
+    registered below with the assertion that covers it. A new `print` with a
+    count in it turns the suite red until somebody says where it is checked.
+
+    It cannot prove an assertion is a good one. It can prove no site was
+    forgotten, which is the failure this branch has actually had.
+    """
+
+    # Keyed on the MESSAGE, not on (function, expression).
+    #
+    # The first version keyed on the function and the expression, so a NEW print
+    # in `main` reusing `len(segments)` was already "registered" by an existing
+    # entry and slipped straight through — the same too-coarse-a-key shape this
+    # branch has hit repeatedly, in the guard written to end it. Caught by
+    # testing the guard's own teeth rather than by reading it.
+    #
+    # The key is the first stretch of the message's literal text, which
+    # identifies the sentence and survives the line moving.
+    COVERED = {
+        ("build_cues", "cue at to —", "format_timestamp(end)"):
+            "TestEveryCorrectionReachesSomebody.test_the_reported_end_is_the_one_actually_written",
+        ("build_cues", "cue at to —", "format_timestamp(seg['start'])"):
+            "TestEveryCorrectionReachesSomebody",
+        ("differing_sample", "every line that differs sits at a timestamp th", "len(ambiguous)"):
+            "numbers_in: refusal_ambiguous",
+        ("differing_sample", "the transcript dropped line(s), so the two sid", "n"):
+            "numbers_in: refusal_dropped",
+        ("differing_sample", "the two versions diverge at — one has a segmen", "format_timestamp(min(p_start, v_start))"):
+            "TestEveryPreviewRefusalNamesItsCause.test_differing_timelines_say_so_rather_than_going_quiet",
+        ("differing_sample", "the two versions have different cue counts ( p", "len(polished)"):
+            "numbers_in: refusal_polished",
+        ("differing_sample", "the two versions have different cue counts ( p", "len(verbatim)"):
+            "numbers_in: refusal_verbatim",
+        ("main", "content line(s) and header line(s) were presen", "len(dropped)"):
+            "numbers_in: zero_body",
+        ("main", "content line(s) and header line(s) were presen", "len(header)"):
+            "numbers_in: zero_head",
+        ("main", "content line(s) dropped — see stderr", "unparsed"):
+            "numbers_in: dropped",
+        ("main", "header", "len(header)"):
+            "numbers_in: header (the ledger)",
+        ("main", "of the content lines DID carry a timestamp and", "len(stamped)"):
+            "numbers_in: zero_stamped",
+        ("main", "wrote cues to stdout", "len(segments)"):
+            "numbers_in: cues, streaming",
+        ("main", "wrote cues →", "len(segments)"):
+            "numbers_in: cues, -o",
+        ("main", "— of them would have parsed as cues (first: )", "len(ate)"):
+            "numbers_in: header_ate",
+        ("main", "— of them are not `key: value` lines, so this ", "len(odd)"):
+            "numbers_in: header_odd",
+        ("main", "⚠ line(s) in were taken as the file's header a", "len(header)"):
+            "numbers_in: header_all",
+        ("main", "⚠ of content lines in did not parse as segment", "unparsed"):
+            "numbers_in: warn_bad",
+        ("main", "⚠ of content lines in did not parse as segment", "unparsed + len(segments)"):
+            "numbers_in: warn_all",
+        ("render_srt", "-->", "format_timestamp(cue['end'])"):   "TestRender",
+        ("render_srt", "-->", "format_timestamp(cue['start'])"): "TestRender",
+        ("render_srt", "-->", "n"):                              "TestRender: cue numbering",
+        ("shape_of", "chars, opens with", "len(line)"):
+            "TestTheWarningDoesNotPublishSomebodysWords",
+        ("shape_of", "d{}", "len(m.group(0))"):
+            "TestTheWarningDoesNotPublishSomebodysWords: the redaction width",
+    }
+
+    def test_every_value_bearing_interpolation_is_registered(self):
+        import ast
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        owner = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef):
+                for child in ast.walk(node):
+                    owner[id(child)] = node.name
+
+        found = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            literal = " ".join("".join(
+                v.value for v in node.values
+                if isinstance(v, ast.Constant) and isinstance(v.value, str)).split())[:46]
+            for value in node.values:
+                if not isinstance(value, ast.FormattedValue):
+                    continue
+                expr = ast.unparse(value.value)
+                if not (any(k in expr for k in ("len(", "unparsed", "format_timestamp"))
+                        or expr == "n"):
+                    continue
+                found.add((owner.get(id(node), "?"), literal, expr))
+
+        unregistered = found - set(self.COVERED)
+        self.assertEqual(
+            set(), unregistered,
+            f"{len(unregistered)} value(s) reach a stream with nothing recorded "
+            f"about how they are checked: {sorted(unregistered)}\n\n"
+            f"Register each in COVERED with the assertion that would fail if the "
+            f"value were wrong — and if there is no such assertion, write it "
+            f"first. Three rounds running, a claim that every printed value was "
+            f"checked turned out to cover a subset, because the evidence was "
+            f"built from the same list as the claim.")
+
+        stale = set(self.COVERED) - found
+        self.assertEqual(
+            set(), stale,
+            f"COVERED names {len(stale)} site(s) that no longer exist: "
+            f"{sorted(stale)}. A registry that outlives what it registers starts "
+            f"granting coverage to nothing.")
+
+
+class TestTheRefusalCountsAreCheckedToo(unittest.TestCase):
+    """The five counts round 12 declared covered and did not cover.
+
+    Four are in `differing_sample`'s refusals and one is the `stamped` branch of
+    the zero-cue diagnostic — the shape the README names by name. Mutating any
+    of them by +40 left the whole suite green, and `grep` for their sentences in
+    `tests/` returned nothing: not a wrong assertion, no assertion.
+    """
+
+    def _preview(self, polish: str, verbatim: str) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_the_drop_refusal_states_the_count(self):
+        proc = self._preview("[99999:00] S: bad\n[00:00] S: a\n[00:10] S: b\n",
+                             "[00:00] S: a\n[00:10] S: b\n")
+        self.assertEqual(1, numbers_in(proc.stderr).get("refusal_dropped"),
+                         f"{proc.stderr!r}")
+
+    def test_the_cue_count_mismatch_states_both_counts(self):
+        proc = self._preview("[00:00] S: a\n",
+                             "[00:00] S: a\n[00:10] S: b\n[00:20] S: c\n")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(1, got.get("refusal_polished"), f"{proc.stderr!r}")
+        self.assertEqual(3, got.get("refusal_verbatim"), f"{proc.stderr!r}")
+
+    def test_the_ambiguous_refusal_states_how_many(self):
+        proc = self._preview("[00:00] S: a\n[00:00] S: b\n",
+                             "[00:00] S: a\n[00:00] S: c\n")
+        self.assertEqual(1, numbers_in(proc.stderr).get("refusal_ambiguous"),
+                         f"{proc.stderr!r}")
+
+    def test_the_zero_cue_stamped_branch_states_the_count(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n"
+                "[99999:00] S: one\n[88888:00] S: two\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(cache / "o.srt")],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertEqual(2, numbers_in(proc.stderr).get("zero_stamped"),
+                         f"a file with two timestamped lines that none parsed: "
+                         f"{proc.stderr!r}")
+
+
+class TestRoundTwelvesOwnFixesArePinned(unittest.TestCase):
+    """Two of round 12's fixes were pinned by nothing.
+
+    Reverting the `--preview-sources` control-character sanitisation — that
+    commit's headline security fix — or the completeness-read crash guard left
+    all 584 tests green. Round 12 spent itself building an apparatus to detect
+    unpinned numbers and shipped two unpinned fixes in the same commit.
+
+    Caught by mutation, which is now the third round running where mutation
+    found what reading did not.
+    """
+
+    def test_the_preview_strips_control_characters(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n[00:00] S: um so the budget\n",
+                encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(
+                "[00:00] S: benign\x1b[2K\x1b[1A FORGED\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+        self.assertEqual(0, proc.returncode, f"{proc.stderr!r}")
+        self.assertNotIn("\x1b", proc.stdout,
+                         f"the preview handed a control sequence to the terminal, "
+                         f"and the operator quotes these lines to the user and "
+                         f"stores the answer: {proc.stdout!r}")
+
+    def test_an_unreadable_sibling_transcript_does_not_stop_the_conversion(self):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_bytes(
+                b"---\nid: abc123\ncomplete: true\n---\n\n\xff\xfe bad bytes\n")
+            (cache / "polish" / "abc123.md").write_text(
+                "[00:00] S: polished line\n", encoding="utf-8")
+            out = cache / "o.srt"
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "-o", str(out)],
+                capture_output=True, text=True, env=cli_env(cache))
+            # Inside the `with`. The first version checked existence after the
+            # tempdir had been removed and failed on its own cleanup.
+            written = out.exists()
+        self.assertNotIn("Traceback", proc.stderr,
+                         f"one bad byte in a file we are NOT converting took the "
+                         f"whole command down: {proc.stderr!r}")
+        self.assertTrue(written,
+                        "a valid polish file produced no .srt because the "
+                        "completeness check could not read its sibling")
+
+
+class TestControlCharactersNeverReachTheOutput(unittest.TestCase):
+    """`_CONTROL` guarded two diagnostics and left the conversion path raw.
+
+    A cue that parses perfectly and contains `\x1b[2K\x1b[1A` reached stdout
+    untouched when streaming — and without `-o`, stdout IS the terminal, which
+    the module docstring describes as ordinary usage. The comment that reasoned
+    about this considered the `.srt` file and stopped one case short, in the
+    same commit that fixed the streaming ledger.
+    """
+
+    BODY = ("---\nid: abc123\ncomplete: true\n---\n\n"
+            "[00:00] S: benign\x1b[2K\x1b[1A forged status line\n"
+            "[00:10] \u202eSpeaker: reversed\n")
+
+    def _run(self, *args: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(self.BODY, encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123",
+                 *[a.replace("{d}", str(cache)) for a in args]],
+                capture_output=True, text=True, env=cli_env(cache))
+            wrote = (cache / "o.srt").read_text() if (cache / "o.srt").exists() else ""
+            return proc, wrote
+
+    def test_streaming_stdout_is_clean(self):
+        proc, _ = self._run()
+        self.assertNotIn("\x1b", proc.stdout, f"{proc.stdout!r}")
+        self.assertNotIn("\u202e", proc.stdout, f"bidi override survived: {proc.stdout!r}")
+
+    def test_the_srt_file_is_clean(self):
+        _, wrote = self._run("-o", "{d}/o.srt")
+        self.assertNotIn("\x1b", wrote, f"{wrote!r}")
+        self.assertNotIn("\u202e", wrote,
+                         f"a subtitle file that reorders what displays it: {wrote!r}")
+
+    def test_ordinary_text_survives_intact(self):
+        """The strip must not eat CJK, emoji or punctuation."""
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "abc123.md").write_text(
+                "---\nid: abc123\ncomplete: true\n---\n\n"
+                "[00:00] 講者一: 我們把預算拆成兩期 — 好嗎？ 🎧\n", encoding="utf-8")
+            proc = subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123"],
+                capture_output=True, text=True, env=cli_env(cache))
+        # Newlines removed before comparing: long cues are WRAPPED (20 columns
+        # for CJK), which is deliberate and unrelated. The first version of this
+        # assertion read a line break as mangling.
+        self.assertIn("我們把預算拆成兩期 — 好嗎？ 🎧",
+                      proc.stdout.replace("\n", ""),
+                      f"the sanitiser mangled ordinary text: {proc.stdout!r}")

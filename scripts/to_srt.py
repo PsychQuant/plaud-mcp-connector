@@ -139,10 +139,22 @@ _STAMP_ONLY = re.compile(rf"\A(?:{_STAMP})\Z")
 CUE_SHAPED = re.compile(r"^[﻿\s]*[\[(]?\s*\d+\s*:\s*\d+")
 
 
-# Anything that could move a cursor, clear a line, or set a colour. Stripped
-# rather than escaped: the point is that untrusted transcript text must not be
-# able to address the terminal at all.
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+# Anything that could move a cursor, clear a line, set a colour, reorder what is
+# displayed, or hide itself. Stripped rather than escaped: the point is that
+# untrusted transcript text must not be able to address the terminal at all.
+#
+# C0/C1 alone was not that. Bidi overrides reorder a whole line — `\u202e` can
+# make a filename or a quoted cue read backwards — and zero-width characters
+# hide inside words. Both survived into the two outlets this expression was
+# introduced to protect, which is the recurring shape here: the class is named
+# correctly and drawn too small.
+_CONTROL = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f"      # C0 and C1
+    r"\u200b-\u200f"                        # zero-width, LRM/RLM
+    r"\u2028\u2029"                          # line/paragraph separators
+    r"\u202a-\u202e"                        # bidi embedding and overrides
+    r"\u2066-\u2069"                        # bidi isolates
+    r"\ufeff]")                              # BOM as a mid-text character
 
 
 def shape_of(line: str) -> str:
@@ -386,9 +398,21 @@ def build_cues(segments: list[dict], *, show_speaker: bool = True,
             warnings.append(
                 f"cue at {format_timestamp(seg['start'])} {what} to "
                 f"{format_timestamp(end)} — {why}")
-        text = seg["text"]
+        # Sanitised HERE, where every cue passes, rather than only at the two
+        # diagnostic outlets. `_CONTROL` was applied to `shape_of` and to
+        # `--preview-sources` and the normal conversion path was left raw, so a
+        # cue that parses perfectly and contains `\x1b[2K\x1b[1A` reached stdout
+        # untouched when streaming — and stdout IS the terminal without `-o`,
+        # which the module docstring describes as ordinary usage. The comment
+        # that reasoned about this considered the `.srt` file and stopped one
+        # case short, in the same commit that fixed the streaming ledger.
+        #
+        # The `.srt` gets the same treatment: a subtitle has no legitimate use
+        # for a cursor movement, and a file that carries one is a file that
+        # attacks whatever displays it next.
+        text = _CONTROL.sub("", seg["text"])
         if show_speaker and seg["speaker"]:
-            text = f"{seg['speaker']}: {text}"
+            text = f"{_CONTROL.sub('', seg['speaker'])}: {text}"
         cues.append({"start": seg["start"], "end": end, "text": text})
     return cues
 
@@ -744,7 +768,20 @@ def main() -> None:
     # kind AND the writer are both known.
     if header:
         ate = [line for line in header if SEGMENT.match(line)]
-        if ate or args.file:
+        # Speak whenever the header is not the shape `cache.py` writes, not only
+        # when its contents happen to be `SEGMENT`-shaped. An ordinary five-line
+        # frontmatter and one that had swallowed speech printed the SAME ledger
+        # and were both silent, so `(5 header)` carried no information: the
+        # number was arithmetically right and told nobody anything.
+        #
+        # `cache.py` writes `---`, then `key: value` lines, then `---`. A header
+        # holding anything else is a header worth a sentence — and that is a
+        # statement about the block's SHAPE, which is safe to make here because
+        # being wrong costs a sentence, while the ledger's count, which is not a
+        # judgement, still closes underneath it.
+        odd = [l for l in header
+               if l.strip() != "---" and not re.match(r"^[A-Za-z_][\w-]*\s*:", l)]
+        if ate or odd or args.file:
             # No conclusion in either branch. `ate` being empty means THE PARSER
             # DID NOT RECOGNISE THEM — it does not mean they were not content,
             # and the earlier wording said "which is what a header normally
@@ -753,12 +790,16 @@ def main() -> None:
             # stops the reader looking. This branch has made that trade twice
             # (round 5 turned silent deletion into silent fabrication), and both
             # times by reading "not recognised" as "not content".
-            detail = (f" — {len(ate)} of them would have parsed as cues "
-                      f"(first: {shape_of(ate[0])})"
-                      if ate else
-                      f" — none of them are shapes this parser accepts, which "
-                      f"says nothing about whether they were speech (first: "
-                      f"{shape_of(header[0])})")
+            if ate:
+                detail = (f" — {len(ate)} of them would have parsed as cues "
+                          f"(first: {shape_of(ate[0])})")
+            elif odd:
+                detail = (f" — {len(odd)} of them are not `key: value` lines, so "
+                          f"this block is not the header `cache.py` writes "
+                          f"(first: {shape_of(odd[0])})")
+            else:
+                detail = (" — all of them are `key: value` lines, which is what a "
+                          "header holds")
             print(f"⚠ {len(header)} line(s) in {path.name!r} were taken as the "
                   f"file's header and not read{detail}.\n"
                   f"  The header is the block from the first '---' to the next "

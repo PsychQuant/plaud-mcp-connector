@@ -776,7 +776,12 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
         step4 = text[text.index("### 4. Report honestly"):
                      text.index("## How the timing works")]
 
-        for quoted in re.findall(r"`([^`\n]+)`", step4):
+        # `[^`\n]+` could not see a quote spanning a line break, which is the
+        # third layer of this guard: round 12 narrowed the oracle and widened
+        # the input selection, and the INPUT REGEX was still too small. The
+        # sibling guard learned the same lesson in the same commit.
+        for quoted in re.findall(r"`([^`]+)`", step4, re.S):
+            quoted = " ".join(quoted.split())
             # Which quotes count as claims about output was itself a closed
             # list: `⚠` or `wrote `. `0 content line(s) were present` starts
             # with neither, so the retired wording round 11 found was skipped
