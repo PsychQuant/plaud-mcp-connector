@@ -57,6 +57,10 @@ import tempfile
 REPO = pathlib.Path(__file__).resolve().parent.parent
 REGISTRY_TEST = "TestNoValueReachesAStreamUnchecked"
 INJECT = "{name} = ({name} * 3) if hasattr({name}, '__len__') else ({name} + 40)"
+# For a `holder['key']` site: rebuild the holder with that one value moved.
+INJECT_SUB = ("{holder} = {{**{holder}, {key!r}: "
+              "(({holder}[{key!r}] * 3) if hasattr({holder}[{key!r}], '__len__') "
+              "else ({holder}[{key!r}] + 40))}}")
 # Failing this many tests is not what catching one wrong number looks like.
 BROAD = 25
 
@@ -72,6 +76,12 @@ NOT_A_LOCAL = set(dir(builtins)) | {
 
 def _plan(tree: ast.AST) -> tuple[list, list]:
     """(mutatable, unmutatable) — one entry per (function, name, statement)."""
+    # A module-level function is not a value. Rebinding `format_timestamp`
+    # makes it a local and the tool dies on the first call, which the round-21
+    # `UNMEASURED` verdict correctly refused to score as coverage — but the
+    # right answer is to mutate the VALUE at that site instead of giving up.
+    defined = {n.name for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
     parent, func = {}, {}
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
@@ -93,10 +103,36 @@ def _plan(tree: ast.AST) -> tuple[list, list]:
             if not isinstance(value, ast.FormattedValue):
                 continue
             expr = ast.unparse(value.value)
+            # A name used ONLY as `name[...]` is a container, not a value.
+            # Rebinding it replaces the dict and the tool dies on the next
+            # lookup — round 21's `UNMEASURED` verdict caught four sites in
+            # exactly that state. The value is the subscript, so that is what
+            # gets moved.
+            holders = {n.value.id for n in ast.walk(value.value)
+                       if isinstance(n, ast.Subscript)
+                       and isinstance(n.value, ast.Name)}
             names = sorted({n.id for n in ast.walk(value.value)
                             if isinstance(n, ast.Name)
-                            and n.id.islower() and n.id not in NOT_A_LOCAL})
-            if not names:
+                            and n.id.islower()
+                            and n.id not in NOT_A_LOCAL
+                            and n.id not in defined
+                            and n.id not in holders})
+            # `format_timestamp(cue['start'])` has no rebindable value name —
+            # only a function and a dict. The VALUE is the subscript, so
+            # mutate that: `cue = {**cue, 'start': cue['start'] + 40}` changes
+            # the number the site prints and leaves everything else standing.
+            subs = sorted({(n.value.id, n.slice.value)
+                           for n in ast.walk(value.value)
+                           if isinstance(n, ast.Subscript)
+                           and isinstance(n.value, ast.Name)
+                           and isinstance(n.slice, ast.Constant)
+                           and isinstance(n.slice.value, str)})
+            if subs:
+                for holder, key in subs:
+                    todo.append((func.get(id(node), "?"), expr,
+                                 f"{holder}[{key!r}]", stmt.lineno,
+                                 stmt.col_offset))
+            if not names and not subs:
                 skipped.append((func.get(id(node), "?"), expr,
                                 "no rebindable local name in the expression"))
                 continue
@@ -276,8 +312,12 @@ def main() -> int:
             if key in seen:
                 continue
             seen.add(key)
-            mutated = (lines[:at - 1] + [" " * col + INJECT.format(name=name)]
-                       + lines[at - 1:])
+            if name.endswith("']"):
+                holder, key = name.split("[", 1)
+                line = INJECT_SUB.format(holder=holder, key=key[1:-2])
+            else:
+                line = INJECT.format(name=name)
+            mutated = lines[:at - 1] + [" " * col + line] + lines[at - 1:]
             box.script.write_text("\n".join(mutated), encoding="utf-8")
             broke = box.still_runs()
             if broke is not None:
