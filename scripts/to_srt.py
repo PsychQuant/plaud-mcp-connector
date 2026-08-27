@@ -167,7 +167,7 @@ CUE_SHAPED = re.compile(r"^[﻿\s]*(?:[\[(][﻿\s]*)?\d+\s*:\s*\d+")
 # and a positive enumeration of a hostile input space always has a next member.
 #
 # So the RULE is negative — every character whose Unicode general category is a
-# control, format, surrogate, private-use, unassigned, or line/paragraph
+# control, format, surrogate, private-use, or line/paragraph
 # separator — and the EXEMPTIONS are a short closed list of characters that
 # carry text meaning.
 #
@@ -189,6 +189,16 @@ CUE_SHAPED = re.compile(r"^[﻿\s]*(?:[\[(][﻿\s]*)?\d+\s*:\s*\d+")
 # makes an incomplete rule safe here is not coverage but the COUNT — anything
 # it removes is reported, so being wrong is visible rather than silent. That
 # is the same argument as the exemption list below, in the other direction.
+#
+# Two things measured rather than assumed, because dropping `Cn` was read as
+# reopening the Tag block and it is worth being exact about what it did:
+#   * U+E0020–E007F, the 96 code points that can carry an ASCII payload, are
+#     all `Cf` and all still removed. That vector is closed.
+#   * 31 unassigned code points in the same block now survive. They encode
+#     nothing, and treating them as text is the price of not deleting next
+#     year's alphabet.
+# Variation selectors (`Mn`) do pass, and are NOT counted, because they are
+# not removed. The warning says so rather than implying otherwise.
 _STRIP_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Zl", "Zp"})
 # `\t` is exempt HERE and normalised by `collapse_runs` instead. It was
 # exempt here alone for one round, on the grounds that "a tab is layout, not
@@ -240,11 +250,18 @@ def sanitise(text: str) -> tuple[str, int]:
 
 
 def collapse_runs(text: str) -> tuple[str, int]:
-    """Each whitespace run becomes its FIRST character; the ends go entirely.
+    """Each whitespace run becomes ONE PLAIN SPACE; the ends go entirely.
 
-    Nothing is substituted — a run's survivor is a character that was already
-    there — so `len(before) - len(after)` is an exact and complete account of
-    what went, which is what lets the character-unit closure test close.
+    The count is of characters removed **or substituted**, so a lone tab or an
+    ideographic space scores 1 even though the length does not move — a count
+    that tracked only length would call a substitution "nothing happened".
+
+    An earlier version of this paragraph said the survivor was "a character
+    that was already there" and that `len(before) - len(after)` was the whole
+    account. Both stopped being true when the run started collapsing to a
+    plain space rather than to its own first character, and the sentence
+    twelve lines below already contradicted them. A docstring that disagrees
+    with the code beneath it is a third specification nobody runs.
 
     This is here rather than in `wrap_cue_text` for two reasons the round it
     was written both learned the hard way. `wrap_cue_text` returned early for
@@ -341,7 +358,7 @@ def shape_of(line: str) -> str:
         i = j
     shape = "".join(out)
     if len(shape) > _SHAPE_CAP:
-        shape = shape[:_SHAPE_CAP - 1] + "\u2026"
+        shape = f"{shape[:_SHAPE_CAP - 1]}\u2026"
     return f"{len(line)} chars, opens with {shape!r}"
 
 
@@ -695,9 +712,26 @@ def wrap_cue_text(text: str, limits: dict | None = None) -> str:
         return text
 
     if script == "cjk":
-        # No word spaces to break on, so break by width. Any position is a legal
-        # break in a script that does not separate words.
-        return "\n".join(text[i:i + limit] for i in range(0, len(text), limit))
+        # No word spaces to break on, so break by width. Any position is a
+        # legal break in a script that does not separate words — except one:
+        # a slice that is ALL whitespace becomes a blank line, and a blank
+        # line is SRT's cue terminator, so everything after it is dropped by
+        # the player. Round 20 removed the runs that made this easy to hit at
+        # the default width; a single space landing alone still does it at a
+        # configured one, which the guard did not cover because it only ever
+        # passed the default.
+        #
+        # The whitespace is MERGED into the previous line rather than dropped,
+        # so the wrap stays lossless — `wrapped.replace("\n", "")` is still
+        # the input, which is the property its test asserts.
+        pieces: list[str] = []
+        for i in range(0, len(text), limit):
+            chunk = text[i:i + limit]
+            if pieces and not chunk.strip():
+                pieces[-1] += chunk
+            else:
+                pieces.append(chunk)
+        return "\n".join(pieces)
 
     # `text.split()` here — splitting on ANY whitespace and discarding it —
     # is what deleted tabs and collapsed repeated spaces with no count. The
@@ -756,8 +790,16 @@ def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
     return CACHE_DIR / f"{rec_id}.md"
 
 
-def _cue_lines(path: pathlib.Path) -> tuple[list[tuple[float, str]], int]:
-    """A file's cues as (start, text), and how many lines it lost.
+def _cue_lines(path: pathlib.Path
+               ) -> tuple[list[tuple[float, str, int]], int, int]:
+    """A file's cues, how many lines it lost, and how odd its header is.
+
+    Returns `([(start, text, characters altered in that cue)], dropped lines,
+    header lines that are not `key: value`)`. The signature said two values
+    and the first line said "how many lines it lost" while both counts were
+    already separate and a third element rode inside each cue — the same
+    defect `parse_transcript`'s docstring had, in the function that consumes
+    it, found in the round that fixed the other one.
 
     "Lost" counts a line the parser refused AND a cue-shaped line the header
     swallowed. Both remove content from one side of a comparison that pairs the
@@ -847,12 +889,27 @@ def differing_sample(rec_id: str) -> dict | None:
     if not verbatim:
         return _refuse("the transcript produced no cues, so there is nothing to "
                        "compare. Run to_srt on it to see why.")
-    if polish_odd or verbatim_odd:
-        return _refuse(f"a header block holds {polish_odd + verbatim_odd} line(s) "
+    # ONE side, named. Only the transcript carries frontmatter — `cache.py`
+    # writes polish as a bare body and `_cue_lines` passes
+    # `expect_frontmatter` accordingly — so `polish_odd` is structurally
+    # always zero and `polish_odd + verbatim_odd` presented a one-sided count
+    # as a two-sided sum. A sum of one number is a number wearing a costume,
+    # and the test that checked it was called "counts both sides" while its
+    # own failure message explained that only one is read.
+    if verbatim_odd:
+        # Names the drop too when there is one. This returned first and
+        # mentioned only the header, so a file with BOTH problems was reported
+        # as having one — the user fixes the header, re-runs, and meets the
+        # drop it never mentioned. Two causes at once is not an occasion to
+        # pick one.
+        also = (f" The transcript also dropped {polish_drops + verbatim_drops} "
+                f"line(s), which is a separate problem in the same file."
+                if polish_drops or verbatim_drops else "")
+        return _refuse(f"the transcript's header holds {verbatim_odd} line(s) "
                        f"that are not `key: value`, so some of what the file "
                        f"says may have been taken as header and not read. The "
                        f"two sides cannot be lined up until that is settled — "
-                       f"run to_srt on each to see the block.")
+                       f"run to_srt on it to see the block.{also}")
     if polish_drops or verbatim_drops:
         # Reporting one side's count when both dropped understates the loss and
         # points the user at one of two broken files. On a branch whose subject
@@ -1233,9 +1290,20 @@ def main() -> None:
                 with transcript.open(encoding="utf-8-sig", errors="replace") as fh:
                     completeness_source = fh.read(400)
             except OSError as exc:
-                print(f"note: could not read {transcript.name!r} to check whether "
-                      f"this recording was fully indexed ({exc.strerror}); the "
-                      f"subtitles below are unaffected.", file=sys.stderr)
+                # NOT "unaffected". This line appears only when the read
+                # failed, and the read exists to decide whether to print
+                # `⚠ marked incomplete` — so in the one situation the sentence
+                # is ever seen, a warning that might have been due cannot be
+                # given. Saying the subtitles are unaffected is true of their
+                # CONTENT and false of what the reader was told about it,
+                # which is the distinction this whole issue turns on.
+                print(f"note: could not read {transcript.name!r} to check "
+                      f"whether this recording was fully indexed "
+                      f"({exc.strerror}). The cues below are built from the "
+                      f"file you asked for and are unchanged by this — but if "
+                      f"that recording was only partly fetched, the warning "
+                      f"that would have said so could not be checked.",
+                      file=sys.stderr)
     if "complete: false" in completeness_source[:400]:
         print(f"⚠ {path.name!r} is marked incomplete — these subtitles cover only the "
               f"part that was fetched. Re-run plaud-index first.", file=sys.stderr)
@@ -1270,11 +1338,24 @@ def main() -> None:
         # round, while the rule it described was deleting assigned letters the
         # running Python had not heard of. Both claims were false about the
         # user's data, in the sentence whose job is to be true about it.
-        print(f"⚠ {stripped_chars} character(s) were removed from the cue text: "
-              f"control and format code points, which a subtitle has no use for "
-              f"and which can address the terminal or hide text, and repeated "
-              f"whitespace collapsed to one. Letters and punctuation are "
-              f"untouched.", file=sys.stderr)
+        # Says what happened, and stops there. Three earlier versions each
+        # claimed something the rule does not deliver: "invisible" (it also
+        # removes assigned letters the interpreter has not heard of — since
+        # fixed by dropping `Cn`), "the words are otherwise unchanged" (false
+        # while it was), "letters and punctuation are untouched" (false for a
+        # private-use glyph, which is a letter to anyone using a Big5 造字
+        # font), and "hide text" as a completeness claim (variation selectors
+        # are `Mn` and pass straight through).
+        #
+        # The count is exact; the description is now only of what was done,
+        # not of what is guaranteed. Three causes, because there are three —
+        # the earlier sentence named two and the code had three.
+        print(f"⚠ {stripped_chars} character(s) in the cue text were removed or "
+              f"normalised: control and format code points, private-use code "
+              f"points, and repeated or non-standard whitespace collapsed to a "
+              f"single space. This filter is not a guarantee that nothing "
+              f"invisible remains — it is a category rule, and what it removes "
+              f"is counted so that being wrong is visible.", file=sys.stderr)
     srt = render_srt(built, limits=cfg["srt_line_limits"])
     for note in trims[:_SAMPLE]:
         print(f"⚠ {note}", file=sys.stderr)

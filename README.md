@@ -137,18 +137,30 @@ through a filter:
   a function whose docstring said those raise. A malformed *start* now drops
   the line (and is counted); a malformed *end* is discarded with a warning and
   the duration inferred. See #53.
-- **Cue text is filtered.** Control, format, surrogate, private-use, unassigned
-  and separator characters are removed from every cue, so a transcript cannot
-  address your terminal or hide text in a subtitle file. Characters that carry
-  meaning — ZWJ, ZWNJ, LRM, RLM — are kept. **Anything removed is counted**, on
-  stderr and in the ledger.
+- **Cue text is filtered.** Control, format, surrogate, private-use and
+  line/paragraph-separator characters are removed from every cue, so a
+  transcript cannot address your terminal. Characters that carry meaning are
+  kept — ZWJ, ZWNJ, LRM, RLM — and whitespace is normalised rather than
+  deleted, because deleting a separator joins the words on either side.
+  **Anything removed or normalised is counted**, on stderr and in the ledger,
+  including on `--preview-sources`.
+  *Unassigned* code points are deliberately **not** removed: unassigned is a
+  property of the running Python's Unicode tables, not of the character, so
+  that rule deleted letters assigned after the interpreter was built. And this
+  is a category rule, not a guarantee — variation selectors pass through it.
+  What makes it safe is the count, not the coverage.
 - **Losses that used to reach only stderr now ride the success line**: discarded
-  end times and removed characters, alongside the dropped-line count.
+  end times, corrected cue ends, removed or normalised characters, and cues
+  that held nothing but invisible characters — alongside the dropped-line
+  count. The success line reports the cues **in the file**, and those five
+  numbers close over every non-blank line of the input.
 - **`--preview-sources` declines more often, and says why.** It now refuses when
   either side dropped a line, when the two cue counts differ, when the timelines
   diverge, and when every line that differs sits at a timestamp the recording
   uses more than once — cases where the pair it used to show was two different
-  moments. A repeated timestamp on its own does not stop it: if some other line
+  moments — and when the transcript's header holds lines that are not
+  `key: value`, since some of what the file says may then have been read as
+  header. A repeated timestamp on its own does not stop it: if some other line
   differs at an unambiguous moment, that pair is shown.
 - **The `⚠ marked incomplete` warning can fire on the default path.** It read
   the transcript's frontmatter flag from whichever file was being subtitled,

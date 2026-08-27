@@ -83,10 +83,11 @@ _NUMBER_PATTERNS = {
     # stopped; `refusal_dropped`'s sentence was reworded to name both sides.
     "lost_ends":         r"(\d+) declared end\(s\) discarded",
     "stripped_ledger":   r"(\d+) char\(s\) removed",
-    "stripped_warn":     r"⚠ (\d+) character\(s\) were removed",
+    "stripped_warn":     r"⚠ (\d+) character\(s\) in the cue text were",
     "refusal_drop_a":    r"transcripts? dropped (\d+)",
     "refusal_drop_b":    r"transcripts dropped \d+ and (\d+)",
-    "refusal_header_odd": r"a header block holds (\d+) line\(s\)",
+    "refusal_header_odd": r"header holds (\d+) line\(s\)",
+    "refusal_also_dropped": r"transcript also dropped (\d+) line\(s\)",
     "corrections":       r"(\d+) cue end\(s\) corrected",
     "more_ends":         r"and (\d+) more declared end\(s\)",
     "more_trims":        r"and (\d+) more cue end\(s\) corrected",
@@ -493,7 +494,7 @@ class TestTheDenominatorSharesNoAssumptionWithTheParser(unittest.TestCase):
 
 
 class TestTheDenominatorEnumeratesNothing(unittest.TestCase):
-    """Round 4: the denominator was inverted, because widening it kept failing.
+    r"""Round 4: the denominator was inverted, because widening it kept failing.
 
     Rounds 1, 2 and 3 each widened a POSITIVE test — "does this line look like
     a cue?" — and each time the next reviewer found a shape outside it:
@@ -578,7 +579,7 @@ class TestTheDenominatorEnumeratesNothing(unittest.TestCase):
 
 
 class TestTheCountComesFromOnePass(unittest.TestCase):
-    """Round 5: stop deriving the count twice.
+    r"""Round 5: stop deriving the count twice.
 
     Four rounds tried to make a SECOND derivation of the input agree with the
     parser's. Each time the two derivations shared a step, and the shared step
@@ -687,7 +688,7 @@ class TestTheWarningDoesNotPublishSomebodysWords(unittest.TestCase):
 
 
     def test_no_digit_from_the_transcript_survives(self):
-        """Round 3: the leak moved rather than closed.
+        r"""Round 3: the leak moved rather than closed.
 
         Round 2 replaced "ninety raw characters" with an opener matched by
         `[\d:.,\s-]*`, which runs from the start of the line and eats digits,
@@ -1363,13 +1364,23 @@ class TestWrapCueText(unittest.TestCase):
         was already exact and would have gone red immediately; the weaker
         oracle sat on precisely the branch where the loss happened.
         """
-        for text in ["a b c " * 30, "hello", "a\u00a0b " * 20]:
-            text = text.strip()
-            self.assertEqual(
-                text, to_srt.wrap_cue_text(text).replace("\n", " "),
-                f"the latin wrap lost or altered something: {text!r}")
-        for text in ["預算" * 40, "よろしく" * 20]:
-            self.assertEqual(text, to_srt.wrap_cue_text(text).replace("\n", ""), text)
+        # Across configured widths, not just the default — the same gap the
+        # blank-line guard had, and the same reason: `srt_line_limits` is a
+        # setting, so one column count is one sample of it.
+        widths = [None, {"latin": 10, "cjk": 4}, {"latin": 100, "cjk": 60},
+                  {"latin": 1, "cjk": 1}]
+        for limits in widths:
+            for text in ["a b c " * 30, "hello", "a\u00a0b " * 20]:
+                text = text.strip()
+                self.assertEqual(
+                    text, to_srt.wrap_cue_text(text, limits).replace("\n", " "),
+                    f"the latin wrap lost or altered something at {limits}: "
+                    f"{text!r}")
+            for text in ["預算" * 40, "よろしく" * 20, "你好 世界"]:
+                self.assertEqual(
+                    text, to_srt.wrap_cue_text(text, limits).replace("\n", ""),
+                    f"the CJK wrap lost or altered something at {limits}: "
+                    f"{text!r}")
 
     def test_the_wrap_cannot_produce_a_blank_line_inside_a_cue(self):
         """A blank line is SRT's cue terminator, so one inside a cue truncates
@@ -1377,16 +1388,24 @@ class TestWrapCueText(unittest.TestCase):
         content, so a run of `limit` separators became exactly that — and
         ffmpeg dropped everything after it while the tool said `wrote N cues`
         and exited 0. #50's own signature, one layer below the line ledger."""
+        # CONFIGURED widths too. `srt_line_limits` is a documented setting,
+        # and passing no `limits` meant this verified one column count out of
+        # every value a user can put in their config — the guard tested the
+        # default and was named for the property.
+        widths = [None, {"latin": 10, "cjk": 4}, {"latin": 100, "cjk": 60},
+                  {"latin": 1, "cjk": 1}]
         for raw in ["你好" + "\u3000" * 44 + "世界", "a" + " " * 90 + "b",
                     "\u3000" * 60, "預算" * 40]:
+          for limits in widths:
             collapsed, _ = to_srt.collapse_runs(to_srt.sanitise(raw)[0])
             if not collapsed:
                 continue
-            for line in to_srt.wrap_cue_text(collapsed).split("\n"):
+            for line in to_srt.wrap_cue_text(collapsed, limits).split("\n"):
                 self.assertTrue(
                     line.strip(),
                     f"a whitespace-only line inside the cue terminates it: "
-                    f"{raw[:20]!r} -> {to_srt.wrap_cue_text(collapsed)!r}")
+                    f"{raw[:20]!r} at {limits} -> "
+                    f"{to_srt.wrap_cue_text(collapsed, limits)!r}")
 
     def test_wrapping_is_applied_when_rendering(self):
         cues = [{"start": 0.0, "end": 4.0,
@@ -1956,15 +1975,23 @@ class TestEveryLineEndsInExactlyOneReportableBucket(unittest.TestCase):
 
     def test_the_buckets_add_up(self):
         """header + cues + dropped == every non-blank line. No fourth outcome."""
+        # The last fixture carries a U+2028. The oracle below counts
+        # `\n`-delimited lines because that is what the FORMAT means by a
+        # line; `str.splitlines()` — which both the oracle and the parser used
+        # to call — breaks on five more characters, so the two agreed with
+        # each other and neither agreed with the file. Round 20 fixed the
+        # parser; an oracle left on the old rule would now report a gap that
+        # is not there, which is the same defect wearing the other sign.
         for body in ("---\nid: a\n---\n\n[00:00] S: x\nprose\n",
                      "[00:00] S: x\n---\n[00:10] S: y\n",
                      "---\nid: a\n[00:00] S: in header\n---\n[00:10] S: out\n",
-                     "no header at all\n[00:00] S: x\n"):
+                     "no header at all\n[00:00] S: x\n",
+                     f"[00:00] S: one{chr(0x2028)}two\n[00:10] S: three\n"):
             for expect in (True, False):
                 with self.subTest(body=body[:20], expect_frontmatter=expect):
                     cues, dropped, front, _ = to_srt.parse_transcript(
                         body, expect_frontmatter=expect)
-                    non_blank = [l for l in body.splitlines() if l.strip()]
+                    non_blank = [l for l in body.split("\n") if l.strip()]
                     accounted = len(cues) + len(dropped) + len(
                         [l for l in front if l.strip()])
                     self.assertEqual(
@@ -2644,7 +2671,9 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             "numbers_in: lost_ends",
         ("main", "header", "len(header)"):
             "numbers_in: header (the ledger)",
-        ("differing_sample", "a header block holds line(s) that are not `key", "polish_odd + verbatim_odd"):
+        ("differing_sample", "The transcript also dropped line(s), which is ", "polish_drops + verbatim_drops"):
+            "numbers_in: refusal_also_dropped",
+        ("differing_sample", "the transcript's header holds line(s) that are", "verbatim_odd"):
             "numbers_in: refusal_header_odd",
         ("main", "char(s) removed — see stderr", "stripped_chars"):
             "numbers_in: stripped_ledger",
@@ -2672,7 +2701,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
             "numbers_in: header_odd",
         ("main", "— of them would have parsed as cues (first: )", "len(ate)"):
             "numbers_in: header_ate",
-        ("main", "⚠ character(s) were removed from the cue text:", "stripped_chars"):
+        ("main", "⚠ character(s) in the cue text were removed or", "stripped_chars"):
             "numbers_in: stripped_warn",
         ("main", "⚠ line(s) in were taken as the file's header a", "len(header)"):
             "numbers_in: header_all",
@@ -2709,6 +2738,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("build_cues", "cue at to —", "why"):                      "the reason clause, tested by name",
         ("differing_sample", ".md", "rec_id"):                     "a path fragment",
         ("differing_sample", "the line(s), so the two sides no longer line u", "which"): "the composed side-name clause",
+        ("differing_sample", "the transcript's header holds line(s) that are", "also"): "the composed second-cause clause; the count inside it is checked",
         ("main", "()", "', '.join(parts)"):                        "the ledger clauses, each checked on its own",
         ("main", ".md", "args.id"):                                "a path fragment",
         ("main", "None matched the rough timestamp hint, which m", "shape_of(dropped[0])"): "a shape, and shape_of is tested",
@@ -2741,6 +2771,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("main", "⚠ of content lines in did not parse as segment", "shape_of(first_bad)"): "a shape",
         ("parse_timestamp", "unrecognised timestamp:", "raw"):       "echoes the rejected stamp into an exception",
         ("render_srt", "-->", "wrap_cue_text(cue['text'], limits)"): "the wrapped words; wrapping is tested",
+        ("shape_of", "\u2026", "shape[:_SHAPE_CAP - 1]"):            "the truncated shape, on its way into the line below",
         ("shape_of", "chars, opens with", "shape"):                  "the assembled shape string",
         ("subtitle_source", ".md", "rec_id"):                        "a path fragment",
         ("wrap_cue_text", "", "current"):                            "a partial line",
@@ -2804,6 +2835,19 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         losing move; there is always another. Narrowing the LANGUAGE is not:
         the tool uses one construction, so walking that one is total. This
         test is what turns the census from a sample into a survey.
+
+        Round 19 found it checked two of the three shapes its own docstring
+        named. `"count: " + str(n)` walked past this test, past the registry
+        (which reads f-strings), and past `mutate.py`'s unmutatable list —
+        three guards blind to one `+`. `print("count:", n)` is worse still: it
+        builds no string at all, so there is no interpolation to register, and
+        the number reaches the user anyway.
+
+        The rule is absolute rather than clever, and that costs something: a
+        legitimate `+` on strings has to be written as an f-string too. One
+        such line existed and was rewritten. Paying that is the point — a
+        restriction with exceptions is an enumeration again, and the exception
+        is where the next unregistered count will live.
         """
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         offenders = []
@@ -2816,6 +2860,24 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
                     and isinstance(node.left, ast.Constant)
                     and isinstance(node.left.value, str)):
                 offenders.append(f"line {node.lineno}: %-formatting")
+            # CONCATENATION. The docstring below named three ways to build a
+            # string and this checked two — `"count: " + str(n)` walked past
+            # the language test, past the registry that only reads f-strings,
+            # and past `mutate.py`'s unmutatable list, which is three guards
+            # in a row blind to one `+`.
+            if (isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add)
+                    and any(isinstance(side, ast.Constant)
+                            and isinstance(side.value, str)
+                            for side in (node.left, node.right))):
+                offenders.append(f"line {node.lineno}: string concatenation")
+            # MULTI-ARGUMENT print. `print("count:", n)` builds no string at
+            # all — the interpolation the registry walks never exists, and the
+            # number still reaches the user.
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "print"
+                    and len(node.args) > 1):
+                offenders.append(f"line {node.lineno}: print() with "
+                                 f"{len(node.args)} positional arguments")
         self.assertEqual(
             [], offenders,
             f"{offenders}\n\nMessages are built with f-strings here, and the "
@@ -2847,13 +2909,27 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
                     and any(isinstance(t, ast.Name) and t.id == "_NUMBER_PATTERNS"
                             for t in node.targets))
 
+        # READ, not merely present. Collecting every string constant meant a
+        # key mentioned in any docstring counted as consumed, so the check
+        # could be satisfied by prose. A `numbers_in` key is consumed when
+        # something SUBSCRIPTS or `.get()`s it — that is the only way its
+        # value is ever looked at.
         consumed = set()
         for node in module.body:
             if is_own_registry(node) or is_pattern_table(node):
                 continue
             for child in ast.walk(node):
-                if isinstance(child, ast.Constant) and isinstance(child.value, str):
-                    consumed.add(child.value)
+                if (isinstance(child, ast.Subscript)
+                        and isinstance(child.slice, ast.Constant)
+                        and isinstance(child.slice.value, str)):
+                    consumed.add(child.slice.value)
+                elif (isinstance(child, ast.Call)
+                      and isinstance(child.func, ast.Attribute)
+                      and child.func.attr == "get"
+                      and child.args
+                      and isinstance(child.args[0], ast.Constant)
+                      and isinstance(child.args[0].value, str)):
+                    consumed.add(child.args[0].value)
 
         missing_key, missing_test, unused = [], [], []
         for site, where in self.CHECKED.items():
@@ -3253,7 +3329,7 @@ class TestEveryRefusalCauseIsPinned(unittest.TestCase):
     #: The one cause that lives in the header rather than the body.
     HEADER_CAUSE = ("[00:00] S: a\n", "[00:00] S: a\n",
                     "id: abc123\n# a note somebody left in the header",
-                    "a header block holds")
+                    "header holds")
 
     def test_the_header_cause_says_its_own_thing(self):
         polish, verbatim, header, phrase = self.HEADER_CAUSE
@@ -3339,7 +3415,15 @@ class TestRoundEighteensCountsAreCheckedToo(unittest.TestCase):
                          "[00:00 - 00:05] S: one\n[00:10 - 00:15] S: two\n")
         self.assertNotIn("corrected", proc.stdout, proc.stdout)
 
-    def test_the_header_oddity_refusal_counts_both_sides(self):
+    def test_the_header_oddity_refusal_counts_the_transcripts_header(self):
+        """Named for the one side that can have a header.
+
+        It was `..._counts_both_sides` while its own failure message explained
+        that only one side is read — `cache.py` writes polish as a bare body,
+        so `polish_odd` was structurally always zero and the refusal added it
+        to make a two-sided sum out of one number. When a test's name and its
+        message disagree, one of them is wrong; here it was the name.
+        """
         with tempfile.TemporaryDirectory() as d:
             cache = pathlib.Path(d)
             (cache / "polish").mkdir()
@@ -3600,3 +3684,41 @@ class TestTheClosureReachesTheFile(unittest.TestCase):
                     1, self._cues_in(srt),
                     f"U+{cp:04X} split one transcript line into "
                     f"{self._cues_in(srt)} cues: {srt!r}")
+
+
+class TestTwoCausesAtOnceAreBothNamed(unittest.TestCase):
+    """A file with a bad header AND a dropped line said only one of them.
+
+    The header refusal returned first and mentioned the header, so the user
+    fixed that, re-ran, and met a drop the tool had already seen and not
+    mentioned. Two problems in one file is not an occasion to pick one.
+    """
+
+    def _preview(self, polish: str, verbatim: str, header: str):
+        with tempfile.TemporaryDirectory() as d:
+            cache = pathlib.Path(d)
+            (cache / "polish").mkdir()
+            (cache / "abc123.md").write_text(
+                f"---\n{header}\n---\n" + verbatim, encoding="utf-8")
+            (cache / "polish" / "abc123.md").write_text(polish, encoding="utf-8")
+            return subprocess.run(
+                [sys.executable, str(SCRIPT), "abc123", "--preview-sources"],
+                capture_output=True, text=True, env=cli_env(cache))
+
+    def test_a_header_oddity_and_a_drop_are_both_reported(self):
+        proc = self._preview(
+            polish="[99999:00] S: unparseable\n[00:00] S: a\n",
+            verbatim="[00:00] S: a\n",
+            header="id: abc123\n# a note somebody left")
+        got = numbers_in(proc.stderr)
+        self.assertEqual(3, proc.returncode, proc.stderr)
+        self.assertEqual(1, got.get("refusal_header_odd"), proc.stderr)
+        self.assertEqual(1, got.get("refusal_also_dropped"),
+                         f"the drop was seen and not mentioned: {proc.stderr!r}")
+
+    def test_a_header_oddity_alone_does_not_invent_a_drop(self):
+        proc = self._preview(polish="[00:00] S: a\n", verbatim="[00:00] S: a\n",
+                             header="id: abc123\n# a note somebody left")
+        self.assertIsNone(numbers_in(proc.stderr).get("refusal_also_dropped"),
+                          f"a second cause was reported that is not there: "
+                          f"{proc.stderr!r}")

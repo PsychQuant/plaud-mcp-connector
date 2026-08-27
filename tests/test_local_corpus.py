@@ -118,15 +118,25 @@ class TestEveryLocalCacheFileParsesWhole(unittest.TestCase):
         # which made the corpus look short, which made this report "cannot
         # confirm the fix" — the bug hiding its own detector. The minute field
         # is read straight off the raw text instead.
-        longest = 0
-        stamp = re.compile(r"^\s*[\[(]?\s*(\d+)\s*:")
+        # BOTH shapes. Reading only the first field made `[01:39:27]` — one
+        # hour thirty-nine — into "1 minute", so a 7.4-hour recording looked
+        # 60× shorter than it is and this guard skipped with "the corpus
+        # cannot confirm the fix", which is a false statement ABOUT THE CORPUS
+        # printed by the test whose job is to describe it. The cache carries
+        # `H:MM:SS` and `MMM:SS`, and only counting the fields tells them
+        # apart.
+        longest = 0.0
+        stamp = re.compile(r"^\s*[\[(]?\s*(\d+):(\d+)(?::(\d+))?")
         for path in self._files():
             for line in path.read_text(encoding="utf-8-sig",
                                        errors="replace").splitlines():
                 m = stamp.match(line)
-                if m:
-                    longest = max(longest, int(m.group(1)))
-        longest = longest * 60.0
+                if not m:
+                    continue
+                a, b, c = m.group(1), m.group(2), m.group(3)
+                seconds = (int(a) * 3600 + int(b) * 60 + int(c) if c
+                           else int(a) * 60 + int(b))
+                longest = max(longest, float(seconds))
         if longest < 100 * 60:
             self.skipTest(
                 f"the longest local recording reaches {longest / 60:.0f} minutes, "

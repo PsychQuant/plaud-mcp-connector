@@ -112,8 +112,11 @@ long transcript into the conversation** — write the file and report the path.
 
 Say where the file went and how many cues it has.
 
-**Surface every `⚠` line the tool puts on stderr.** Not a list to check against —
-relay what is there. None of these is visible in the resulting `.srt`, and this
+**Surface every `⚠` line the conversion puts on stderr.** Not a list to check
+against — relay what is there. *(This is about the conversion in step 3. The
+`⚠ no source comparison to show:` line belongs to `--preview-sources` in step
+2, and that row says when it is worth passing on — the two instructions read
+as a contradiction only because neither used to name which run it meant.)* None of these is visible in the resulting `.srt`, and this
 section has twice been a closed count that went stale the moment the code grew
 another one. What each means:
 
@@ -167,13 +170,15 @@ another one. What each means:
   display`** — appears beside `--preview-sources`. The two lines you are about
   to quote are not byte-for-byte what the cache holds. The words are unchanged;
   say so if the user is choosing on the strength of punctuation or spacing.
-- **`character(s) were removed from the cue text`** — the words are all
-  there, but some characters in them were not: control and format code points,
-  which a subtitle cannot use and which can address the terminal or hide text,
-  and repeated whitespace collapsed to one. Letters and punctuation are
-  untouched. Worth relaying when the recording is in a script where invisible
-  characters carry meaning — the count is exact, so a large one on a short
-  recording is worth a look.
+- **`character(s) in the cue text were removed or normalised`** — some
+  characters in the words were changed: control and format code points,
+  private-use code points, and repeated or non-standard whitespace collapsed
+  to a single space. The count is exact. **The message says explicitly that
+  this is not a guarantee nothing invisible remains** — it is a category rule,
+  and variation selectors, for one, pass through it. Relay it when the
+  recording is in a script where invisible characters carry meaning, or when a
+  private-use font is in play; a large count on a short recording is worth a
+  look either way.
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.

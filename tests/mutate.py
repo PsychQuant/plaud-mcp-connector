@@ -118,8 +118,28 @@ class Sandbox:
     def __enter__(self):
         self.dir = pathlib.Path(tempfile.mkdtemp(prefix="idd-mutate-"))
         self.root = self.dir / "repo"
-        shutil.copytree(REPO, self.root, ignore=shutil.ignore_patterns(
-            ".git", "__pycache__", ".claude", "node_modules"))
+        # Copied file by file, tolerating files that vanish mid-walk. The
+        # working tree is LIVE — other tools write scratch state into it — and
+        # `shutil.copytree` aborts the whole copy when one entry disappears
+        # between the listing and the read, which is exactly what happened
+        # (`.remember/tmp/capture-alive.<pid>`). Enumerating what to copy
+        # instead would be a list that goes stale the next time the repo grows
+        # a directory, which is the failure this whole file is about.
+        skip = {".git", "__pycache__", ".claude", "node_modules", ".remember",
+                ".pytest_cache", ".venv"}
+        for src in REPO.rglob("*"):
+            rel = src.relative_to(REPO)
+            if any(part in skip for part in rel.parts):
+                continue
+            dst = self.root / rel
+            try:
+                if src.is_dir():
+                    dst.mkdir(parents=True, exist_ok=True)
+                else:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, dst)
+            except (FileNotFoundError, OSError):
+                continue          # it went away, or it is a live socket
         subprocess.run(["git", "init", "-q", "."], cwd=self.root, check=True)
         subprocess.run(["git", "add", "-A"], cwd=self.root, check=True)
         subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=x",
@@ -132,6 +152,19 @@ class Sandbox:
         # `path` as fine while `path + 40` raises. One header oddity, one
         # dropped line, one discarded end, one control character, one
         # duplicate start, one over-long cue.
+        # A SECOND cache, for the `--preview-sources` path. The single probe
+        # below never runs it, so every crash in `differing_sample` and
+        # `_cue_lines` — a whole subsystem, and the one whose output an
+        # operator quotes to a user — was invisible to the classifier and its
+        # sites were scored as covered. A probe that visits one code path
+        # gives a clean bill about the paths it did not visit.
+        self.preview_cache = self.root / "previewcache"
+        (self.preview_cache / "polish").mkdir(parents=True)
+        (self.preview_cache / "p1.md").write_text(
+            "---\nid: p1\n---\n[00:00] S: um the budget\n[00:10] S: and then\n",
+            encoding="utf-8")
+        (self.preview_cache / "polish" / "p1.md").write_text(
+            "[00:00] S: the budget\n[00:10] S: and then\n", encoding="utf-8")
         self.probe_file = self.root / "probe.md"
         self.probe_file.write_text(
             "---\n"
@@ -158,16 +191,26 @@ class Sandbox:
 
         So ask the tool directly instead of inferring from the suite.
         """
-        proc = subprocess.run(
-            [sys.executable, "-B", str(self.script), "--file",
-             str(self.probe_file), "-o", str(self.root / "probe.srt")],
-            capture_output=True, text=True,
-            env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-        if "Traceback (most recent call last)" in proc.stderr:
-            first = [l for l in proc.stderr.splitlines() if l and not l[0].isspace()]
-            return first[-1][:80] if first else "traceback"
-        if proc.returncode != 0:
-            return f"exit {proc.returncode}"
+        runs = [
+            ([str(self.script), "--file", str(self.probe_file),
+              "-o", str(self.root / "probe.srt")], {}, (0,)),
+            # The preview path. Exit 3 is a refusal and a normal outcome here,
+            # so both 0 and 3 are healthy; anything else, or a traceback, is
+            # the tool dying.
+            ([str(self.script), "p1", "--preview-sources"],
+             {"PLAUD_CACHE_DIR": str(self.preview_cache),
+              "PLAUD_CONFIG": str(self.root / "probe-config.json")}, (0, 3)),
+        ]
+        for argv, extra, ok in runs:
+            proc = subprocess.run(
+                [sys.executable, "-B", *argv], capture_output=True, text=True,
+                env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1", **extra))
+            if "Traceback (most recent call last)" in proc.stderr:
+                first = [l for l in proc.stderr.splitlines()
+                         if l and not l[0].isspace()]
+                return first[-1][:80] if first else "traceback"
+            if proc.returncode not in ok:
+                return f"{argv[1]}: exit {proc.returncode}"
         return None
 
     def __exit__(self, *exc):
@@ -311,10 +354,25 @@ def main() -> int:
         for fn, expr, why in sorted(set(skipped)):
             print(f"  {fn:18s} {expr[:40]:40s} {why}")
 
+    # A CHECKED site whose mutation CRASHED was never measured. It is not a
+    # survivor and it is not a catch — it is a hole, and printing
+    # "every claim bites" over it makes an unmeasured site read exactly like a
+    # verified one. That is this branch's whole subject with the instrument as
+    # the subject instead of the tool.
+    crashed_checked = [c for c in crashed if (c[0], c[1]) in checked]
+    if crashed_checked:
+        print(f"\n{len(crashed_checked)} registered-as-checked site(s) were "
+              f"NOT MEASURED — their mutation killed the tool, so nothing was "
+              f"learned about whether the claim holds:")
+        for fn, expr, name, at, why in crashed_checked:
+            print(f"  UNMEASURED  {fn}:{at}  {expr}  (rebound `{name}`) — {why}")
+
     bad = len(claimed) + len(orphan)
     print(f"\nRESULT: {bad} registered-as-checked or unregistered value(s) "
-          f"survive mutation." + ("" if bad else "  none — every claim bites."))
-    return 1 if bad else 0
+          f"survive mutation; {len(crashed_checked)} more were not measured at "
+          f"all." + ("  Every claim that could be tested bites."
+                     if not bad and not crashed_checked else ""))
+    return 1 if (bad or crashed_checked) else 0
 
 
 if __name__ == "__main__":
