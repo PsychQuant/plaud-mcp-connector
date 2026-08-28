@@ -76,6 +76,35 @@ IN_CONTRACT = [
     ("point, hh:mm:ss",    "[00:01:01] Speaker 1: a line of words",     61.0, None),
     ("range, mm:ss",       "[01:01 - 01:55] Speaker 1: a line",         61.0, 115.0),
     ("range, hh:mm:ss",    "[00:01:01 - 00:01:55] Speaker 1: a line",   61.0, 115.0),
+    # The minute field is TOTAL minutes, so it leaves two digits at 100 (#50).
+    # This was in the cache and shipping for as long as the CLI has written
+    # long recordings — the contract simply never said so, which is why the
+    # table above could look complete while a 7.4-hour transcript lost four
+    # fifths of its segments (281 in, 57 out).
+    ("point, mmm:ss",      "[100:05] Speaker 1: a line",              6005.0, None),
+    ("range, mmm:ss",      "[100:05 - 100:31] Speaker 1: a line",     6005.0, 6031.0),
+]
+
+# Shapes the parser accepts that NO producer has been measured emitting. They
+# are pinned so the boundary cannot move unnoticed — not offered as evidence
+# that anything writes them.
+#
+# The distinction is the same one `scripts/cache.py` makes three paragraphs
+# into its contract: "A third would go here only after something real emits it,
+# never because it seems reasonable." A four-digit row went into IN_CONTRACT
+# during #50 under a heading that reads "Both shapes a shipped producer emits",
+# and #50's own measurements contain no four-digit minute field — the longest
+# is `446:12`. That promotes a conservative implementation bound into a
+# contract backed by a measurement that was never taken, and the next person
+# wanting to tighten the bound would have to overturn a test that presents
+# itself as a record of reality. An over-extended contract is a wrong contract
+# in the same way an incomplete one is.
+BOUND_PINS = [
+    ("range, four-digit",  "[1440:00 - 1440:30] Speaker 1: a day in", 86400.0, 86430.0),
+    ("max minutes",        "[9999:59] Speaker 1: the upper bound",   599999.0, None),
+    ("fractional seconds", "[01:01.500] Speaker 1: a line",             61.5, None),
+    ("one-digit hours",    "[1:02:03] Speaker 1: a line",             3723.0, None),
+    ("no speaker",         "[01:01] a line with no speaker label",      61.0, None),
 ]
 
 # Shapes no producer emits. Listed so that "the contract is two forms" is a
@@ -85,12 +114,95 @@ OUT_OF_CONTRACT = [
     ("parenthesised",      "(01:01) Speaker 1: a line"),
     ("trailing timestamp", "Speaker 1: a line [01:01]"),
     ("prose",              "Speaker 1 said something at one minute in"),
+    # Five digits is not a long meeting, it is a malformed line. The widening
+    # in #50 is bounded at four on purpose — an unbounded minute field would
+    # trade a silent-drop bug for a silent-accept one at the same site.
+    ("five-digit minutes", "[99999:00] Speaker 1: not a recording"),
+    # Verify round 1: the four-digit bound was enforced on a range's START
+    # only, and the same widening had leaked into the HOURS field of the
+    # three-part form. Both are contract statements, so both are pinned here.
+    ("four-digit hours",   "[1234:05:06] Speaker 1: 51 days is not a recording"),
+    ("three-digit seconds", "[00:412] Speaker 1: seconds are exactly two digits"),
 ]
 
 
+# Where `to_srt` is MORE LENIENT than the grammar in scripts/cache.py, and the
+# one place it is stricter. The grammar states what a producer must write; the
+# parser is deliberately forgiving in specific ways, because being strict would
+# cost somebody's words over a punctuation detail.
+#
+# Enumerated here rather than in the contract prose because a written list
+# drifts from the parser exactly the way the contract itself drifted in #50 —
+# and drifts silently, which is the part that matters. If a tolerance is
+# removed, this table goes red and somebody decides whether that was intended.
+TOLERATED = [
+    ("dash needs no spaces",    "[00:10-00:20] S: x",          10.0, 20.0),
+    ("spaces inside brackets",  "[ 00:10 ] S: x",              10.0, None),
+    ("malformed end kept",      "[00:10 - banana] S: x",       10.0, None),
+    ("range may mix forms",     "[00:10:00 - 446:12] S: x",   600.0, 26772.0),
+]
+
+# Read as: the speaker label with no text after it becomes the TEXT, and the
+# speaker comes back empty. Surprising, worth pinning, not obviously wrong.
+TOLERATED_ODDITY = ("[00:10] Speaker 1:", "", "Speaker 1:")
+
+NOT_TOLERATED = [
+    ("text must be non-empty", "[00:10]"),
+    ("text must be non-blank", "[00:10]    "),
+]
+
+
+class TestTheParserIsLenientExactlyHere(unittest.TestCase):
+    """The grammar is what to WRITE; this is what the parser also accepts."""
+
+    def test_each_tolerance_still_holds(self):
+        for label, line, start, end in TOLERATED:
+            with self.subTest(tolerance=label):
+                segs = to_srt.parse_segments(line + "\n")
+                self.assertEqual(1, len(segs), f"{label}: stopped parsing")
+                self.assertEqual(start, segs[0]["start"])
+                self.assertEqual(end, segs[0]["end"])
+
+    def test_the_speaker_with_no_text_oddity(self):
+        line, want_speaker, want_text = TOLERATED_ODDITY
+        segs = to_srt.parse_segments(line + "\n")
+        self.assertEqual(1, len(segs))
+        self.assertEqual(want_speaker, segs[0]["speaker"])
+        self.assertEqual(want_text, segs[0]["text"])
+
+    def test_the_one_place_the_parser_is_stricter(self):
+        for label, line in NOT_TOLERATED:
+            with self.subTest(case=label):
+                self.assertEqual([], to_srt.parse_segments(line + "\n"),
+                                 f"{label}: the grammar does not say text is "
+                                 f"required, and the parser requires it")
+
+    def test_the_contract_points_at_this_table(self):
+        """So the pointer cannot rot into naming a table that moved."""
+        head = (pathlib.Path(__file__).resolve().parent.parent
+                / "scripts" / "cache.py").read_text(encoding="utf-8")[:6000]
+        self.assertIn("TOLERATED", head,
+                      "cache.py's contract no longer points at this table, so a "
+                      "reader diffing the grammar against the parser has nothing "
+                      "telling them the difference is deliberate")
+
+
 class TestTheTwoAcceptedForms(unittest.TestCase):
+    def test_the_measured_table_holds_both_forms_of_both_shapes(self):
+        """A count, so a row cannot quietly vanish from the table.
+
+        The rewrite in #50 made the assertions table-driven and, in doing so,
+        dropped the implicit "two forms x two time-shapes" count the hardcoded
+        version had. A table-driven test that never checks the table's own size
+        passes just as green with a row deleted.
+        """
+        labels = [label for label, *_ in IN_CONTRACT]
+        self.assertEqual(6, len(labels), f"IN_CONTRACT changed size: {labels}")
+        self.assertEqual(3, sum("range" in l for l in labels), f"ranges: {labels}")
+        self.assertEqual(3, sum("point" in l for l in labels), f"points: {labels}")
+
     def test_each_in_contract_form_parses_with_the_right_times(self):
-        for label, line, start, end in IN_CONTRACT:
+        for label, line, start, end in IN_CONTRACT + BOUND_PINS:
             with self.subTest(form=label):
                 segs = to_srt.parse_segments(line + "\n")
                 self.assertEqual(len(segs), 1, f"{label} did not parse")
@@ -103,10 +215,19 @@ class TestTheTwoAcceptedForms(unittest.TestCase):
         A range gives `to_srt` a real end; a point leaves it inferring one
         from the next segment and guessing outright for the last.
         """
-        ends = {label: to_srt.parse_segments(line + "\n")[0]["end"]
-                for label, line, _, _ in IN_CONTRACT}
-        self.assertEqual([e for k, e in ends.items() if "range" in k], [115.0, 115.0])
-        self.assertEqual([e for k, e in ends.items() if "point" in k], [None, None])
+        # Derived from IN_CONTRACT rather than hardcoded, so adding a row to the
+        # table does not require editing an assertion that has nothing to do
+        # with it. The hardcoded `[115.0, 115.0]` broke the moment #50 added
+        # the total-minute rows — a table-driven test whose expectations were
+        # not table-driven.
+        for label, line, _, expected_end in IN_CONTRACT:
+            with self.subTest(form=label):
+                end = to_srt.parse_segments(line + "\n")[0]["end"]
+                if "range" in label:
+                    self.assertIsNotNone(end, f"{label} is a range but carries no end")
+                    self.assertEqual(expected_end, end)
+                else:
+                    self.assertIsNone(end, f"{label} is a point but carries an end")
 
 
 class TestTheListIsClosed(unittest.TestCase):
@@ -136,11 +257,40 @@ class TestTheContractIsWrittenDownWhereProducersLook(unittest.TestCase):
         """
         doc = (REPO / "scripts" / "cache.py").read_text(encoding="utf-8")
         head = doc.split('"""')[1] if '"""' in doc else ""
+        # Whitespace-collapsed before matching. These assertions pin PHRASES,
+        # and a phrase that wraps across a line break is the same phrase — an
+        # earlier version matched raw text, so reflowing a paragraph turned the
+        # suite red without any statement having changed. A test that fires on
+        # formatting teaches people to edit the test.
+        head = " ".join(head.split())
         for needed in ("line format", "transcript", "polish"):
             with self.subTest(mentions=needed):
                 self.assertIn(needed, head.lower(),
                               "cache.py's module docstring no longer states the "
                               "line format a producer must write (#40)")
+
+        # #50: the docstring showed `MM:SS` and `HH:MM:SS` and nothing else, so
+        # a reader concluded — correctly, from what was written — that two
+        # digits was the whole story. The producer had been writing three for
+        # as long as recordings ran past 99 minutes. An incomplete contract is
+        # not a smaller contract; it is a wrong one, and it made the parser
+        # look right while it dropped four fifths of a transcript.
+        self.assertIn("total minutes", head.lower(),
+                      "cache.py does not say the minute field is TOTAL minutes, so "
+                      "nothing tells a reader it can exceed two digits (#50)")
+        # The bound is a contract statement, so the contract has to say what it
+        # bounds. "five is malformed" alone read three ways too widely at once.
+        self.assertIn("both ends of a range", head,
+                      "cache.py states a five-digit bound without saying it applies to "
+                      "a range's end too — it did not, and 10000:00 became 600000.0")
+        self.assertIn("literal hours", head,
+                      "cache.py does not distinguish the HH field from the MM field, so "
+                      "the four-digit bound reads as covering hours (416 days)")
+
+        self.assertIn("446:12", head,
+                      "cache.py has no worked example of a minute field past 99 — the "
+                      "shape is the one that silently truncated real transcripts, and "
+                      "prose without the example is what let it stay invisible (#50)")
 
     def test_the_out_of_scope_kinds_are_named_as_such(self):
         """Silence would read as coverage."""

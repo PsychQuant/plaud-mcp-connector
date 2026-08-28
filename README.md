@@ -118,6 +118,55 @@ times are used as given. The MCP reports only starts, so a cue has to run until
 the next one begins and the final cue gets a four-second guess. Installing the
 CLI (above) buys exact timing as well as a cheaper index.
 
+**Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
+silently truncated at the 100-minute mark and the `.srt` gave no sign of it —
+valid syntax, continuous timecodes, and four-fifths of a 7.4-hour transcript
+missing — 281 segments in the cache, 57 cues in the file.
+The CLI writes *total* minutes, so the field passes two digits at 100 (`100:05`,
+then `446:12` at seven hours) and the parser had been built for two. If you
+produced subtitles from a long recording before v0.10.1, redo them: the old file
+looks complete and is not. See #50.
+
+**Five other things changed in the same release**, each out of a review round on
+that fix, and none of them announced by the paragraph above until a reviewer
+pointed out that a user upgrading was not being told their subtitles now go
+through a filter:
+
+- **A malformed timestamp is now rejected rather than guessed.** `00:412` used
+  to come back as 412 seconds and `10000:00` as 600000 — plausible numbers, in
+  a function whose docstring said those raise. A malformed *start* now drops
+  the line (and is counted); a malformed *end* is discarded with a warning and
+  the duration inferred. See #53.
+- **Cue text is filtered.** Control, format, surrogate, private-use and
+  line/paragraph-separator characters are removed from every cue, so a
+  transcript cannot address your terminal. Characters that carry meaning are
+  kept — ZWJ, ZWNJ, LRM, RLM — and whitespace is normalised rather than
+  deleted, because deleting a separator joins the words on either side.
+  **Anything removed or normalised is counted**, on stderr and in the ledger,
+  including on `--preview-sources`.
+  *Unassigned* code points are deliberately **not** removed: unassigned is a
+  property of the running Python's Unicode tables, not of the character, so
+  that rule deleted letters assigned after the interpreter was built. And this
+  is a category rule, not a guarantee — variation selectors pass through it.
+  What makes it safe is the count, not the coverage.
+- **Losses that used to reach only stderr now ride the success line**: discarded
+  end times, corrected cue ends, removed or normalised characters, and cues
+  that held nothing but invisible characters — alongside the dropped-line
+  count. The success line reports the cues **in the file**, and those five
+  numbers close over every non-blank line of the input.
+- **`--preview-sources` declines more often, and says why.** It now refuses when
+  either side dropped a line, when the two cue counts differ, when the timelines
+  diverge, and when every line that differs sits at a timestamp the recording
+  uses more than once — cases where the pair it used to show was two different
+  moments — and when the transcript's header holds lines that are not
+  `key: value`, since some of what the file says may then have been read as
+  header. A repeated timestamp on its own does not stop it: if some other line
+  differs at an unambiguous moment, that pair is shown.
+- **The `⚠ marked incomplete` warning can fire on the default path.** It read
+  the transcript's frontmatter flag from whichever file was being subtitled,
+  and the default is the polish, which has no frontmatter — so on the shipped
+  path it could never fire at all.
+
 Before this was fixed, the CLI path produced **no subtitles at all** — the two
 paths write different timestamp shapes and only one was understood, so the
 recommended way to index was the one that could not be captioned (#40).
@@ -245,6 +294,61 @@ nothing else makes it visible.
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.
+- **A transcript line the parser does not recognise is dropped, but no longer
+  quietly.** Every non-blank line after the frontmatter that does not become a
+  cue is counted; its shape — not its words, and not its digits — is named on
+  stderr, and the count rides along with the cue count on stdout so a caller
+  reading only the success line still sees it. The counter asks whether the line
+  *became a cue*, never whether it *looks like* one: three attempts at the
+  looks-like question each left a shape out (an indented line, a `(` bracket, a
+  markdown bullet), because that question has to enumerate and producer drift
+  does not. The cost of the inversion is the mirror image — prose written into
+  the body counts as a drop — and that is the right way round, because prose in
+  the body is itself a contract violation worth naming. This exists because two
+  defences that were each individually reasonable left a gap between them:
+  dropping unrecognised lines is deliberate (blank lines, frontmatter), and the
+  guard against a broken file fires only when *nothing* parsed. Neither covered
+  *partly* — one fifth parsed is not zero, so #50 lost most of a transcript in
+  silence. Treat the warning as a
+  contract gap rather than a bad file: the shape probably needs adding to
+  `scripts/cache.py`.
+
+  Where the count reports depends on how you invoke it. With `-o` it rides on
+  the success line (`wrote N cues (K content line(s) dropped — see stderr)`);
+  without `-o` stdout *is* the subtitle file, so the same sentence goes to
+  stderr instead. Exit stays 0 either way — the file was written and is usable —
+  so a caller checking only the exit status has to read the cue line.
+
+- **Which lines count as the file's header is decided by the file's kind, not by
+  what the lines look like.** `cache.py` writes a `---` block only for
+  `--kind transcript`; polish, summary and outline are bare bodies. So in a
+  polish file a first line of `---` is *content* and is counted, while in a
+  transcript the block runs delimiter to delimiter whatever it contains and is
+  never parsed for cues. Five earlier attempts asked instead what the lines
+  *looked* like, and each one either ate content or turned metadata into
+  subtitles (#50).
+
+  **The three numbers are a ledger, and the tests check the numbers.** `wrote N
+  cues (H header, K dropped)` accounts for every non-blank line in the file, so
+  nothing the tool removed goes unmentioned. Every count the tool prints — the
+  ledger, the drop warning, the header warning, the zero-cue diagnostic — is
+  compared as an integer by the suite, and each one turns it red when corrupted.
+  A test reads the tool's own syntax tree and fails if any value reaching a
+  stream is not registered against the assertion that covers it, so a new one
+  cannot be added silently. Three times this was claimed of numbers nothing was
+  checking — the assertions looked for a word rather than a value, then covered
+  one surface of three, then four of eight — each time because the evidence was
+  drawn from the same list as the claim. When some of what the header swallowed would have parsed as
+  a cue, stderr says how many — but the count does not depend on that judgement,
+  which is the point: an earlier version reported the header *only* when its
+  contents were cue-shaped, so every shape the parser could not read stayed
+  invisible to the very warning meant to report the parser's blindness.
+
+  This matters most for `--file`, where an arbitrary path gives nothing to
+  consult and a leading `---` block is taken as a header regardless. Point
+  `--file` at a *polish* file that starts with `---` and the block is still
+  consumed — but now you are told what went into it. Prefer the recording id
+  when the file came from the cache; `--file` is for transcripts from elsewhere.
 - **`login` can fail with `port 8199 is in use`.** Five things bind that port —
   three in the MCP, one in the CLI — so a second login while one is open loses.
   `lsof -nP -iTCP:8199 -sTCP:LISTEN` says which: `*:8199` is a login in progress and

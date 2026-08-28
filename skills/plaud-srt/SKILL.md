@@ -73,7 +73,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> --preview-sources
 |---|---|
 | `get` exits 3 **and** `--preview-sources` exits 0 | **Ask**, quoting the two lines it printed. Then `config.py set subtitle_source <answer>` |
 | `get` exits 0 | A choice is on record — use it, say nothing |
-| `--preview-sources` exits 3 | **Do not ask.** Either there is no polish, or the two versions are identical — there is no choice to offer, and asking would present two identical lines |
+| `--preview-sources` exits 3 | **Do not ask, and read stderr — it always says why.** The reason is never inferred from the exit code: every refusal prints `⚠ no source comparison to show: <cause>`. Relay that sentence if it points at something the user should fix (a dropped line, a diverging timeline); stay quiet if it does not (no polish, identical versions). This row used to enumerate the causes and was wrong every time the code grew one |
 | Nobody is there to answer | Use the default and **say which version you used** in the report |
 
 Asking "polished or verbatim?" with nothing attached is unanswerable — the user
@@ -110,15 +110,78 @@ long transcript into the conversation** — write the file and report the path.
 
 ### 4. Report honestly
 
-Say where the file went and how many cues it has. Two things to surface if they
-happen, because neither is visible in the resulting `.srt`:
+Say where the file went and how many cues it has.
 
-- **`⚠ marked incomplete` on stderr** — the cache holds only part of this
+**Surface every `⚠` line the conversion puts on stderr.** Not a list to check
+against — relay what is there. *(This is about the conversion in step 3. The
+`⚠ no source comparison to show:` line belongs to `--preview-sources` in step
+2, and that row says when it is worth passing on — the two instructions read
+as a contradiction only because neither used to name which run it meant.)* None of these is visible in the resulting `.srt`, and this
+section has twice been a closed count that went stale the moment the code grew
+another one. What each means:
+
+- **`⚠ N of M content lines … did not parse` on stderr** — the file was
+  converted, but part of the transcript is missing from it. **This is the one
+  that contradicts the success line**: the run exits 0 and stdout still reports
+  a cue count, because the `.srt` was written and is usable. The count is real
+  and it is also short. Report both, and lead with the loss — a 7.4-hour
+  recording once produced 57 perfectly-formed cues out of 281 segments and was
+  reported as a success (#50). When this fires, stdout says
+  `wrote N cues (H header, K content line(s) dropped — see stderr)`; pass that
+  whole sentence on rather than just the number. The three numbers are a ledger:
+  cues plus dropped plus header accounts for every non-blank line in the file,
+  so a header far larger than a handful of `key: value` lines is worth a second
+  look even when nothing else is reported. Without `-o` there is no success
+  line — stdout is the subtitle file itself — so the same sentence arrives on
+  stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
+- **`is marked incomplete — these subtitles cover only the part that was
+  fetched` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
   Tell the user to re-run `plaud-index` before using the file.
-- **`no timestamped segments`** — the cached transcript has no timestamps, so
-  subtitles are impossible from it. This exits non-zero rather than writing an
-  empty `.srt`, which would look like success and produce a silent video.
+- **`⚠ N line(s) … were taken as the file's header and not read`** — the block
+  from the first `---` to the next one was treated as the header. **The sentence
+  continues past the count and the rest is the part that matters** — it says what
+  those lines look like, whether any of them would have parsed as cues, and
+  whether the block is the shape `cache.py` actually writes. Relay it whole; do
+  not summarise it down to N, and do not read a large N on its own as harmless.
+  Usually this means a file with no header whose first line happens to be `---`,
+  or a header whose closing delimiter is later than intended.
+- **`and more declared end(s) discarded`** / **`and more cue end(s)
+  corrected`** — only the first few of each are shown; the counts on the
+  success line are the whole total. Quote the total, not the examples.
+- **`⚠ a declared end time was discarded`** — the producer wrote an end for that
+  cue and it could not be read, so the cue's duration is inferred instead. The
+  words are all there; one timing is a guess that looks like a measurement.
+- **`error: no lines in … looked like segments`** — nothing in the file became a
+  cue, so subtitles are impossible from it. This exits non-zero rather than
+  writing an empty `.srt`, which would look like success and produce a silent
+  video. The message states how many content lines and how many header lines
+  were present, and its closing sentence is deliberately **two-sided** about
+  the cause: it does not know whether the recording carries no timestamps or
+  carries a shape the contract does not cover. Relay both halves and read the
+  two numbers first. A one-sided guess sends somebody off to re-record a file
+  that was fine.
+- **`cue(s) held nothing but control or format characters and were removed`** —
+  a cue whose entire text was invisible. Dropping it is right (an SRT block
+  with no text line is a blank flash in some players and malformed in others),
+  but it means the cue count is one lower than the cache's line count, so
+  relay it whenever the two are being compared.
+- **`character(s) in the two lines above were removed or normalised before
+  display`** — appears beside `--preview-sources`. The two lines you are about
+  to quote are not byte-for-byte what the cache holds. The words are unchanged;
+  say so if the user is choosing on the strength of punctuation or spacing.
+- **`character(s) in the cue text were removed or normalised`** — some
+  characters in the words were changed: control and format code points,
+  private-use code points, and repeated or non-standard whitespace collapsed
+  to a single space. The count is exact. **The message says explicitly that
+  this is not a guarantee nothing invisible remains** — it is a category rule,
+  and variation selectors, for one, pass through it. Relay it when the
+  recording is in a script where invisible characters carry meaning, or when a
+  private-use font is in play; a large count on a short recording is worth a
+  look either way.
+- **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
+  start, or a cue would have had no length. Corrections, not losses — mention
+  them only if the user is checking timing closely.
 
 ## How the timing works, and where it is a guess
 

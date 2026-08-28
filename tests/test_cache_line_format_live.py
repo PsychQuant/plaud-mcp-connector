@@ -63,10 +63,38 @@ sys.path.insert(0, str(REPO / "tests"))
 
 from test_cache_line_format import to_srt  # noqa: E402  (same parser as the contract)
 
-# A line that carries a timestamp at all. Deliberately looser than the
-# contract: this file's job is to find lines the contract does NOT cover, so
-# it must be able to see them.
-TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,2}:\d{2}")
+# The oracle is NEGATIVE, for the same reason the tool's own counter is.
+#
+# It used to ask "does this line carry a timestamp?" — a positive enumeration,
+# and its blind spots were exactly the five prefixes `to_srt.py`'s own comment
+# lists as the known failures of that construct: a markdown bullet, a
+# blockquote, a numbered list, a fullwidth bracket, an angle bracket. A producer
+# drifting to any of them is invisible to the oracle AND to the parser, so
+# `len(parsed) == len(timestamped)` held as `0 == 0` and the live check passed
+# over a total loss. The main counter was inverted for precisely that reason
+# three rounds earlier; this file was left behind.
+#
+# So: every non-blank line is content, and content that produced no cue is a
+# drift. No enumeration, nothing to widen, and no shape a producer can invent
+# that this cannot see.
+def content_lines(text: str, *, expect_frontmatter: bool = True) -> list[str]:
+    """Every non-blank line, minus a `---`-delimited header if one opens the file.
+
+    `expect_frontmatter` exists because the tool applies the same rule
+    conditionally: only the top-level transcript carries frontmatter, and
+    `cache.py` writes polish as a bare body. An oracle that strips a leading
+    `---` block from a polish file while the parser does not is comparing two
+    different documents, and the difference shows up as a cue-count mismatch
+    blamed on the parser.
+    """
+    lines = text.splitlines()
+    if expect_frontmatter and lines and lines[0].strip() == "---":
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                lines = lines[i + 1:]
+                break
+    return [l for l in lines if l.strip()]
+
 
 # The CLI colours its table. Ids arrive as `\x1b[36m<32 hex>\x1b[39m`, and the
 # `m` of the escape is a word character — so `\b[0-9a-f]{32}\b` matched
@@ -75,11 +103,12 @@ TIMESTAMPED = re.compile(r"^\s*[\[(]?\s*\d{1,2}:\d{2}")
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
-def shape_of(line: str) -> str:
-    """Describe a line without quoting it."""
-    head = re.match(r"^\s*[^\w\s]*\s*[\d:.,\s-]*", line)
-    return f"{len(line)} chars, opens with {head.group(0)!r}" if head else \
-           f"{len(line)} chars"
+# One implementation, not two. `to_srt` grew this function when round 2 found
+# the CLI's own drop warning quoting ninety raw characters of somebody's speech
+# — the very thing `test_a_failure_message_never_quotes_a_transcript_line` has
+# forbidden here since this file was written. Pointing that test at the shipped
+# function turns a rule this file kept for itself into one the tool obeys too.
+shape_of = to_srt.shape_of
 
 
 class TestRealProducerOutputIsInsideTheContract(unittest.TestCase):
@@ -130,28 +159,124 @@ class TestRealProducerOutputIsInsideTheContract(unittest.TestCase):
             if r.returncode != 0 or not out.exists() or not out.stat().st_size:
                 continue          # no transcript on this one — see #37
             text = out.read_text(encoding="utf-8")
-            timestamped = [l for l in text.splitlines() if TIMESTAMPED.match(l)]
-            if not timestamped:
-                continue
+            content = content_lines(text)
+            # NOT `if not content: continue`. The previous version skipped when
+            # its positive oracle saw nothing — which is precisely what a
+            # whole-corpus drift looks like, so the one failure this test exists
+            # to catch ended the run as `skipTest` rather than red. A file with
+            # bytes in it and no content lines is a finding.
+            self.assertTrue(
+                content,
+                "a transcript file came back non-empty and yielded no content "
+                "lines at all. That is either a producer writing something this "
+                "check cannot see, or this check being wrong — both are failures, "
+                "and the earlier version turned this exact state into a skip.")
             parsed = to_srt.parse_segments(text)
             self.assertEqual(
-                len(parsed), len(timestamped),
-                f"the producer emitted {len(timestamped)} timestamped lines and "
+                len(parsed), len(content),
+                f"the producer emitted {len(content)} content lines and "
                 f"the contract's parser accepted {len(parsed)}. The shapes it "
                 f"could not read: "
-                + "; ".join(shape_of(l) for l in timestamped
+                + "; ".join(shape_of(l) for l in content
                             if not to_srt.parse_segments(l + "\n"))
                 + f"\n\nThis is #40's shape again: a producer writing a form "
                   f"the contract does not list. Measure the new form, then add "
                   f"it to tests/test_cache_line_format.py — do not widen the "
                   f"parser alone.")
             checked += 1
-            break
+            # Not `break`. Stopping at the first recording that HAS a transcript
+            # meant a live run could pass having looked at one short file, while
+            # #50's shape only appears past 99 minutes — so the check most likely
+            # to matter was the one least likely to run. Three is a compromise
+            # against the CLI call each costs.
+            if checked >= 3:
+                break
 
         if not checked:
             self.skipTest("none of the 20 most recent recordings has a "
                           "transcript — nine of ten is normal on this "
                           "account (#37), so this is not a failure")
+
+
+class TestTheOracleCannotGoBlindWhereTheParserDoes(unittest.TestCase):
+    """The property that makes this file's comparison mean anything.
+
+    `content_lines` is the independent side of `len(parsed) == len(content)`.
+    While it was a POSITIVE test — "does this line carry a timestamp?" — its
+    blind spots were the five prefixes `to_srt.py`'s own comment lists as the
+    known failures of that construct, and a producer drifting to any of them was
+    invisible to the oracle AND to the parser. The assertion then held as
+    `0 == 0` and the live check passed over a total loss.
+
+    Two earlier attempts at the same idea were caught the same way: round 1's
+    oracle was NARROWER than the parser (spurious red on good data), round 2's
+    was EQUAL to it (blind together). Widening a positive test a third time was
+    never going to be the answer. It counts non-blank lines now, so there is no
+    shape it can fail to see and nothing left to widen.
+
+    This runs in default CI — no network — because the failure it guards against
+    is invisible in an opt-in test by construction.
+    """
+
+    def test_it_sees_every_shape_the_parser_refuses(self):
+        """Including the five that used to be invisible to both sides."""
+        for line in ("- [100:05] S: markdown bullet",
+                     "> [100:05] S: blockquote",
+                     "1. [100:05] S: numbered list",
+                     "【100:05】S: fullwidth bracket",
+                     "<100:05> S: angle bracket",
+                     "[10000:00] S: five-digit minutes",
+                     "[00:99] S: ninety-nine seconds",
+                     "[100:5] S: one-digit seconds",
+                     " [00:13] S: indented",
+                     "(00:13 - 00:20) S: paren form",
+                     "prose with no timestamp at all"):
+            with self.subTest(line=line[:26]):
+                self.assertFalse(to_srt.parse_segments(line),
+                                 f"precondition: {line!r} is out of contract")
+                self.assertEqual(
+                    [line], content_lines(line),
+                    f"the oracle cannot see {line!r}, so a producer drifting to "
+                    f"it would be dropped by the parser and agreed with here — "
+                    f"the assertion passing as 0 == 0 over a total loss")
+
+    def test_everything_the_parser_accepts_is_a_content_line(self):
+        for line in ("[00:00] S: x", "[446:12 - 446:40] S: x", "[9999:59] S: x",
+                     "[1:02:03] S: x", "[00:10.500] S: x"):
+            with self.subTest(line=line):
+                self.assertTrue(to_srt.parse_segments(line), "precondition")
+                self.assertEqual([line], content_lines(line),
+                                 f"the parser accepts {line!r} and the oracle "
+                                 f"does not count it, so the live comparison "
+                                 f"would go red on data that is fine")
+
+    def test_blank_lines_and_a_header_are_not_content(self):
+        self.assertEqual([], content_lines("\n   \n\n"))
+        self.assertEqual(
+            ["[00:00] S: x"],
+            content_lines("---\nid: a\nname: b\n---\n\n[00:00] S: x\n"))
+
+    def test_no_shape_test_survives_in_the_oracle(self):
+        src = pathlib.Path(__file__).read_text(encoding="utf-8")
+        # To the end of the ORACLE, not to the first `class` — that slice ran
+        # ~700 characters past `content_lines` and swept in the `ANSI` regex,
+        # so this guard policed code it does not describe and would have gone
+        # red for a reason its message does not give. A guard imprecise about
+        # its own subject is how the enumerations here went stale before.
+        start = src.index("def content_lines(")
+        body = src[start:src.index("\n\n\n", start)]
+        # `":"` used to be in this tuple with an unconditional `continue`
+        # underneath it — a member that could never assert anything, which
+        # reads as coverage of the header-delimiter case and is not. The
+        # positional check it stood for is `test_blank_lines_and_a_header_are
+        # _not_content` above; listing it here as well was theatre.
+        for shape in ("\\d", "[0-9]", "TIMESTAMPED"):
+            self.assertNotIn(shape, body,
+                             f"{shape!r} is back in the oracle. A test for what a "
+                             f"cue LOOKS LIKE is the construct that failed three "
+                             f"times; the oracle counts content, it does not "
+                             f"recognise shapes")
+
 
 
 class TestTheLiveTestCannotSilentlyStopRunning(unittest.TestCase):

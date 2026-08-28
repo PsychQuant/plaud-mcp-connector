@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "plaud-mcp-connector",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Full-text transcript search on top of the official Plaud MCP. Runs @plaud-ai/mcp (fetched from npm at launch), then adds the one thing it cannot do: search across transcript bodies. Independent third-party plugin — not affiliated with or supported by Plaud Inc.",
   "author": {
     "name": "Che Cheng"
