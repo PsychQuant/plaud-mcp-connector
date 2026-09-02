@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -1818,12 +1819,35 @@ class TestThereIsOnlyOneParse(unittest.TestCase):
                                  "they are two implementations now")
 
     def test_the_wrapper_has_no_loop_of_its_own(self):
-        src = SCRIPT.read_text(encoding="utf-8")
-        body = src[src.index("def parse_segments("):src.index("def build_cues(")]
-        self.assertNotIn("SEGMENT.match", body,
-                         "parse_segments matches lines itself instead of "
+        """Structural, since #57: no loop in the body, and a call to the pass.
+
+        This used to be `assertNotIn("SEGMENT.match", body)` — a needle for the
+        one string a second parse loop would have to contain. #57 moved every
+        legitimate match behind `_match_segment`, so no call site could ever
+        contain that string again and the needle was dead: a reviewer wrote a
+        complete second loop into this function, calling the helper, and the
+        whole suite stayed green. The guard against "two derivations" had been
+        walked past by the change whose stated motive was that exact hazard.
+
+        A body with no `for`/`while`/comprehension cannot iterate lines, and a
+        body that calls `parse_transcript` is delegating. Neither depends on
+        what the matcher is called this year.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "parse_segments")
+        loops = [type(n).__name__ for n in ast.walk(fn)
+                 if isinstance(n, (ast.For, ast.AsyncFor, ast.While, ast.ListComp,
+                                   ast.SetComp, ast.DictComp, ast.GeneratorExp))]
+        self.assertEqual([], loops,
+                         "parse_segments iterates something itself instead of "
                          "delegating — that is a second parse, and second "
-                         "derivations are what this issue kept failing on")
+                         "derivations are what this issue kept failing on: " + repr(loops))
+        self.assertTrue(
+            any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "parse_transcript" for n in ast.walk(fn)),
+            "parse_segments no longer calls parse_transcript — the one pass it "
+            "is supposed to be a thin view of")
 
 
 class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
@@ -3722,3 +3746,230 @@ class TestTwoCausesAtOnceAreBothNamed(unittest.TestCase):
         self.assertIsNone(numbers_in(proc.stderr).get("refusal_also_dropped"),
                           f"a second cause was reported that is not there: "
                           f"{proc.stderr!r}")
+
+
+class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
+    """#57: `SEGMENT` backtracks quadratically on a line that is all whitespace
+    after the timestamp, and the repair belongs in ONE place.
+
+    The cause is not a single quantifier. Three parts of the pattern can eat
+    whitespace after `]` — `\\]\\s*`, the optional speaker group, and
+    `(?P<text>.*\\S)\\s*$` — and when nothing in the tail can satisfy `\\S`, the
+    engine tries every start position and walks each one to the end. Doubling
+    the whitespace quadruples the time.
+
+    Four regex-only repairs were measured and none worked: lazy `.*?\\S` is
+    still quadratic, possessive `.*+\\S` breaks every line that should parse
+    (nothing is left for `\\S` to match), an atomic group keeps the quadratic,
+    and anchoring the first character does nothing. `\\S` itself cannot go — it
+    is what enforces `("text must be non-blank", "[00:10]    ")` in
+    tests/test_cache_line_format.py's NOT_TOLERATED table.
+
+    What works is not matching the whitespace at all: strip the tail before the
+    match. `str.rstrip()` and the pattern's `\\s*$` discard the same characters
+    (checked over every code point, not assumed), so no captured group changes.
+
+    WHAT THE GUARD BELOW COUNTS, and why. Verify round 1 mutated the first cut
+    of this class — which counted `SEGMENT.match(...)` CALLS inside named
+    functions — eight ways, and seven stayed green: a module-level lambda, a
+    module-level comprehension, a class body, an alias `_M = SEGMENT.match`,
+    `getattr(SEGMENT, "match")`, and the two that a real author would actually
+    reach for, `SEGMENT.search` and `SEGMENT.fullmatch`, which are near-identical
+    on an anchored pattern and keep the whole quadratic. Every one of those has
+    to LOAD the name first. So the guard counts loads of the name, not calls of
+    the method: `SEGMENT` may be read exactly once in the file, inside the
+    helper. That closes all seven with one rule and is immune to docstrings and
+    comments, which are not `ast.Name` nodes.
+    """
+
+    @staticmethod
+    def _name_loads(tree, name):
+        """Every Load of `name`, with the nearest enclosing scope and line."""
+        out = []
+
+        def visit(node, scope):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                scope = node.name
+            elif isinstance(node, ast.Lambda):
+                scope = scope + ":<lambda>"
+            if (isinstance(node, ast.Name) and node.id == name
+                    and isinstance(node.ctx, ast.Load)):
+                out.append((scope, node.lineno))
+            for child in ast.iter_child_nodes(node):
+                visit(child, scope)
+
+        visit(tree, "<module>")
+        return out
+
+    def test_segment_is_read_in_exactly_one_place(self):
+        """The whole point of the fix, and the reason it is a test.
+
+        Stripping at each call site would be the same repair written twice, and
+        the third call site added later would not get it. This is the house
+        rule `test_the_wrapper_has_no_loop_of_its_own` applies to
+        `parse_segments`, widened to the file.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        loads = self._name_loads(tree, "SEGMENT")
+        self.assertEqual(
+            ["_match_segment"], [scope for scope, _ in loads],
+            "SEGMENT is read from somewhere other than the single helper. Any "
+            "use — .match, .search, .fullmatch, an alias, getattr, a lambda or "
+            "comprehension at module scope — has to load the name, and every "
+            "one of them reinstates the #57 quadratic on whatever it feeds. "
+            "Route it through _match_segment.\n  loads (scope, line): "
+            + repr(loads))
+        stores = [(n.lineno) for n in ast.walk(tree)
+                  if isinstance(n, ast.Name) and n.id == "SEGMENT"
+                  and isinstance(n.ctx, ast.Store)]
+        self.assertEqual(1, len(stores),
+                         "SEGMENT is assigned more than once: " + repr(stores))
+
+    def test_no_other_script_reaches_segment(self):
+        """`SEGMENT` is a public module name; the guard above only reads one
+        file. Today nothing else imports it (cache.py mentions it in prose
+        only). This turns "today nothing does" into "nothing may".
+        """
+        for path in sorted(SCRIPT.parent.glob("*.py")):
+            if path == SCRIPT:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            hits = [(type(n).__name__, n.lineno) for n in ast.walk(tree)
+                    if (isinstance(n, ast.Name) and n.id == "SEGMENT")
+                    or (isinstance(n, ast.Attribute) and n.attr == "SEGMENT")
+                    or (isinstance(n, ast.ImportFrom)
+                        and any(a.name == "SEGMENT" for a in n.names))]
+            with self.subTest(script=path.name):
+                self.assertEqual([], hits,
+                                 f"{path.name} reaches SEGMENT directly — the "
+                                 f"quadratic lives in the compiled pattern, and "
+                                 f"only _match_segment in to_srt.py is allowed "
+                                 f"to apply it: {hits!r}")
+
+    def test_the_helper_strips_the_argument_it_matches(self):
+        """Bound to the ARGUMENT of the one call, not to the token.
+
+        The first cut asked whether `.rstrip` appeared anywhere in the helper.
+        `line.rstrip("\\n")`, a discarded `line.rstrip()`, and dead code all
+        satisfied it while leaving the quadratic intact. The check is now: the
+        single `SEGMENT.match` call takes one argument, that argument is a call
+        to `.rstrip` on the helper's parameter, and the call has NO arguments —
+        `rstrip("\\n")` strips one character and still walks every space.
+        """
+        tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        helper = next(fn for fn in ast.walk(tree)
+                      if isinstance(fn, ast.FunctionDef) and fn.name == "_match_segment")
+        param = helper.args.args[0].arg
+        calls = [n for n in ast.walk(helper)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr == "match"
+                 and isinstance(n.func.value, ast.Name) and n.func.value.id == "SEGMENT"]
+        self.assertEqual(1, len(calls), "expected exactly one SEGMENT.match in the helper")
+        arg = calls[0].args[0] if calls[0].args else None
+        ok = (isinstance(arg, ast.Call)
+              and isinstance(arg.func, ast.Attribute) and arg.func.attr == "rstrip"
+              and isinstance(arg.func.value, ast.Name) and arg.func.value.id == param
+              and not arg.args and not arg.keywords)
+        self.assertTrue(
+            ok,
+            f"the helper does not match `{param}.rstrip()` (no arguments) — "
+            f"that is the #57 quadratic backtracking, unfixed. Got: "
+            + ast.dump(calls[0]))
+
+    # ── the timing test, in two parts: a DoS ceiling and a growth rate ──
+
+    @staticmethod
+    def _parse_ms(n, reps):
+        line = "[00:10] " + " " * n + "\n"
+        best = float("inf")
+        for _ in range(reps):
+            started = time.perf_counter()
+            to_srt.parse_segments(line)
+            best = min(best, time.perf_counter() - started)
+        return best * 1000
+
+    def test_a_line_of_pure_whitespace_does_not_take_quadratic_time(self):
+        """Two sizes, 4x apart. Linear grows ~4x; the #57 quadratic grew ~16x.
+
+        The first cut measured one size against a 100 ms bound and called that
+        "not quadratic". It was "fast on this machine": a quadratic that
+        happened to land under the bound at that size would have passed, and
+        when the test WAS red it ran the full backtrack first — 30 to 50 s
+        inside a suite that otherwise takes 15 — so a broken helper looked like
+        a hang.
+
+        The ceiling stays (it is the DoS line, and it fires in about 5 s now),
+        and the growth check is what the name promises. The `< 1 ms` branch is
+        for the fixed implementation, where both timings are microseconds and a
+        ratio between them is noise, not evidence.
+        """
+        big = self._parse_ms(12800, reps=1)
+        self.assertLess(
+            big, 100.0,
+            f"parsing one all-whitespace line (n=12800) took {big:.0f} ms — "
+            f"that is the #57 backtracking. A 12 KB line is a reachable local "
+            f"DoS because --file accepts arbitrary markdown.")
+        small = self._parse_ms(3200, reps=5)
+        big = self._parse_ms(12800, reps=5)
+        self.assertTrue(
+            big < 1.0 or big < 8 * small,
+            f"time grew {big / max(small, 1e-9):.1f}x for 4x the whitespace "
+            f"({small:.3f} ms -> {big:.3f} ms) — super-linear, i.e. the "
+            f"backtracking is back in some shape")
+
+    def test_the_blank_line_is_still_rejected_after_stripping(self):
+        """The contract the strip must not break.
+
+        `"[00:10]    "` rstrips to `"[00:10]"`, which NOT_TOLERATED already
+        rejects for a different reason (no text at all). Both spellings must
+        still produce no cue — otherwise the fix bought its speed by accepting
+        a line the grammar forbids.
+        """
+        for line in ("[00:10]", "[00:10]    ", "[00:10] " + " " * 4000):
+            with self.subTest(line=repr(line[:20])):
+                self.assertEqual(
+                    [], to_srt.parse_segments(line + "\n"),
+                    "a line whose text is blank produced a cue")
+
+    def test_an_accepted_line_keeps_its_groups_across_the_strip(self):
+        """The one input class the strip actually touches: an ACCEPTED line
+        with a whitespace tail. Every row of the contract tables ends in a
+        non-space, so nothing pinned that `speaker`/`text` come back unchanged
+        when there is something to strip. This also pins the answer the issue
+        asked to be read off the contract rather than guessed: text keeps its
+        internal runs of whitespace.
+        """
+        segs = to_srt.parse_segments("[00:10] S: hello  world   \n")
+        self.assertEqual(1, len(segs))
+        self.assertEqual("S", segs[0]["speaker"])
+        self.assertEqual("hello  world", segs[0]["text"])
+        self.assertEqual(10.0, segs[0]["start"])
+
+    def test_the_reported_line_keeps_its_original_trailing_whitespace(self):
+        """Strip for MATCHING only — checked on BOTH ledger paths.
+
+        `skipped` / `lost_ends` carry raw lines into the ledger the user reads.
+        Two ways the strip could leak into that data, and they are caught by
+        different lines:
+
+        - stripping at READ time (every line, before matching) — caught by the
+          `[99999:00]` case, which fails `_STAMP` and never reaches the matcher;
+          it lands in `skipped` via the `elif line.strip()` branch. Verify round
+          1 found this was the ONLY thing the first cut tested, while its
+          docstring claimed to be testing the matcher.
+        - rebinding `line = line.rstrip()` AFTER a successful match — invisible
+          to the case above. Caught by the `banana` case: it matches, its end
+          fails to parse, and the RAW line must arrive in `lost_ends` intact.
+        """
+        raw = "[99999:00] S: out of contract   "
+        _, skipped, _, _ = to_srt.parse_transcript(raw + "\n")
+        self.assertEqual([raw], skipped,
+                         "a non-matching line was reported without its "
+                         "trailing whitespace — the strip leaked into read time")
+
+        raw = "[00:10 - banana] S: text   "
+        cues, _, _, lost_ends = to_srt.parse_transcript(raw + "\n")
+        self.assertEqual([raw], lost_ends,
+                         "a MATCHED line was reported without its trailing "
+                         "whitespace — the strip leaked out of the matcher")
+        self.assertEqual("text", cues[0]["text"])

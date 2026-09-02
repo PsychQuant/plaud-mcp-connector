@@ -118,6 +118,44 @@ SEGMENT = re.compile(
 )
 
 
+def _match_segment(line: str) -> re.Match | None:
+    r"""The ONE place `SEGMENT` is applied to a line.
+
+    Strips the tail first, and that is the whole of #57. `SEGMENT` backtracks
+    quadratically on a line that is all whitespace after the timestamp:
+    n=1600 -> 82 ms, 3200 -> 321 ms, 6400 -> 1415 ms, 12800 -> 5381 ms.
+    Doubling n quadruples the time, and `--file` accepts arbitrary markdown, so
+    a 12 KB line of spaces is a reachable local DoS.
+
+    The cause is not one quantifier. Three parts of the pattern can eat
+    whitespace after `]` — `\]\s*`, the optional speaker group, and
+    `(?P<text>.*\S)\s*$` — and when nothing in the tail can satisfy `\S`, the
+    engine tries every start position and walks each to the end. Four
+    regex-only repairs were measured and none worked: lazy `.*?\S` is still
+    quadratic,
+    possessive `.*+\S` breaks every line that should parse, an atomic group
+    keeps the quadratic, anchoring the first character does nothing. And `\S`
+    itself cannot go — it is what enforces "text must be non-blank" in
+    `tests/test_cache_line_format.py`'s NOT_TOLERATED table.
+
+    Stripping is free of consequence because `\s*$` discards the same
+    characters: no captured group changes value. It happens HERE, at the match,
+    and not when lines are read — `skipped` and `dropped` carry the raw line
+    into the ledger a human reads, and stripping at read time would have
+    quietly edited that data instead of only speeding up the match.
+
+    One entry point, not a strip at each call site: the same repair written
+    twice is the repair the third call site will not have.
+
+    The Match this returns is over the STRIPPED string: its `.string`,
+    `.span()` and `group(0)` do not line up with the `line` the caller holds
+    (they differ by the length of the tail, which is unbounded). Both callers
+    today read only the named groups. A third that wants an offset is the
+    caller this sentence is for.
+    """
+    return SEGMENT.match(line.rstrip())
+
+
 # The same shape as a start, for validating an end before converting it.
 # Anchored, not merely used with `fullmatch`: unanchored, a later `.search()`
 # would accept `100:05` inside any surrounding junk and the check would pass
@@ -489,7 +527,7 @@ def parse_transcript(text: str, *, expect_frontmatter: bool = False
     skipped: list[str] = []
     lost_ends: list[str] = []
     for line in body_lines:
-        m = SEGMENT.match(line)
+        m = _match_segment(line)
         if m:
             try:
                 start = parse_timestamp(m.group("ts"))
@@ -1120,7 +1158,7 @@ def main() -> None:
     # wrote itself, with nothing else wrong. Silence is allowed only where the
     # kind AND the writer are both known.
     if header:
-        ate = [line for line in header if SEGMENT.match(line)]
+        ate = [line for line in header if _match_segment(line)]
         # Speak whenever the header is not the shape `cache.py` writes, not only
         # when its contents happen to be `SEGMENT`-shaped. An ordinary five-line
         # frontmatter and one that had swallowed speech printed the SAME ledger
