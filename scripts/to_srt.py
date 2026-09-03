@@ -122,10 +122,16 @@ def _match_segment(line: str) -> re.Match | None:
     r"""The ONE place `SEGMENT` is applied to a line.
 
     Strips the tail first, and that is the whole of #57. `SEGMENT` backtracks
-    quadratically on a line that is all whitespace after the timestamp:
-    n=1600 -> 82 ms, 3200 -> 321 ms, 6400 -> 1415 ms, 12800 -> 5381 ms.
-    Doubling n quadruples the time, and `--file` accepts arbitrary markdown, so
-    a 12 KB line of spaces is a reachable local DoS.
+    quadratically on ANY line it can start matching that then ends in a run
+    of whitespace with nothing for the text group to anchor on — not only the
+    `[00:10]` + spaces the issue named. `[00:10] S: ` + spaces, the ranged
+    form + spaces, and tabs, NBSP or U+3000 in place of spaces all measure
+    the same ×4 per doubling (the issue's shape: n=1600 -> 82 ms, 3200 ->
+    321 ms, 6400 -> 1415 ms, 12800 -> 5381 ms). `--file` accepts arbitrary
+    markdown, so a 12 KB line of whitespace is a reachable local DoS. This
+    sentence used to name one shape, and verify round 3 found that the test
+    fixtures had been transcribed from it — so the guards covered one shape
+    of the input class. `tests/test_to_srt.py` times a family now.
 
     The cause is not one quantifier. Three parts of the pattern can eat
     whitespace after `]` — `\]\s*`, the optional speaker group, and

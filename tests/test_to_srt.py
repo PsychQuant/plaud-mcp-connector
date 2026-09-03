@@ -7,6 +7,7 @@ produces *some* output.
 
 import importlib.util
 import io
+import itertools
 import json
 import os
 import pathlib
@@ -17,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -1820,36 +1822,49 @@ class TestThereIsOnlyOneParse(unittest.TestCase):
                                  "they are two implementations now")
 
     def test_the_wrapper_is_exactly_the_one_pass(self):
-        """Behavioural since #57 round 2, after two structural versions fell.
+        """Behavioural since #57 round 2, after two structural versions fell;
+        tightened in round 3 after the behavioural one fell too.
 
         Version 1 grepped the body for `SEGMENT.match`; #57 moved every match
         behind a helper and the needle went dead. Version 2 forbade loop NODES
-        (`for`/`while`/comprehensions) and required a call to
-        `parse_transcript` — and a reviewer wrote a full second derivation with
-        `map`/`filter`, called `parse_transcript` for nothing, and stayed green.
-        Enumerating node types is enumerating spellings, and spellings are
-        unbounded.
+        and required a call to `parse_transcript` — a reviewer wrote a full
+        second derivation with `map`/`filter`, called `parse_transcript` for
+        nothing, and stayed green. Version 3 substituted a sentinel LIST and
+        asserted identity of the returned object — a reviewer parsed the body
+        a second time with a copied pattern, wrote the answer INTO that list
+        (`cues[:] = mine`), and returned the very sentinel: 8.9 s at 12 800
+        characters, 646 tests green. Identity of the container is not identity
+        of the contents.
 
-        The property is not "the body looks thin". It is: the cues this returns
-        ARE the cues the one pass produced, and nothing else was consulted.
-        Both halves are checked by substitution — a sentinel that only
-        `parse_transcript` can hand back, and a matcher that explodes if
-        touched. No second derivation can return the sentinel object, and none
-        can run without a matcher.
+        So the sentinel is now a tuple of read-only mappings — nothing can be
+        written into it, only replaced — and the check is per element, plus
+        the text the one pass received must be the caller's own object. A
+        derivation that runs and DISCARDS its result is not visible here; it
+        is visible to the timing family in `TestSegmentMatchingHasOneEntryPoint`,
+        which times `parse_segments` as one of its five paths.
         """
-        sentinel = [{"start": 0.0, "end": None, "speaker": "", "text": "x"}]
+        body = "[00:10] S: x\n[00:20] S: y\n"
+        cue = types.MappingProxyType
+        sentinel = (cue({"start": 0.0, "end": None, "speaker": "", "text": "x"}),
+                    cue({"start": 10.0, "end": None, "speaker": "", "text": "y"}))
         with mock.patch.object(to_srt, "parse_transcript",
                                return_value=(sentinel, [], [], [])) as one_pass, \
              mock.patch.object(to_srt, "_match_segment",
                                side_effect=AssertionError(
                                    "parse_segments consulted the matcher itself — "
                                    "that is a second derivation")):
-            got = to_srt.parse_segments("[00:10] S: x\n[00:20] S: y\n")
-        one_pass.assert_called_once()
+            got = to_srt.parse_segments(body)
+        one_pass.assert_called_once_with(body)
+        self.assertIs(body, one_pass.call_args.args[0],
+                      "the text handed to the one pass is not the caller's object — "
+                      "something pre-processed it first")
         self.assertIs(sentinel, got,
                       "parse_segments returned something other than the very "
-                      "list parse_transcript produced — a copy, a re-parse, or "
+                      "object parse_transcript produced — a copy, a re-parse, or "
                       "a merge is a second derivation")
+        self.assertEqual(len(sentinel), len(got))
+        for i, (a, b) in enumerate(zip(sentinel, got)):
+            self.assertIs(a, b, f"cue {i} is not the object the one pass produced")
 
 
 class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
@@ -3751,109 +3766,196 @@ class TestTwoCausesAtOnceAreBothNamed(unittest.TestCase):
 
 
 class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
-    """#57: `SEGMENT` backtracks quadratically on a line that is all whitespace
-    after the timestamp, and the repair is to strip before matching, in one
-    helper. `str.rstrip()` and the pattern's `\\s*$` discard the same characters
-    (all 0x110000 code points checked, twice, in verify), so no group changes.
+    r"""#57: `SEGMENT` backtracks quadratically on a line it can start matching
+    that then ends in whitespace with nothing for the text group to anchor on,
+    and the repair is to strip before matching, in one helper. `str.rstrip()`
+    and the pattern's `\s*$` discard the same characters (checked below over
+    every code point, against the pattern's own flags), so no group changes.
 
-    WHAT GUARANTEES THE FIX, AND WHAT MERELY TRIPS EARLY.
+    THREE ROUNDS, THREE PRINCIPLES, THREE ENUMERATIONS.
 
-    Two rounds of verify falsified two structural guards in a row. Round 1:
-    counting `SEGMENT.match(...)` calls missed 7 of 8 second-call-site shapes.
-    Round 2: counting Name LOADS of `SEGMENT` missed `globals()["SEGMENT"]`,
-    `sys.modules[__name__].SEGMENT` — and, worst, a third `re.compile` built
-    from `_STAMP` exactly the way this file already builds two patterns, which
-    never mentions `SEGMENT` at all. The quadratic is a property of the PATTERN
-    TEXT; a rule about a NAME cannot reach it.
+    Round 1 counted `SEGMENT.match(...)` calls and missed 7 of 8 second-call-
+    site spellings. Round 2 counted Name LOADS of `SEGMENT` and missed a copy
+    of the pattern text that never names it. Round 3 timed ONE input string
+    per path, and a reviewer restored the quadratic inside the helper for
+    `"[00:10] S: " + spaces` (1.7 s at 409 600), another for tabs and U+3000
+    by changing `rstrip()` to `rstrip(" ")` (7.3 s at 6 400), a third with an
+    `lru_cache` that `min()` over identical reps could not see — every guard
+    green. Enumerating node types enumerates spellings; enumerating input
+    strings enumerates shapes; both are unbounded.
 
-    So the guarantees in this class are BEHAVIOURAL, on both reachable paths:
+    WHAT THIS CLASS GUARANTEES NOW, AND ITS HONEST EDGE.
 
-      - the library path (`parse_transcript`) is timed in the asymptotic
-        regime, where a quadratic cannot hide under the constant term;
-      - the CLI path (`main --file`, which feeds the header ledger) is timed
-        the same way, in-process;
-      - the helper is checked to behave exactly as the bare pattern on a
-        corpus that includes long accepted lines, so a "small perf tweak" that
-        drops real cues cannot hide behind the timing.
+    The guarantee is behavioural and it is over a FAMILY, not a string: every
+    prefix the pattern's branch structure admits (point / ranged / empty /
+    malformed end, no / short / spaced speaker, inner bracket whitespace) ×
+    every whitespace class (ASCII space, a control character, Latin-1 NBSP,
+    CJK ideographic space), on EVERY reachable path — `parse_transcript`,
+    `parse_segments`, and `main --file` through its three line-consuming
+    exits (header ledger, the no-cue error, a dropped body line). Growth is
+    judged on INCREMENTS between 204 800, 819 200 and 3 276 800 characters, so
+    a fixed cost cancels instead of diluting the ratio; a spy proves the line
+    reached `_match_segment` on that path; each CLI exit code is asserted; the
+    whole thing runs in child processes with a hard timeout and `cli_env`.
 
-    The structural checks remain as TRIPWIRES: they fire in 20 ms on the
-    spellings a real author reaches for (`.search`, an alias, a second call
-    site) and say which line. They are not the guarantee, and their messages
-    say so. An evasion of a tripwire that does not also fail a timing test is
-    not a #57 regression.
+    The edge: the family is finite, so a slow path keyed on a predicate that
+    is false on every member of it — "ranged end AND a digit in the speaker"
+    — is outside what any finite test can catch. That is not a gap a bigger
+    family closes; it is the boundary between a regression and an adversary,
+    and the defence against the adversary is that the chokepoint is one line
+    a reviewer can read. The tolerated residue is stated as a number, not a
+    hope: a quadratic whose whole cost at a 3.2 MB line is under 0.5 ms passes.
+
+    The structural checks remain as TRIPWIRES at the bottom: they fire in
+    20 ms on the spellings a real author reaches for and name the line. They
+    are not the guarantee, and their messages say so.
     """
 
     # ── guarantees ──────────────────────────────────────────────────────
 
-    @staticmethod
-    def _lib_ms(n, reps):
-        body = "[00:10] " + " " * n + "\n"
-        best = float("inf")
-        for _ in range(reps):
-            t0 = time.perf_counter()
-            to_srt.parse_transcript(body)
-            best = min(best, time.perf_counter() - t0)
-        return best * 1000
+    PROBE = REPO / "tests" / "probe_segment_timing.py"
 
-    @staticmethod
-    def _cli_ms(n, reps):
-        """main() in-process with `--file`: the header ledger path.
+    # The family. Prefixes are generated from the pattern's branches, not
+    # typed from the issue's one example — round 3 found the old two fixtures
+    # were the helper docstring's sentence transcribed, and the sentence was
+    # narrower than the defect.
+    _STAMPS = ("00:10", "1:02:03.5")
+    _ENDS = ("", " - 00:20", " - ", " - banana")
+    _SPEAKERS = ("", "S: ", "Speaker Name: ")
+    # `product(...)` is the OUTERMOST iterable, the one place a class body's
+    # names are visible to a generator expression.
+    PREFIXES = tuple(f"[{s}{e}] {sp}"
+                     for s, e, sp in itertools.product(_STAMPS, _ENDS, _SPEAKERS)
+                     ) + ("[ 00:10 ] ",)
+    TAILS = (" ", "\t", "\u00a0", "\u3000")
+    # The CLI pays ~8 ms per measurement (file write, argparse, config, SRT
+    # write), so its paths run a spanning subset; the library paths run all 25.
+    CLI_PREFIXES = ("[00:10] ", "[00:10] S: ",
+                    "[1:02:03.5 - 00:20] Speaker Name: ", "[00:10 - banana] S: ")
+    # The no-cue exit needs prefixes that yield NO cue once stripped; a speaker
+    # prefix strips to `[00:10] S:`, which the grammar reads as the text "S:".
+    ZERO_CUE_PREFIXES = ("[00:10] ", "[1:02:03.5 - 00:20] ", "[00:10 - banana] ",
+                         "[ 00:10 ] ")
 
-        Frontmatter holding the pathological line reaches `main`'s
-        `SEGMENT`-shaped header check — a call site the library path never
-        touches, and the one a copied pattern would most plausibly be used at.
-        """
+    # Ceilings first, fail-fast, each bounding the worst case of the next: a
+    # gross quadratic (the issue's own, 321 ms at 3 200) is red after stage
+    # one. Growth on increments at three sizes; `min` of reps; reps differ.
+    # The last two ceilings are fail-fast heuristics, not the guarantee: the
+    # round-3 speaker-colon fold is 27 ms at 51 200 and 430 ms at 204 800 —
+    # under the first two ceilings, and without these it is red only at the
+    # timeout. A linear implementation is under 5 ms at 204 800; 200 ms is
+    # 40x that and still 100x above the fixed code's worst shape.
+    CEILINGS = ((3200, 25.0), (12800, 100.0), (51200, 100.0), (204800, 200.0))
+    GROWTH = (204800, 819200, 3276800)
+    CEILING_REPS, GROWTH_REPS = 2, 3
+    SLACK_MS = 0.5          # the stated residue: a quadratic under this at 3.2 MB passes
+    CHILD_TIMEOUT = 90.0    # the hard bound for ALL paths together; the fixed code needs ~2 s
+
+    # path → (prefixes, expected exit code or None for a library call,
+    #         a string the run must have printed or None)
+    PATHS = {
+        "lib":        (PREFIXES, None, None),
+        "segments":   (PREFIXES, None, None),
+        "cli-header": (CLI_PREFIXES, 0, "wrote "),
+        "cli-zero":   (ZERO_CUE_PREFIXES, 1, "looked like segments"),
+        "cli-body":   (CLI_PREFIXES, 0, "wrote "),
+    }
+
+    def _spawn(self, path, prefixes, cache):
+        spec = json.dumps({
+            "script": str(SCRIPT), "path": path, "prefixes": prefixes,
+            "tails": self.TAILS, "ceilings": self.CEILINGS, "growth": self.GROWTH,
+            "ceiling_reps": self.CEILING_REPS, "growth_reps": self.GROWTH_REPS,
+            "slack_ms": self.SLACK_MS,
+        })
+        # The spec goes by FILE, not stdin: five children are spawned before
+        # any is waited on, and `communicate` cannot both feed one child's
+        # stdin and leave the other four running.
+        spec_path = cache / f"spec-{path}.json"
+        spec_path.write_text(spec, encoding="utf-8")
+        return subprocess.Popen([sys.executable, str(self.PROBE), str(spec_path)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True,
+                                env=cli_env(cache))
+
+    def test_every_reachable_path_is_linear_across_the_input_family(self):
+        """One child per path, all five in parallel, judged here."""
         with tempfile.TemporaryDirectory() as d:
-            src = pathlib.Path(d) / "h.md"
-            src.write_text("---\ntitle: x\n[00:10]" + " " * n + "\n---\n"
-                           "[00:10] S: hello\n[00:20]" + " " * n + "\n",
-                           encoding="utf-8")
-            argv = ["to_srt.py", "--file", str(src), "-o", str(pathlib.Path(d) / "o.srt")]
-            best = float("inf")
-            for _ in range(reps):
-                with mock.patch.object(sys, "argv", argv), \
-                     contextlib.redirect_stderr(io.StringIO()), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    t0 = time.perf_counter()
-                    try:
-                        to_srt.main()
-                    except SystemExit:
-                        pass
-                    best = min(best, time.perf_counter() - t0)
-            return best * 1000
+            cache = pathlib.Path(d)
+            children = {path: self._spawn(path, prefixes, cache)
+                        for path, (prefixes, _, _) in self.PATHS.items()}
+            # ONE deadline for all five, not one per child: the children run
+            # in parallel, so waiting on each in turn with its own timeout
+            # let a regression that hangs four of them take 4x the bound.
+            deadline = time.monotonic() + self.CHILD_TIMEOUT
+            results = {}
+            for path, child in children.items():
+                try:
+                    out, err = child.communicate(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    out, err = child.communicate()
+                    results[path] = (None, out, err)
+                    continue
+                results[path] = (child.returncode, out, err)
 
-    def _assert_linear(self, label, ms_at):
-        """Ceiling first (so the original #57 fails in seconds, not minutes),
-        then growth measured at 51 200 vs 204 800 — the asymptotic regime.
+        for path, (rc, out, err) in results.items():
+            _, want_exit, want_printed = self.PATHS[path]
+            with self.subTest(path=path):
+                last = err.strip().splitlines()[-1] if err.strip() else "(no progress line)"
+                self.assertIsNotNone(
+                    rc, f"{path}: the probe did not finish within {self.CHILD_TIMEOUT:.0f} s "
+                        f"— a quadratic slow enough to pass the ceilings; last completed: {last}")
+                try:
+                    report = json.loads(out)
+                except json.JSONDecodeError:
+                    self.fail(f"{path}: probe exited {rc} without a report; stderr tail:\n"
+                              + err[-1500:])
+                if report["failed"]:
+                    f = report["failed"]
+                    if f["stage"] == "ceiling":
+                        self.fail(f"{path} {f['prefix']!r} + {f['tail']!r}: n={f['n']} took "
+                                  f"{f['ms']:.0f} ms — the #57 quadratic; a {f['n'] // 1000} KB "
+                                  f"line is a reachable DoS")
+                    t = f["times"]
+                    self.fail(f"{path} {f['prefix']!r} + {f['tail']!r}: {t[0]:.3f} → {t[1]:.3f} → "
+                              f"{t[2]:.3f} ms at n={' → '.join(map(str, self.GROWTH))}; the "
+                              f"increments grew {f['ratio']:.1f}x for 4x the input (linear ≈ 4x, "
+                              f"quadratic ≈ 16x) — the backtracking is back in some spelling")
+                self.assertEqual(0, rc, f"{path}: probe exited {rc}; stderr tail:\n" + err[-1500:])
+                self._judge(path, report, want_exit, want_printed)
 
-        Round 2 showed why the regime matters: at 3 200 vs 12 800 a hand-rolled
-        O(n²) strip loop measured 7–8x for 4x input, because the regex and
-        call overhead still dominated; the ratio bound was evaluated and came
-        back GREEN. At 51 200 → 204 800 the same loop is 36 → 398 ms, 11x.
-        The fixed implementation is 0.04 → 0.15 ms, and the `< 2 ms` clause is
-        for it: a ratio between two sub-millisecond numbers is noise.
-        """
-        ceiling = ms_at(12800, 1)
-        self.assertLess(ceiling, 100.0,
-                        f"{label}: n=12800 took {ceiling:.0f} ms — the #57 "
-                        f"quadratic, and a 12 KB line is a reachable DoS")
-        small, big = ms_at(51200, 3), ms_at(204800, 3)
-        self.assertTrue(
-            big < 2.0 or big < 8 * small,
-            f"{label}: time grew {big / max(small, 1e-9):.1f}x for 4x the "
-            f"whitespace ({small:.3f} → {big:.3f} ms at n=51200 → 204800) — "
-            f"super-linear; the backtracking is back in some spelling")
-
-    def test_the_library_path_is_linear_in_trailing_whitespace(self):
-        self._assert_linear("parse_transcript", self._lib_ms)
-
-    def test_the_cli_header_path_is_linear_in_trailing_whitespace(self):
-        """Round 2's sharpest finding: every timing assertion was on the
-        library path, while the DoS claim and the second call site both live
-        in `main`. A pattern copied at the header ledger restored 23 s per
-        25 600-space line with the suite fully green.
-        """
-        self._assert_linear("main --file (header ledger)", self._cli_ms)
+    def _judge(self, path, report, want_exit, want_printed):
+        for sh in report["shapes"]:
+            label = f"{path} {sh['prefix']!r} + {sh['tail']!r}"
+            with self.subTest(shape=label):
+                for n, limit in self.CEILINGS:
+                    self.assertLess(sh["ceiling"][str(n)], limit,
+                                    f"{label}: n={n} took {sh['ceiling'][str(n)]:.1f} ms")
+                t = [sh["growth"][str(n)] for n in self.GROWTH]
+                d1, d2 = t[1] - t[0], t[2] - t[1]
+                self.assertLessEqual(
+                    d2, 8 * d1 + self.SLACK_MS,
+                    f"{label}: {t[0]:.3f} → {t[1]:.3f} → {t[2]:.3f} ms at n="
+                    f"{' → '.join(map(str, self.GROWTH))}; the increments grew "
+                    f"{d2 / max(d1, 1e-9):.1f}x for 4x the input (linear ≈ 4x, "
+                    f"quadratic ≈ 16x) — the backtracking is back in some spelling")
+                self.assertGreaterEqual(
+                    sh["spy_max"], len(sh["prefix"]) + self.GROWTH[-1],
+                    f"{label}: the pathological line never reached _match_segment on "
+                    f"this path (longest argument seen: {sh['spy_max']}) — it was "
+                    f"matched, or skipped, somewhere else")
+                if want_exit is not None:
+                    ex = sh["exit"]
+                    self.assertEqual(want_exit, ex["code"],
+                                     f"{label}: main exited {ex['code']}, expected "
+                                     f"{want_exit}; stderr: {ex['stderr']!r}")
+                    self.assertEqual(want_exit == 0, ex["wrote"],
+                                     f"{label}: output file "
+                                     + ("missing" if want_exit == 0 else "written on an error exit"))
+                    self.assertIn(want_printed, ex["stdout"] + ex["stderr"],
+                                  f"{label}: the run did not take the branch this path "
+                                  f"exists to time; stdout={ex['stdout']!r} stderr={ex['stderr']!r}")
 
     def test_the_helper_behaves_exactly_as_the_bare_pattern(self):
         """The helper is a chokepoint whose docstring is 35 lines of
@@ -3862,7 +3964,11 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
         passed every structural guard while dropping every real cue over 4 KB.
 
         Differential, on a corpus that includes what the contract tables do
-        not: long accepted lines, and accepted lines with a whitespace tail.
+        not: long accepted lines, accepted lines with a whitespace tail, and
+        (since round 3) tails from the other whitespace classes, a bare CR,
+        blank and whitespace-only lines, and bracket mistakes — so an
+        `if "\\xa0" in line: return None` cannot hide either. Every group is
+        compared by value AND by span: the strip must not move a boundary.
         `SEGMENT.match` is applied here directly — this is a test, outside the
         tripwire's scope — on inputs where it is fast.
         """
@@ -3874,6 +3980,11 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
             "[00:10] S: " + "字" * 8000 + "  ",    # 8 KB non-ASCII cue
             "[00:10] S: " + "x" * 200000,          # 200 KB single cue
             "[00:10]", "[00:10]    ", "not a cue", "[99999:00] S: nope",
+            "[00:10] S: x\r", "[00:10] S: x\u00a0", "[00:10] S: x  ",
+            "[00:10] S: x\t\t", "[00:10] S: x\u3000", "[00:10] S: x \u00a0 y \u00a0",
+            "[00:10] S:", "[00:10] :", "", "   ", "\u3000", "\r",
+            "[00:10 S: no closing bracket", "[00:10]] S: double", "[[00:10] S: x",
+            "[00:10 - ] S: empty end   ", "[00:10 -] S: x",
         ]
         for line in corpus:
             with self.subTest(line=repr(line[:24])):
@@ -3884,23 +3995,35 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                 if want is not None:
                     self.assertEqual(want.groupdict(), got.groupdict(),
                                      "helper and bare pattern disagree on WHAT it captured")
+                    self.assertEqual(want.groups(), got.groups(),
+                                     "helper and bare pattern disagree on an unnamed capture")
+                    self.assertEqual([want.span(g) for g in range(1, want.re.groups + 1)],
+                                     [got.span(g) for g in range(1, got.re.groups + 1)],
+                                     "a group boundary moved — the strip reached into a group")
 
     def test_rstrip_and_the_patterns_whitespace_class_agree_on_every_code_point(self):
-        """The premise the whole fix rests on, pinned rather than remembered.
+        r"""The premise the whole fix rests on, pinned rather than remembered.
 
         "`\s*$` discards the same characters as `str.rstrip()`, so no captured
         group changes" was verified in review by enumerating every code point —
         but a claim that lives only in a verify comment is a claim the next
-        interpreter upgrade can falsify in silence. `re`'s `\s` for `str`
-        patterns and `str.isspace()` are documented to agree; this is the
-        cheap check that they still do, over all 0x110000 code points.
+        interpreter upgrade can falsify in silence.
+
+        Round 3 (Codex) pointed out that the first version of this test
+        compared `str.isspace()` against a freshly compiled, flag-less `\s`:
+        neither side was the thing the fix uses. This one calls `rstrip()` and
+        compiles `\s` with `SEGMENT`'s OWN flags, so an `re.ASCII` added to
+        the pattern — under which NBSP is `\S` to the pattern and whitespace
+        to `rstrip()` — turns it red.
         """
-        ws = re.compile(r"\s")
-        disagree = [cp for cp in range(0x110000)
-                    if chr(cp).isspace() != bool(ws.match(chr(cp)))]
-        self.assertEqual([], [hex(cp) for cp in disagree],
-                         "rstrip() and the pattern's \\s no longer strip the same "
-                         "characters — the strip is now changing captured groups")
+        every = "".join(map(chr, range(0x110000)))
+        pattern_eats = {m.start() for m in
+                        re.finditer(r"\s", every, flags=to_srt.SEGMENT.flags)}
+        rstrip_eats = {cp for cp in range(0x110000) if ("x" + chr(cp)).rstrip() == "x"}
+        self.assertEqual(
+            [], sorted(hex(cp) for cp in pattern_eats ^ rstrip_eats),
+            "rstrip() and the pattern's \\s no longer strip the same characters — "
+            "the strip is now changing captured groups, or dropping lines")
 
     def test_the_blank_line_is_still_rejected_after_stripping(self):
         """The contract the strip must not break: `"[00:10]    "` rstrips to
@@ -3966,7 +4089,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
         """TRIPWIRE. Catches `.search`, an alias, `getattr`, `globals()`, and a
         plain second call site — the spellings a real author reaches for — in
         20 ms and names the line. It CANNOT see a re-compiled copy of the
-        pattern text; the two timing tests above are what catch that.
+        pattern text; the timing family above is what catches that.
         """
         tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         reaches = self._segment_reaches(tree)
