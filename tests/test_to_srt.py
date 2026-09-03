@@ -53,6 +53,13 @@ _spec = importlib.util.spec_from_file_location("to_srt", SCRIPT)
 to_srt = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(to_srt)
 
+# The #57 timing probe: its `judge()` is the growth criterion, imported so the
+# parent re-judges every shape with the SAME function the child failed fast on.
+_probe_spec = importlib.util.spec_from_file_location(
+    "probe_segment_timing", REPO / "tests" / "probe_segment_timing.py")
+_probe = importlib.util.module_from_spec(_probe_spec)
+_probe_spec.loader.exec_module(_probe)
+
 
 # Every number the tool prints, extracted by the pattern that prints it.
 #
@@ -3772,39 +3779,65 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     and the pattern's `\s*$` discard the same characters (checked below over
     every code point, against the pattern's own flags), so no group changes.
 
-    THREE ROUNDS, THREE PRINCIPLES, THREE ENUMERATIONS.
+    FOUR ROUNDS, FOUR GUARDS, FOUR WAYS TO BE WRONG.
 
-    Round 1 counted `SEGMENT.match(...)` calls and missed 7 of 8 second-call-
-    site spellings. Round 2 counted Name LOADS of `SEGMENT` and missed a copy
-    of the pattern text that never names it. Round 3 timed ONE input string
-    per path, and a reviewer restored the quadratic inside the helper for
-    `"[00:10] S: " + spaces` (1.7 s at 409 600), another for tabs and U+3000
-    by changing `rstrip()` to `rstrip(" ")` (7.3 s at 6 400), a third with an
-    `lru_cache` that `min()` over identical reps could not see — every guard
-    green. Enumerating node types enumerates spellings; enumerating input
-    strings enumerates shapes; both are unbounded.
+    Round 1 counted `SEGMENT.match(...)` calls: 7 of 8 second-call-site
+    spellings passed. Round 2 counted Name LOADS of `SEGMENT`: a copy of the
+    pattern text that never names it passed. Round 3 timed ONE input string
+    per path: a fold keyed on a speaker colon, a `rstrip(" ")`, and a copied
+    pattern in an untimed branch of `main` all passed. Round 4 timed a family
+    of 100 strings on five paths — and every one of them STRIPPED TO ITS
+    PREFIX before the pattern saw it, so the pattern never received more than
+    34 characters; a lifted speaker bound (`{1,60}?` → `{1,}?`) made a line
+    that survives the strip cost 11 s per 128 KB through `--file` with every
+    guard green. The same round found a sixth path (`--preview-sources`)
+    untimed, and the wall-clock growth criterion red on correct code
+    whenever four other processes were running.
 
-    WHAT THIS CLASS GUARANTEES NOW, AND ITS HONEST EDGE.
+    WHAT THIS CLASS GUARANTEES NOW.
 
-    The guarantee is behavioural and it is over a FAMILY, not a string: every
-    prefix the pattern's branch structure admits (point / ranged / empty /
-    malformed end, no / short / spaced speaker, inner bracket whitespace) ×
-    every whitespace class (ASCII space, a control character, Latin-1 NBSP,
-    CJK ideographic space), on EVERY reachable path — `parse_transcript`,
-    `parse_segments`, and `main --file` through its three line-consuming
-    exits (header ledger, the no-cue error, a dropped body line). Growth is
-    judged on INCREMENTS between 204 800, 819 200 and 3 276 800 characters, so
-    a fixed cost cancels instead of diluting the ratio; a spy proves the line
-    reached `_match_segment` on that path; each CLI exit code is asserted; the
-    whole thing runs in child processes with a hard timeout and `cli_env`.
+    Seven children, one per path, in parallel, under one CPU-time regime
+    (see `tests/probe_segment_timing.py` for the measurement design):
 
-    The edge: the family is finite, so a slow path keyed on a predicate that
-    is false on every member of it — "ranged end AND a digit in the speaker"
-    — is outside what any finite test can catch. That is not a gap a bigger
-    family closes; it is the boundary between a regression and an adversary,
-    and the defence against the adversary is that the chokepoint is one line
-    a reviewer can read. The tolerated residue is stated as a number, not a
-    hope: a quadratic whose whole cost at a 3.2 MB line is under 0.5 ms passes.
+      matcher     `_match_segment` on a pre-built string — the pattern's own
+                  cost, allocation-free; absolute bound on its increments.
+      lib         `parse_transcript`;   segments  `parse_segments`;
+      cli-header  `main --file` with the line in the frontmatter (header ledger);
+      cli-zero    `main --file` with only that line (the no-cue error exit);
+      cli-body    `main --file` with the line after a cue (dropped-line report);
+      cli-preview `main <id> --preview-sources` (`_cue_lines`, both files).
+
+    Shapes are generated from the pattern's branches (point / ranged / empty
+    / malformed end; no / short / spaced speaker; inner bracket whitespace)
+    × whitespace classes that include the ones `parse_transcript` keeps
+    INSIDE a line (U+2028, U+000B, U+0085) — and, since round 4, shapes
+    whose stripped length GROWS: `a` + whitespace + `:` (forces the speaker
+    group to backtrack), a long text, a long mixed text. Each path-level
+    shape is judged against a same-length CONTROL the pattern rejects at
+    character 0, measured alternately with it, so memory-system and load
+    effects cancel; the control itself carries a loose uniform bound so a
+    quadratic that hits every line equally is still seen. Ceilings fail
+    fast; a spy proves the line reached the helper on that path; every CLI
+    exit code and a printed marker are asserted.
+
+    THE RESIDUE, AS NUMBERS. The criterion (`judge()` in the probe, shared
+    with the child) is on the EXCESS over the control: its increment at the
+    top size may be at most `K_GROWTH` × its increment at the middle size,
+    plus `SLACK_MS` and half the control's own top increment. A quadratic
+    therefore passes only if its extra cost at the top size is under
+    `(K_GROWTH − 4) × de1 + SLACK_MS + dc2 / 2` — a number the failure message
+    prints for the shape at hand. On this machine that is ≈ 1–3 ms for the
+    tail shapes (whose excess is a `rstrip`) and up to a few hundred
+    milliseconds for the `a` + ws + `:` shape, whose excess is the pattern's
+    own 60 bounded speaker attempts (≈ 200 ms at 3.2 MB, linear). None of
+    that is 0.5 ms, and none of it is a DoS at any line length a transcript
+    reaches; it is stated so the next reader reasons from the real edge.
+
+    THE EDGE. The family is finite. A slow path keyed on a predicate false on
+    every member — an adversary, not a regression — is outside any finite
+    test; the defence there is that the chokepoint is one line a reviewer can
+    read. And a uniform quadratic below the ceilings that also hits the
+    control is caught only by the loose uniform bound.
 
     The structural checks remain as TRIPWIRES at the bottom: they fire in
     20 ms on the spellings a real author reaches for and name the line. They
@@ -3815,133 +3848,199 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
 
     PROBE = REPO / "tests" / "probe_segment_timing.py"
 
-    # The family. Prefixes are generated from the pattern's branches, not
-    # typed from the issue's one example — round 3 found the old two fixtures
-    # were the helper docstring's sentence transcribed, and the sentence was
-    # narrower than the defect.
     _STAMPS = ("00:10", "1:02:03.5")
     _ENDS = ("", " - 00:20", " - ", " - banana")
     _SPEAKERS = ("", "S: ", "Speaker Name: ")
     # `product(...)` is the OUTERMOST iterable, the one place a class body's
-    # names are visible to a generator expression.
+    # names are visible to a generator expression. A spanning subset of the
+    # pattern's branches, not every string it admits.
     PREFIXES = tuple(f"[{s}{e}] {sp}"
                      for s, e, sp in itertools.product(_STAMPS, _ENDS, _SPEAKERS)
                      ) + ("[ 00:10 ] ",)
-    TAILS = (" ", "\t", "\u00a0", "\u3000")
-    # The CLI pays ~8 ms per measurement (file write, argparse, config, SRT
-    # write), so its paths run a spanning subset; the library paths run all 25.
-    CLI_PREFIXES = ("[00:10] ", "[00:10] S: ",
-                    "[1:02:03.5 - 00:20] Speaker Name: ", "[00:10 - banana] S: ")
-    # The no-cue exit needs prefixes that yield NO cue once stripped; a speaker
-    # prefix strips to `[00:10] S:`, which the grammar reads as the text "S:".
-    ZERO_CUE_PREFIXES = ("[00:10] ", "[1:02:03.5 - 00:20] ", "[00:10 - banana] ",
-                         "[ 00:10 ] ")
+    # Four classes the issue and round 3 named, plus the three that
+    # `parse_transcript` deliberately leaves inside a line (its split is on
+    # `\n` only) — round 4 measured U+2028 at 3.1x the cost of a space.
+    TAILS = (" ", "\t", "\u00a0", "\u3000", "\u2028", "\x0b", "\x85")
+    SPAN_TAILS = (" ", "\u2028")
+    SPAN_PREFIXES = ("[00:10] ", "[00:10] S: ",
+                     "[1:02:03.5 - 00:20] Speaker Name: ", "[00:10 - banana] S: ")
+    # The no-cue exits need prefixes that yield NO cue once stripped; a
+    # speaker prefix strips to `[00:10] S:`, which the grammar reads as "S:".
+    ZERO_CUE_PREFIXES = ("[00:10] ", "[1:02:03.5 - 00:20] ", "[00:10 - banana] ", "[ 00:10 ] ")
 
-    # Ceilings first, fail-fast, each bounding the worst case of the next: a
-    # gross quadratic (the issue's own, 321 ms at 3 200) is red after stage
-    # one. Growth on increments at three sizes; `min` of reps; reps differ.
-    # The last two ceilings are fail-fast heuristics, not the guarantee: the
-    # round-3 speaker-colon fold is 27 ms at 51 200 and 430 ms at 204 800 —
-    # under the first two ceilings, and without these it is red only at the
-    # timeout. A linear implementation is under 5 ms at 204 800; 200 ms is
-    # 40x that and still 100x above the fixed code's worst shape.
+    @staticmethod
+    def _shapes(prefixes, tails, survivors=True):
+        shapes = [("tail", p, t) for p in prefixes for t in tails]
+        if survivors == "light":
+            # The CLI paths carry a 3.2 MB cue through sanitise, collapse and
+            # the SRT write on every survivor rep — ~30 ms each — so they run
+            # one survivor of each expensive kind and stay under the matcher.
+            return shapes + [("colon", "[00:10] ", " "), ("text", "[00:10] S: ", " ")]
+        if survivors:
+            # The `colon` shape is the pattern's most expensive linear case
+            # (60 bounded speaker attempts: ≈ 200 ms per 3.2 MB on the fixed
+            # code), so it is kept to three members; the speaker group
+            # accepts every whitespace class alike, so the class matters less
+            # here than the two stamp forms do.
+            shapes += [("colon", "[00:10] ", " "), ("colon", "[1:02:03.5 - 00:20] ", " "),
+                       ("colon", "[00:10] ", "\u2028")]
+            shapes += [("text", "[00:10] S: ", " "), ("text", "[00:10 - 00:20] Speaker Name: ", " ")]
+            shapes += [("mixed", "[00:10] S: ", t) for t in tails]
+        return shapes
+
+    # Ceilings on the shape's own path time: fail-fast heuristics that bound
+    # the next stage's worst case, not the guarantee. Growth on increments at
+    # three sizes (byte-equalised in the probe); `min` of reps; reps differ.
     CEILINGS = ((3200, 25.0), (12800, 100.0), (51200, 100.0), (204800, 200.0))
     GROWTH = (204800, 819200, 3276800)
     CEILING_REPS, GROWTH_REPS = 2, 3
-    SLACK_MS = 0.5          # the stated residue: a quadratic under this at 3.2 MB passes
-    CHILD_TIMEOUT = 90.0    # the hard bound for ALL paths together; the fixed code needs ~2 s
+    K_GROWTH, K_UNIFORM = 8.0, 8.0
+    SLACK_MS, UNIFORM_SLACK_MS = 0.5, 1.0
+    CHILD_TIMEOUT = 120.0    # the hard bound for ALL paths together; the fixed code needs ~5 s
 
-    # path → (prefixes, expected exit code or None for a library call,
-    #         a string the run must have printed or None)
-    PATHS = {
-        "lib":        (PREFIXES, None, None),
-        "segments":   (PREFIXES, None, None),
-        "cli-header": (CLI_PREFIXES, 0, "wrote "),
-        "cli-zero":   (ZERO_CUE_PREFIXES, 1, "looked like segments"),
-        "cli-body":   (CLI_PREFIXES, 0, "wrote "),
-    }
+    # path → (shapes, expected exit code or None, a string the run must print or None)
+    @classmethod
+    def _paths(cls):
+        return {
+            "matcher":     (cls._shapes(cls.PREFIXES, cls.TAILS), None, None),
+            # The full family runs on `matcher`; the path-level children exist
+            # to catch what a PATH adds, which no prefix choice hides, so they
+            # run spanning subsets and the whole class stays under ~10 s.
+            "lib":         (cls._shapes(cls.SPAN_PREFIXES, cls.TAILS[:4]), None, None),
+            "segments":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS), None, None),
+            "cli-header":  (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light"), 0, "wrote "),
+            "cli-zero":    (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, survivors=False),
+                            1, "looked like segments"),
+            "cli-body":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light"), 0, "wrote "),
+            "cli-preview": (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, survivors=False),
+                            3, "no source comparison to show"),
+        }
 
-    def _spawn(self, path, prefixes, cache):
+    def _spec_constants(self):
+        return {"k_growth": self.K_GROWTH, "k_uniform": self.K_UNIFORM,
+                "slack_ms": self.SLACK_MS, "uniform_slack_ms": self.UNIFORM_SLACK_MS}
+
+    def _spawn(self, path, shapes, cache, scratch):
+        """One child. Its spec, scratch files and captured streams live in
+        `scratch`, never in `cache` — `cache` is the CLI's `PLAUD_CACHE_DIR`
+        and must hold only what the CLI put there. Streams go to FILES, not
+        pipes: a child that fills a 64 KB pipe while the parent waits on a
+        sibling would hang and be reported as a quadratic.
+        """
+        work = scratch / path
+        work.mkdir()
         spec = json.dumps({
-            "script": str(SCRIPT), "path": path, "prefixes": prefixes,
-            "tails": self.TAILS, "ceilings": self.CEILINGS, "growth": self.GROWTH,
+            "script": str(SCRIPT), "path": path, "shapes": shapes, "work": str(work),
+            "ceilings": self.CEILINGS, "growth": self.GROWTH,
             "ceiling_reps": self.CEILING_REPS, "growth_reps": self.GROWTH_REPS,
-            "slack_ms": self.SLACK_MS,
+            **self._spec_constants(),
         })
-        # The spec goes by FILE, not stdin: five children are spawned before
-        # any is waited on, and `communicate` cannot both feed one child's
-        # stdin and leave the other four running.
-        spec_path = cache / f"spec-{path}.json"
-        spec_path.write_text(spec, encoding="utf-8")
-        return subprocess.Popen([sys.executable, str(self.PROBE), str(spec_path)],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True,
-                                env=cli_env(cache))
+        (work / "spec.json").write_text(spec, encoding="utf-8")
+        out = open(work / "stdout.json", "w", encoding="utf-8")
+        err = open(work / "stderr.txt", "w", encoding="utf-8")
+        child = subprocess.Popen([sys.executable, str(self.PROBE), str(work / "spec.json")],
+                                 stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                 env=cli_env(cache))
+        out.close()
+        err.close()
+        return child
 
     def test_every_reachable_path_is_linear_across_the_input_family(self):
-        """One child per path, all five in parallel, judged here."""
-        with tempfile.TemporaryDirectory() as d:
-            cache = pathlib.Path(d)
-            children = {path: self._spawn(path, prefixes, cache)
-                        for path, (prefixes, _, _) in self.PATHS.items()}
-            # ONE deadline for all five, not one per child: the children run
-            # in parallel, so waiting on each in turn with its own timeout
-            # let a regression that hangs four of them take 4x the bound.
-            deadline = time.monotonic() + self.CHILD_TIMEOUT
-            results = {}
-            for path, child in children.items():
-                try:
-                    out, err = child.communicate(timeout=max(0.0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    child.kill()
-                    out, err = child.communicate()
-                    results[path] = (None, out, err)
-                    continue
-                results[path] = (child.returncode, out, err)
+        """Seven children, all in parallel, judged here."""
+        results = {}
+        with tempfile.TemporaryDirectory() as cache_dir, \
+             tempfile.TemporaryDirectory() as scratch_dir:
+            cache, scratch = pathlib.Path(cache_dir), pathlib.Path(scratch_dir)
+            children = {}
+            try:
+                for path, (shapes, _, _) in self._paths().items():
+                    children[path] = self._spawn(path, shapes, cache, scratch)
+                # ONE deadline for all of them: they run in parallel, so waiting
+                # on each with its own timeout let a hung set take N x the bound.
+                deadline = time.monotonic() + self.CHILD_TIMEOUT
+                spent_by = None
+                for path, child in children.items():
+                    left = deadline - time.monotonic()
+                    try:
+                        child.wait(timeout=max(0.0, left))
+                        rc = child.returncode
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.wait()
+                        rc = None
+                        spent_by = spent_by or path
+                    work = scratch / path
+                    results[path] = (rc, (work / "stdout.json").read_text(encoding="utf-8"),
+                                     (work / "stderr.txt").read_text(encoding="utf-8"),
+                                     spent_by if rc is None else None)
+            finally:
+                for child in children.values():
+                    if child.poll() is None:
+                        child.kill()
+                        child.wait()
 
-        for path, (rc, out, err) in results.items():
-            _, want_exit, want_printed = self.PATHS[path]
+        for path, (rc, out, err, spent_by) in results.items():
+            _, want_exit, want_printed = self._paths()[path]
             with self.subTest(path=path):
                 last = err.strip().splitlines()[-1] if err.strip() else "(no progress line)"
+                budget = (f" (the shared budget was already spent by {spent_by!r})"
+                          if spent_by and spent_by != path else "")
                 self.assertIsNotNone(
-                    rc, f"{path}: the probe did not finish within {self.CHILD_TIMEOUT:.0f} s "
-                        f"— a quadratic slow enough to pass the ceilings; last completed: {last}")
+                    rc, f"{path}: the probe did not finish within {self.CHILD_TIMEOUT:.0f} s"
+                        f"{budget} — a quadratic slow enough to pass the ceilings, or a "
+                        f"hung child; last completed: {last}")
                 try:
                     report = json.loads(out)
                 except json.JSONDecodeError:
                     self.fail(f"{path}: probe exited {rc} without a report; stderr tail:\n"
                               + err[-1500:])
                 if report["failed"]:
-                    f = report["failed"]
-                    if f["stage"] == "ceiling":
-                        self.fail(f"{path} {f['prefix']!r} + {f['tail']!r}: n={f['n']} took "
-                                  f"{f['ms']:.0f} ms — the #57 quadratic; a {f['n'] // 1000} KB "
-                                  f"line is a reachable DoS")
-                    t = f["times"]
-                    self.fail(f"{path} {f['prefix']!r} + {f['tail']!r}: {t[0]:.3f} → {t[1]:.3f} → "
-                              f"{t[2]:.3f} ms at n={' → '.join(map(str, self.GROWTH))}; the "
-                              f"increments grew {f['ratio']:.1f}x for 4x the input (linear ≈ 4x, "
-                              f"quadratic ≈ 16x) — the backtracking is back in some spelling")
+                    self._explain(report["failed"])
                 self.assertEqual(0, rc, f"{path}: probe exited {rc}; stderr tail:\n" + err[-1500:])
                 self._judge(path, report, want_exit, want_printed)
 
+    def _explain(self, f):
+        """The child stopped at the first failing shape; say which and why."""
+        sizes = " → ".join(map(str, self.GROWTH))
+        if f["stage"] == "ceiling":
+            self.fail(f"{f['label']}: n={f['n']} took {f['ms']:.0f} ms of CPU — the #57 "
+                      f"quadratic; a {f['n'] // 1000} KB line is a reachable DoS")
+        if f["stage"] == "matcher":
+            t = f["times"]
+            self.fail(f"{f['label']}: the helper alone cost {t[0]:.3f} → {t[1]:.3f} → "
+                      f"{t[2]:.3f} ms at n={sizes}; increments grew {f['ratio']:.1f}x for 4x "
+                      f"the input (linear ≈ 4x, quadratic ≈ 16x; up to {f['admitted']:.2f} ms "
+                      f"of extra cost at the top size was admitted) — the pattern, or the "
+                      f"strip, is superlinear again")
+        if f["stage"] == "excess":
+            p, c, e = f["times"], f["control"], f["excess"]
+            self.fail(f"{f['label']}: the path cost {p[0]:.3f} → {p[1]:.3f} → {p[2]:.3f} ms, "
+                      f"its same-length control {c[0]:.3f} → {c[1]:.3f} → {c[2]:.3f} ms, so "
+                      f"the work only this shape triggers cost {e[0]:.3f} → {e[1]:.3f} → "
+                      f"{e[2]:.3f} ms at n={sizes}; that excess grew {f['ratio']:.1f}x for 4x "
+                      f"the input (linear ≈ 4x, quadratic ≈ 16x; up to {f['admitted']:.2f} ms "
+                      f"of extra cost at the top size was admitted) — superlinear again on "
+                      f"this path")
+        c = f["control"]
+        self.fail(f"{f['label']}: the CONTROL line — rejected at character 0 — cost "
+                  f"{c[0]:.3f} → {c[1]:.3f} → {c[2]:.3f} ms at n={sizes} (increments "
+                  f"{f['ratio']:.1f}x for 4x); something on this path is superlinear for "
+                  f"every line, not just the pathological ones")
+
     def _judge(self, path, report, want_exit, want_printed):
         for sh in report["shapes"]:
-            label = f"{path} {sh['prefix']!r} + {sh['tail']!r}"
+            label = f"{path} {sh['kind']} {sh['prefix']!r} + {sh['tail']!r}"
             with self.subTest(shape=label):
                 for n, limit in self.CEILINGS:
                     self.assertLess(sh["ceiling"][str(n)], limit,
                                     f"{label}: n={n} took {sh['ceiling'][str(n)]:.1f} ms")
-                t = [sh["growth"][str(n)] for n in self.GROWTH]
-                d1, d2 = t[1] - t[0], t[2] - t[1]
-                self.assertLessEqual(
-                    d2, 8 * d1 + self.SLACK_MS,
-                    f"{label}: {t[0]:.3f} → {t[1]:.3f} → {t[2]:.3f} ms at n="
-                    f"{' → '.join(map(str, self.GROWTH))}; the increments grew "
-                    f"{d2 / max(d1, 1e-9):.1f}x for 4x the input (linear ≈ 4x, "
-                    f"quadratic ≈ 16x) — the backtracking is back in some spelling")
+                p = [sh["growth"][str(n)][0] for n in self.GROWTH]
+                c = [sh["growth"][str(n)][1] for n in self.GROWTH]
+                verdict = _probe.judge(self._spec_constants(), path, p, c)
+                if verdict is not None:
+                    self._explain({"label": label, **verdict})
                 self.assertGreaterEqual(
-                    sh["spy_max"], len(sh["prefix"]) + self.GROWTH[-1],
+                    sh["spy_max"], len(sh["prefix"]) + self.GROWTH[-1] // sh["bpc"],
                     f"{label}: the pathological line never reached _match_segment on "
                     f"this path (longest argument seen: {sh['spy_max']}) — it was "
                     f"matched, or skipped, somewhere else")
@@ -3950,9 +4049,10 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                     self.assertEqual(want_exit, ex["code"],
                                      f"{label}: main exited {ex['code']}, expected "
                                      f"{want_exit}; stderr: {ex['stderr']!r}")
-                    self.assertEqual(want_exit == 0, ex["wrote"],
-                                     f"{label}: output file "
-                                     + ("missing" if want_exit == 0 else "written on an error exit"))
+                    if path != "cli-preview":
+                        self.assertEqual(want_exit == 0, ex["wrote"],
+                                         f"{label}: output file "
+                                         + ("missing" if want_exit == 0 else "written on an error exit"))
                     self.assertIn(want_printed, ex["stdout"] + ex["stderr"],
                                   f"{label}: the run did not take the branch this path "
                                   f"exists to time; stdout={ex['stdout']!r} stderr={ex['stderr']!r}")
