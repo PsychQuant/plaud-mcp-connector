@@ -127,6 +127,19 @@ then `446:12` at seven hours) and the parser had been built for two. If you
 produced subtitles from a long recording before v0.10.1, redo them: the old file
 looks complete and is not. See #50.
 
+**A whitespace tail no longer costs quadratic time (#57).** A transcript line
+whose text was only whitespace after its timestamp — `[00:10]` and 12 KB of
+spaces, or `[00:10] S:` and tabs — took five seconds to reject, and four times
+longer for every doubling of the tail. `--file` accepts any markdown, so that was
+a reachable local denial of service. Matching now strips the tail first, in the
+one place the pattern is applied, and no captured group changes (checked over
+every code point against the pattern's own flags). The test suite times a family
+of such lines — every bracket form the pattern admits × seven whitespace
+classes, plus lines that survive the strip — on every path a line can reach the
+pattern, in child processes with a hard timeout, each against a same-length
+control line, because four rounds of review each found the previous guard
+covering one spelling of the defect.
+
 **Five other things changed in the same release**, each out of a review round on
 that fix, and none of them announced by the paragraph above until a reviewer
 pointed out that a user upgrading was not being told their subtitles now go
