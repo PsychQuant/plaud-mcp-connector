@@ -1844,11 +1844,15 @@ class TestThereIsOnlyOneParse(unittest.TestCase):
         of the contents.
 
         So the sentinel is now a tuple of read-only mappings — nothing can be
-        written into it, only replaced — and the check is per element, plus
-        the text the one pass received must be the caller's own object. A
+        written into it, only replaced, and the round-3 attack dies on the
+        slice assignment with a TypeError before any assertion runs. That
+        immutability is what does the work (round 5 pointed out that a
+        per-element identity loop AFTER the container check could never
+        fail, so it is gone); the identity check on the container and on the
+        text the one pass received are what remain. A
         derivation that runs and DISCARDS its result is not visible here; it
         is visible to the timing family in `TestSegmentMatchingHasOneEntryPoint`,
-        which times `parse_segments` as one of its five paths.
+        which times `parse_segments` as one of its seven paths.
         """
         body = "[00:10] S: x\n[00:20] S: y\n"
         cue = types.MappingProxyType
@@ -1869,9 +1873,6 @@ class TestThereIsOnlyOneParse(unittest.TestCase):
                       "parse_segments returned something other than the very "
                       "object parse_transcript produced — a copy, a re-parse, or "
                       "a merge is a second derivation")
-        self.assertEqual(len(sentinel), len(got))
-        for i, (a, b) in enumerate(zip(sentinel, got)):
-            self.assertIs(a, b, f"cue {i} is not the object the one pass produced")
 
 
 class TestFrontmatterIsDecidedByPositionAndByKind(unittest.TestCase):
@@ -3779,65 +3780,78 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     and the pattern's `\s*$` discard the same characters (checked below over
     every code point, against the pattern's own flags), so no group changes.
 
-    FOUR ROUNDS, FOUR GUARDS, FOUR WAYS TO BE WRONG.
+    FIVE ROUNDS, FIVE GUARDS, FIVE WAYS TO BE WRONG.
 
     Round 1 counted `SEGMENT.match(...)` calls: 7 of 8 second-call-site
     spellings passed. Round 2 counted Name LOADS of `SEGMENT`: a copy of the
     pattern text that never names it passed. Round 3 timed ONE input string
     per path: a fold keyed on a speaker colon, a `rstrip(" ")`, and a copied
     pattern in an untimed branch of `main` all passed. Round 4 timed a family
-    of 100 strings on five paths — and every one of them STRIPPED TO ITS
-    PREFIX before the pattern saw it, so the pattern never received more than
-    34 characters; a lifted speaker bound (`{1,60}?` → `{1,}?`) made a line
-    that survives the strip cost 11 s per 128 KB through `--file` with every
-    guard green. The same round found a sixth path (`--preview-sources`)
-    untimed, and the wall-clock growth criterion red on correct code
-    whenever four other processes were running.
+    of 100 strings on five paths — and every one STRIPPED TO ITS PREFIX
+    before the pattern saw it, so a lifted speaker bound (`{1,60}?` →
+    `{1,}?`) cost 11 s per 128 KB through `--file` with every guard green;
+    the same round found a sixth path untimed and the wall-clock criterion
+    red on correct code under load. Round 5 timed 263 shapes on seven paths,
+    including lines that survive the strip — and every one of them grew
+    AFTER the closing bracket, so reverting the end group to its pre-#50
+    lazy form made a 2 KB line with no closing bracket cost 10.9 s, cubic,
+    with everything green. Each guard covered exactly the region its author
+    was looking at.
 
     WHAT THIS CLASS GUARANTEES NOW.
 
-    Seven children, one per path, in parallel, under one CPU-time regime
-    (see `tests/probe_segment_timing.py` for the measurement design):
+    Seven paths in nine children (the two heaviest tables are split in
+    two), in parallel, on CPU time, each shape
+    measured against a same-length control the pattern rejects at character
+    0 (see `tests/probe_segment_timing.py` for the measurement design):
 
       matcher     `_match_segment` on a pre-built string — the pattern's own
-                  cost, allocation-free; absolute bound on its increments.
+                  cost, no input construction inside the timed region;
       lib         `parse_transcript`;   segments  `parse_segments`;
       cli-header  `main --file` with the line in the frontmatter (header ledger);
       cli-zero    `main --file` with only that line (the no-cue error exit);
       cli-body    `main --file` with the line after a cue (dropped-line report);
       cli-preview `main <id> --preview-sources` (`_cue_lines`, both files).
 
-    Shapes are generated from the pattern's branches (point / ranged / empty
-    / malformed end; no / short / spaced speaker; inner bracket whitespace)
-    × whitespace classes that include the ones `parse_transcript` keeps
-    INSIDE a line (U+2028, U+000B, U+0085) — and, since round 4, shapes
-    whose stripped length GROWS: `a` + whitespace + `:` (forces the speaker
-    group to backtrack), a long text, a long mixed text. Each path-level
-    shape is judged against a same-length CONTROL the pattern rejects at
-    character 0, measured alternately with it, so memory-system and load
-    effects cancel; the control itself carries a loose uniform bound so a
-    quadratic that hits every line equally is still seen. Ceilings fail
-    fast; a spy proves the line reached the helper on that path; every CLI
-    exit code and a printed marker are asserted.
+    Shapes grow in three regions of the pattern. After the closing bracket:
+    a whitespace tail (`tail`, the issue's class), and lines that SURVIVE
+    the strip — `a` + whitespace + `:` (forces the speaker group to
+    backtrack), a long text, a long mixed text. Before it: no closing
+    bracket at all (`open`, the #50/#55 branch), a growing end group that
+    does close (`end`), a growing run after `[` (`lead`). Prefixes are a
+    spanning set of the pattern's branches (point / ranged / empty /
+    malformed end; no / short / spaced speaker; inner bracket whitespace),
+    tails span seven whitespace classes including the three
+    `parse_transcript` keeps inside a line (U+2028, U+000B, U+0085). The
+    parent verifies the report is for the shapes it asked for, in order;
+    that the pattern actually RECEIVED a full-length string on every shape
+    that is supposed to survive the strip, and nothing near the run's length
+    on the ones that are not; that the line reached the helper on that path; and each
+    CLI exit code and printed marker.
 
-    THE RESIDUE, AS NUMBERS. The criterion (`judge()` in the probe, shared
-    with the child) is on the EXCESS over the control: its increment at the
-    top size may be at most `K_GROWTH` × its increment at the middle size,
-    plus `SLACK_MS` and half the control's own top increment. A quadratic
-    therefore passes only if its extra cost at the top size is under
-    `(K_GROWTH − 4) × de1 + SLACK_MS + dc2 / 2` — a number the failure message
-    prints for the shape at hand. On this machine that is ≈ 1–3 ms for the
-    tail shapes (whose excess is a `rstrip`) and up to a few hundred
-    milliseconds for the `a` + ws + `:` shape, whose excess is the pattern's
-    own 60 bounded speaker attempts (≈ 200 ms at 3.2 MB, linear). None of
-    that is 0.5 ms, and none of it is a DoS at any line length a transcript
-    reaches; it is stated so the next reader reasons from the real edge.
+    THE RESIDUE, AS NUMBERS. The criterion (`judge()` in the probe, the same
+    function for the child's fail-fast and the parent's pass over every
+    shape) is on the EXCESS over the control: its increment at the top size
+    may be at most `K_GROWTH` × its increment at the middle size, plus
+    `SLACK_MS` and half the control's own top increment. A quadratic passes
+    only if its extra cost at the top size is under `(K_GROWTH − 4) × de1 +
+    SLACK_MS + dc2 / 2` — printed in the failure message for the shape at
+    hand. On this machine that is ≈ 1–3 ms for the tail shapes and up to a
+    few hundred milliseconds for the `colon` shape, whose excess is the
+    pattern's own 60 bounded speaker attempts (≈ 200 ms at 3.2 MB, linear).
+    The control's uniform bound is looser: a quadratic that slows every
+    line equally is caught only past `8 × dc1 + 1 ms + 2 × c[1]`, which on
+    the path with the largest fixed cost (`cli-preview`) admits ~100 ms at
+    3.2 MB. None of that is a DoS at any line length a transcript reaches;
+    it is stated so the next reader reasons from the real edge.
 
     THE EDGE. The family is finite. A slow path keyed on a predicate false on
     every member — an adversary, not a regression — is outside any finite
-    test; the defence there is that the chokepoint is one line a reviewer can
-    read. And a uniform quadratic below the ceilings that also hits the
-    control is caught only by the loose uniform bound.
+    test; the defence there is that the chokepoint is one line a reviewer
+    can read. The ceilings and slacks are absolute numbers calibrated on an
+    18-core machine and are fail-fast heuristics, not the guarantee; the
+    growth criteria are relative and are. The family runs on CPython only
+    (`bytes_per_char` assumes its compact strings).
 
     The structural checks remain as TRIPWIRES at the bottom: they fire in
     20 ms on the spellings a real author reaches for and name the line. They
@@ -3864,55 +3878,109 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     SPAN_TAILS = (" ", "\u2028")
     SPAN_PREFIXES = ("[00:10] ", "[00:10] S: ",
                      "[1:02:03.5 - 00:20] Speaker Name: ", "[00:10 - banana] S: ")
-    # The no-cue exits need prefixes that yield NO cue once stripped; a
-    # speaker prefix strips to `[00:10] S:`, which the grammar reads as "S:".
+    # The no-cue exit needs prefixes that yield NO cue once stripped; a
+    # speaker prefix strips to `[00:10] S:`, which the grammar reads as the
+    # text "S:".
     ZERO_CUE_PREFIXES = ("[00:10] ", "[1:02:03.5 - 00:20] ", "[00:10 - banana] ", "[ 00:10 ] ")
+    # Heads for the shapes that grow BEFORE the closing bracket: after a dash
+    # (the end group), after a stamp, and right after `[`.
+    OPEN_PREFIXES = ("[00:10 -", "[00:10 - ", "[00:10", "[")
+    # An unclosed bracket makes the fixed pattern walk `[^\]]*` back one
+    # character at a time — linear, but ~150 ms per 3.2 MB — so the `open`
+    # shapes run two whitespace classes, not seven; `[^\]]*` does not care
+    # which class it is walking back over.
+    OPEN_TAILS = (" ", "\u2028")
 
     @staticmethod
-    def _shapes(prefixes, tails, survivors=True):
+    def _shapes(prefixes, tails, survivors=True, before=True):
+        """The shape table for one path: (kind, prefix, tail) triples.
+
+        `survivors` / `before` select the after-bracket survivors and the
+        before-bracket shapes: True for the full set, "light" for one of
+        each expensive kind (the CLI paths carry a 3.2 MB cue through
+        sanitise, collapse and the SRT write on every survivor rep, ~30 ms
+        each), False for none (the no-cue exit: a survivor yields a cue and
+        the exit-1 branch becomes unreachable, which is structural, not an
+        omission — the pattern still sees those shapes on `matcher`).
+        """
         shapes = [("tail", p, t) for p in prefixes for t in tails]
         if survivors == "light":
-            # The CLI paths carry a 3.2 MB cue through sanitise, collapse and
-            # the SRT write on every survivor rep — ~30 ms each — so they run
-            # one survivor of each expensive kind and stay under the matcher.
-            return shapes + [("colon", "[00:10] ", " "), ("text", "[00:10] S: ", " ")]
-        if survivors:
+            shapes += [("colon", "[00:10] ", " "), ("text", "[00:10] S: ", " ")]
+        elif survivors:
             # The `colon` shape is the pattern's most expensive linear case
-            # (60 bounded speaker attempts: ≈ 200 ms per 3.2 MB on the fixed
-            # code), so it is kept to three members; the speaker group
-            # accepts every whitespace class alike, so the class matters less
-            # here than the two stamp forms do.
-            shapes += [("colon", "[00:10] ", " "), ("colon", "[1:02:03.5 - 00:20] ", " "),
-                       ("colon", "[00:10] ", "\u2028")]
+            # (60 bounded speaker attempts: ≈ 440 ms per 3.2 MB on the fixed
+            # code), so it is kept to two members; the speaker group accepts
+            # every whitespace class alike, so the class matters less here
+            # than the two stamp forms do.
+            shapes += [("colon", "[00:10] ", " "), ("colon", "[1:02:03.5 - 00:20] ", " ")]
             shapes += [("text", "[00:10] S: ", " "), ("text", "[00:10 - 00:20] Speaker Name: ", " ")]
             shapes += [("mixed", "[00:10] S: ", t) for t in tails]
+        if before == "light":
+            shapes += [("open", "[00:10 -", " "), ("end", "[00:10 - ", " "), ("lead", "[", " ")]
+        elif before == "open":
+            # The no-cue exit again: `end` and `lead` close their bracket and
+            # yield a cue; `open` never closes it and yields none.
+            shapes += [("open", "[00:10 -", " ")]
+        elif before:
+            cls = TestSegmentMatchingHasOneEntryPoint
+            shapes += [("open", p, t) for p in cls.OPEN_PREFIXES for t in cls.OPEN_TAILS]
+            shapes += [("end", "[00:10 - ", t) for t in tails]
+            shapes += [("lead", "[", t) for t in tails]
         return shapes
 
     # Ceilings on the shape's own path time: fail-fast heuristics that bound
     # the next stage's worst case, not the guarantee. Growth on increments at
     # three sizes (byte-equalised in the probe); `min` of reps; reps differ.
-    CEILINGS = ((3200, 25.0), (12800, 100.0), (51200, 100.0), (204800, 200.0))
+    # The first ceiling is where a cubic dies: round 6's ledger found the
+    # pre-#50 end group costing 45 s per measurement at 3 200, so the guard
+    # was red only at the 120 s deadline. At 800 the fixed code needs ~10 µs.
+    # The last one is where a small-coefficient quadratic — one that clears
+    # every earlier ceiling — is caught in seconds rather than at the growth
+    # stage's deadline; the fixed code is under 20 ms there on every path.
+    CEILINGS = ((800, 10.0), (3200, 25.0), (12800, 100.0), (51200, 100.0),
+                (204800, 200.0), (819200, 400.0))
     GROWTH = (204800, 819200, 3276800)
-    CEILING_REPS, GROWTH_REPS = 2, 3
+    CEILING_REPS, GROWTH_REPS = 1, 3   # ceilings have 100x headroom; one sample is enough
     K_GROWTH, K_UNIFORM = 8.0, 8.0
     SLACK_MS, UNIFORM_SLACK_MS = 0.5, 1.0
-    CHILD_TIMEOUT = 120.0    # the hard bound for ALL paths together; the fixed code needs ~5 s
+    CHILD_TIMEOUT = 120.0    # the hard bound for ALL paths together; the fixed code needs ~8 s
 
-    # path → (shapes, expected exit code or None, a string the run must print or None)
+    # path → (shapes, expected exit code or None for a library call,
+    #         a string the run must print or None)
     @classmethod
     def _paths(cls):
+        # The full prefix x whitespace product for the four classes the issue
+        # and round 3 named; the three in-line classes round 4 added run on
+        # the spanning prefixes (the strip treats them alike, the product was
+        # 175 shapes of rstrip, and the class had grown past 30 s). The two
+        # heaviest tables are split into two children each, interleaved, so
+        # the wall time is half — the machine has the cores.
+        matcher = (cls._shapes(cls.PREFIXES, cls.TAILS[:4])
+                   + [("tail", p, t) for p in cls.SPAN_PREFIXES for t in cls.TAILS[4:]])
+        lib = cls._shapes(cls.SPAN_PREFIXES, cls.TAILS[:4], before="light")
         return {
-            "matcher":     (cls._shapes(cls.PREFIXES, cls.TAILS), None, None),
+            "matcher-1":   (matcher[0::2], None, None),
+            "matcher-2":   (matcher[1::2], None, None),
             # The full family runs on `matcher`; the path-level children exist
             # to catch what a PATH adds, which no prefix choice hides, so they
-            # run spanning subsets and the whole class stays under ~10 s.
-            "lib":         (cls._shapes(cls.SPAN_PREFIXES, cls.TAILS[:4]), None, None),
-            "segments":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS), None, None),
-            "cli-header":  (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light"), 0, "wrote "),
-            "cli-zero":    (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, survivors=False),
+            # run spanning subsets.
+            "lib-1":       (lib[0::2], None, None),
+            "lib-2":       (lib[1::2], None, None),
+            "segments":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS,
+                                        before="light"), None, None),
+            # Cue-producing before-bracket shapes (`end`, `lead`) push a 3.2 MB
+            # cue through sanitise, collapse and the SRT write per rep; they
+            # run on `lib` / `segments`, and the CLI exits get `open`.
+            "cli-header":  (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light", "open"),
+                            0, "wrote "),
+            "cli-zero":    (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, False, "open"),
                             1, "looked like segments"),
-            "cli-body":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light"), 0, "wrote "),
-            "cli-preview": (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, survivors=False),
+            "cli-body":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light", "open"),
+                            0, "wrote "),
+            # A survivor yields the SAME cue in both files, so the comparison
+            # is still refused (exit 3, same marker) — after both were parsed.
+            "cli-preview": (cls._shapes(cls.ZERO_CUE_PREFIXES, cls.SPAN_TAILS, False, "open")
+                            + [("text", "[00:10] S: ", " ")],
                             3, "no source comparison to show"),
         }
 
@@ -3923,9 +3991,10 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     def _spawn(self, path, shapes, cache, scratch):
         """One child. Its spec, scratch files and captured streams live in
         `scratch`, never in `cache` — `cache` is the CLI's `PLAUD_CACHE_DIR`
-        and must hold only what the CLI put there. Streams go to FILES, not
-        pipes: a child that fills a 64 KB pipe while the parent waits on a
-        sibling would hang and be reported as a quadratic.
+        and must hold only what the CLI (and the `--preview-sources` fixture
+        the probe writes for it) put there. Streams go to FILES, not pipes: a
+        child that fills a 64 KB pipe while the parent waits on a sibling
+        would hang and be reported as a quadratic.
         """
         work = scratch / path
         work.mkdir()
@@ -3936,17 +4005,54 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
             **self._spec_constants(),
         })
         (work / "spec.json").write_text(spec, encoding="utf-8")
-        out = open(work / "stdout.json", "w", encoding="utf-8")
-        err = open(work / "stderr.txt", "w", encoding="utf-8")
-        child = subprocess.Popen([sys.executable, str(self.PROBE), str(work / "spec.json")],
-                                 stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                 env=cli_env(cache))
-        out.close()
-        err.close()
-        return child
+        with open(work / "stdout.json", "w", encoding="utf-8") as out, \
+             open(work / "stderr.txt", "w", encoding="utf-8") as err:
+            return subprocess.Popen([sys.executable, str(self.PROBE), str(work / "spec.json")],
+                                    stdin=subprocess.DEVNULL, stdout=out, stderr=err,
+                                    env=cli_env(cache))
 
+    def test_every_rep_builds_a_distinct_line(self):
+        """`min()` over reps only defeats a cache if the reps differ. Round 5
+        found `mixed` folding `n` and `n + 1` into one string through integer
+        division, so two of three reps were the same input."""
+        for path, (shapes, _, _) in self._paths().items():
+            for kind, prefix, tail in shapes:
+                for n in (3200, 204800, 204801):
+                    a, b = (_probe.build_line(kind, prefix, tail, n),
+                            _probe.build_line(kind, prefix, tail, n + 1))
+                    with self.subTest(path=path, kind=kind, prefix=prefix, tail=tail, n=n):
+                        self.assertNotEqual(a, b, "consecutive reps build the same line")
+                        self.assertNotEqual(a, _probe.control_line(a), "control equals the shape")
+                        self.assertEqual(len(a), len(_probe.control_line(a)))
+
+    def test_the_shape_table_covers_every_kind_where_it_can(self):
+        """The composition is asserted, not assumed: round 5 found the
+        survivor shapes could be removed from the table with a three-line
+        edit and the suite stayed green."""
+        paths = self._paths()
+        matcher = {k for p, (sh, _, _) in paths.items() if p.startswith("matcher")
+                   for k, _, _ in sh}
+        for kind in _probe.KINDS:
+            with self.subTest(kind=kind):
+                self.assertIn(kind, matcher, f"the full family on `matcher` has no {kind} shape")
+        # Per PATH (the two halves of a split table are one path).
+        merged = {}
+        for p, (sh, _, _) in paths.items():
+            merged.setdefault(p.split("-")[0] if p.startswith(("matcher", "lib")) else p,
+                              set()).update(k for k, _, _ in sh)
+        for path, kinds in merged.items():
+            with self.subTest(path=path):
+                self.assertIn("tail", kinds)
+                self.assertTrue(kinds & set(_probe.REACHES_PATTERN) or path == "cli-zero",
+                                f"{path}: no shape lets the pattern see a long string")
+                self.assertTrue({"open", "end", "lead"} & kinds,
+                                f"{path}: no shape grows before the closing bracket")
+
+    @unittest.skipUnless(sys.implementation.name == "cpython",
+                         "the probe's byte-equalised sizes assume CPython's compact strings")
     def test_every_reachable_path_is_linear_across_the_input_family(self):
-        """Seven children, all in parallel, judged here."""
+        """Nine children (seven paths; the two heaviest tables split in two),
+        all in parallel, judged here."""
         results = {}
         with tempfile.TemporaryDirectory() as cache_dir, \
              tempfile.TemporaryDirectory() as scratch_dir:
@@ -3957,22 +4063,36 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                     children[path] = self._spawn(path, shapes, cache, scratch)
                 # ONE deadline for all of them: they run in parallel, so waiting
                 # on each with its own timeout let a hung set take N x the bound.
+                # And ONE verdict ends the round: the first child to exit 2 has
+                # found a superlinear path, and the siblings — still grinding a
+                # regressed helper towards the deadline — are killed, so the
+                # time to red is the first child's, not the slowest's.
                 deadline = time.monotonic() + self.CHILD_TIMEOUT
-                spent_by = None
-                for path, child in children.items():
-                    left = deadline - time.monotonic()
-                    try:
-                        child.wait(timeout=max(0.0, left))
-                        rc = child.returncode
-                    except subprocess.TimeoutExpired:
-                        child.kill()
-                        child.wait()
-                        rc = None
-                        spent_by = spent_by or path
+                pending, rcs, stopped = dict(children), {}, {}
+                while pending and time.monotonic() < deadline:
+                    for path, child in list(pending.items()):
+                        if child.poll() is None:
+                            continue
+                        rcs[path] = child.returncode
+                        del pending[path]
+                        if child.returncode == 2:
+                            for other, sibling in pending.items():
+                                sibling.kill()
+                                sibling.wait()
+                                stopped[other] = path
+                            pending.clear()
+                            break       # the snapshot list still holds the killed siblings
+                    time.sleep(0.2)
+                spent_by = next(iter(pending), None)
+                for path, child in pending.items():
+                    child.kill()
+                    child.wait()
+                for path in children:
                     work = scratch / path
+                    rc = rcs.get(path)
                     results[path] = (rc, (work / "stdout.json").read_text(encoding="utf-8"),
                                      (work / "stderr.txt").read_text(encoding="utf-8"),
-                                     spent_by if rc is None else None)
+                                     stopped.get(path) or (spent_by if rc is None else None))
             finally:
                 for child in children.values():
                     if child.poll() is None:
@@ -3980,7 +4100,9 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                         child.wait()
 
         for path, (rc, out, err, spent_by) in results.items():
-            _, want_exit, want_printed = self._paths()[path]
+            shapes, want_exit, want_printed = self._paths()[path]
+            if rc is None and spent_by in results and results[spent_by][0] == 2:
+                continue        # killed because a sibling already found the regression
             with self.subTest(path=path):
                 last = err.strip().splitlines()[-1] if err.strip() else "(no progress line)"
                 budget = (f" (the shared budget was already spent by {spent_by!r})"
@@ -3997,21 +4119,15 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                 if report["failed"]:
                     self._explain(report["failed"])
                 self.assertEqual(0, rc, f"{path}: probe exited {rc}; stderr tail:\n" + err[-1500:])
-                self._judge(path, report, want_exit, want_printed)
+                self._judge(path, shapes, report, want_exit, want_printed)
 
     def _explain(self, f):
         """The child stopped at the first failing shape; say which and why."""
         sizes = " → ".join(map(str, self.GROWTH))
         if f["stage"] == "ceiling":
-            self.fail(f"{f['label']}: n={f['n']} took {f['ms']:.0f} ms of CPU — the #57 "
-                      f"quadratic; a {f['n'] // 1000} KB line is a reachable DoS")
-        if f["stage"] == "matcher":
-            t = f["times"]
-            self.fail(f"{f['label']}: the helper alone cost {t[0]:.3f} → {t[1]:.3f} → "
-                      f"{t[2]:.3f} ms at n={sizes}; increments grew {f['ratio']:.1f}x for 4x "
-                      f"the input (linear ≈ 4x, quadratic ≈ 16x; up to {f['admitted']:.2f} ms "
-                      f"of extra cost at the top size was admitted) — the pattern, or the "
-                      f"strip, is superlinear again")
+            self.fail(f"{f['label']}: n={f['n']:,} took {f['ms']:.0f} ms of CPU — the #57 "
+                      f"quadratic, or its cubic sibling; a {f['n']:,}-character line is a "
+                      f"reachable DoS")
         if f["stage"] == "excess":
             p, c, e = f["times"], f["control"], f["excess"]
             self.fail(f"{f['label']}: the path cost {p[0]:.3f} → {p[1]:.3f} → {p[2]:.3f} ms, "
@@ -4027,23 +4143,48 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                   f"{f['ratio']:.1f}x for 4x); something on this path is superlinear for "
                   f"every line, not just the pathological ones")
 
-    def _judge(self, path, report, want_exit, want_printed):
+    def _judge(self, path, shapes, report, want_exit, want_printed):
+        """What the parent adds to the child's verdict: the report is for the
+        shapes that were asked for, in order (round 5: an empty report passed
+        vacuously); the recorder and spy bounds; the exit codes and markers.
+        The growth criterion is re-run on the stored numbers with the same
+        function the child used — it cannot disagree, and is here so a probe
+        that stopped calling `judge()` could not report green."""
+        self.assertEqual(path, report["path"], "a report for a different path")
+        self.assertEqual([tuple(s) for s in shapes],
+                         [(sh["kind"], sh["prefix"], sh["tail"]) for sh in report["shapes"]],
+                         f"{path}: the report does not cover the shapes that were asked for")
         for sh in report["shapes"]:
             label = f"{path} {sh['kind']} {sh['prefix']!r} + {sh['tail']!r}"
+            n_top = self.GROWTH[-1] // sh["bpc"]
             with self.subTest(shape=label):
                 for n, limit in self.CEILINGS:
                     self.assertLess(sh["ceiling"][str(n)], limit,
                                     f"{label}: n={n} took {sh['ceiling'][str(n)]:.1f} ms")
                 p = [sh["growth"][str(n)][0] for n in self.GROWTH]
                 c = [sh["growth"][str(n)][1] for n in self.GROWTH]
-                verdict = _probe.judge(self._spec_constants(), path, p, c)
+                verdict = _probe.judge(self._spec_constants(), p, c)
                 if verdict is not None:
                     self._explain({"label": label, **verdict})
                 self.assertGreaterEqual(
-                    sh["spy_max"], len(sh["prefix"]) + self.GROWTH[-1] // sh["bpc"],
+                    sh["spy_max"], len(sh["prefix"]) + n_top,
                     f"{label}: the pathological line never reached _match_segment on "
                     f"this path (longest argument seen: {sh['spy_max']}) — it was "
                     f"matched, or skipped, somewhere else")
+                if sh["kind"] in _probe.STRIPS_TO_PREFIX:
+                    # Below the SMALLEST growth size, not "only the prefix":
+                    # the CLI fixtures carry a real cue line that the pattern
+                    # legitimately sees.
+                    self.assertLess(
+                        sh["pattern_max"], self.GROWTH[0] // sh["bpc"],
+                        f"{label}: the pattern received {sh['pattern_max']} characters — "
+                        f"the strip no longer removes this whitespace class")
+                else:
+                    self.assertGreaterEqual(
+                        sh["pattern_max"], n_top,
+                        f"{label}: the pattern received at most {sh['pattern_max']} "
+                        f"characters — this shape is supposed to reach it at full length, "
+                        f"or the guard is back to round 4's blindness")
                 if want_exit is not None:
                     ex = sh["exit"]
                     self.assertEqual(want_exit, ex["code"],

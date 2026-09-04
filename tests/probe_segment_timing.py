@@ -4,10 +4,17 @@
 Not a test module — `unittest discover` only collects `test*.py`. The parent
 test spawns this once per path, hands it a JSON spec (a file path in
 argv[1]; nothing else is accepted), and reads a JSON report from the file
-its stdout was redirected to. It only ever loads the repository's own
-`scripts/to_srt.py`: a spec naming any other path is refused, because a
-tracked, directly runnable file whose job is to `exec_module` a path from a
-JSON blob is a gadget the first time something globs `tests/*.py`.
+its stdout was redirected to.
+
+It refuses to run outside the parent's sandbox: it only loads the
+repository's own `scripts/to_srt.py`, and it only runs when `PLAUD_CACHE_DIR`
+is set and both that directory and the spec's scratch directory resolve
+under the system temp directory. Round 5 found that run by hand — the
+debugging workflow this docstring used to advertise — it wrote its
+`--preview-sources` fixtures straight into `~/.plaud-connector/cache`,
+replacing a real `rec.md`, and unlinked `<work>/out.srt` at whatever path
+the JSON named. A tracked, directly runnable file that writes and deletes
+paths from a JSON blob is a gadget; the refusals are what make it not one.
 
 It is a separate PROCESS, not a helper function, because three things the
 in-process version could not have are had at once: a HARD TIMEOUT (a regex
@@ -17,7 +24,7 @@ ISOLATION (this process IS the CLI, so `config.load_config()` reads the
 pinned, absent path), and a SPY on the chokepoint proving the pathological
 line reached `_match_segment` on the path being timed.
 
-WHAT IS MEASURED, AND AGAINST WHAT — the round-4 lessons.
+WHAT IS MEASURED, AND AGAINST WHAT — the round-4 and round-5 lessons.
 
   * CPU time (`time.process_time`), not wall time. Round 4 showed the wall
     clock guard going red on correct code with four idle processes on an
@@ -28,33 +35,48 @@ WHAT IS MEASURED, AND AGAINST WHAT — the round-4 lessons.
     system — `split`, the `rstrip("\\r")` comprehension and `rstrip()` each
     allocating and scanning it — which grows faster than 4x per 4x and was
     reported as a quadratic.
-  * Every path-level shape is measured ALTERNATELY with a CONTROL line of
+  * Every shape on every path is measured ALTERNATELY with a CONTROL line of
     the same length and representation that the pattern rejects at its first
     character (`"x" + line[1:]`): the same copies, the same cache misses, the
-    same load, no matcher work. The path criterion is on the EXCESS over
-    the control (`judge()` below), so what the memory system does to both
+    same load, no matcher work. The criterion is on the EXCESS over the
+    control (`judge()` below), so what the memory system does to both
     cancels, and the pattern's own linear cost — 60 bounded speaker attempts
     on one shape, ≈ 200 ms per 3.2 MB — is judged for growth, not for size.
+    The `matcher` path (the helper on a pre-built string; no input
+    construction inside the timed region, though the strip's copy and the
+    Match object are) uses the same criterion: round 5 noted its control was
+    measured and then ignored.
   * The three growth sizes are measured round-robin inside each rep, and a
     shape that fails the criterion is measured once more with more reps
     before it is called (`growth_series` and the retry below say why: the
     cores are not all the same speed, and CPU time cannot tell).
-  * The matcher itself is timed on its own path (`_match_segment` on a
-    pre-built string): no allocation, no I/O, a clean signal with an
-    absolute linearity bound. Round 4 found the previous family never let
-    the pattern see a string longer than 34 characters — every member
-    stripped to its prefix — so a pattern regression on lines that SURVIVE
-    the strip (a lifted speaker bound, 11 s per 128 KB line) was invisible.
-    The survivor shapes (`a` + whitespace + `:`, a long text, a long mixed
-    text) exist for that.
+  * The pattern is wrapped in a recorder, so the report carries the longest
+    string `SEGMENT` ACTUALLY RECEIVED for each shape. Round 4 found the
+    family never let the pattern see more than 34 characters — every member
+    stripped to its prefix — and round 5 found nothing asserted otherwise:
+    the survivor shapes existed, but a three-line edit to the shape table
+    removed them with the suite green. The parent now asserts, per shape,
+    that a survivor reached the pattern at full length and a tail shape did
+    not.
+  * Shapes grow in THREE regions, because round 5 found they grew in one.
+    After the closing bracket (`tail`, `colon`, `text`, `mixed`), and — the
+    region every earlier family missed — before it: `open` (no closing
+    bracket at all, the #50/#55 cubic branch), `end` (a growing end group
+    that does close), and `lead` (a growing whitespace run after `[`).
+    Reverting the end group to its pre-`eda1a42` lazy form made a 2 KB line
+    cost 10.9 s through `--file` with 263 shapes green; the `open` shapes are
+    what see that.
 
-Per-rep content is DISTINCT (the run is `n + rep` long), so an `lru_cache`
-on the helper cannot make `min()` see only cache hits.
+Per-rep content is DISTINCT (the run is `n + rep` long, and `mixed` adds a
+character when `n` is odd so integer division cannot fold two reps into one
+string), so an `lru_cache` on the helper cannot make `min()` see only cache
+hits. The parent has a test that every shape at every size differs between
+consecutive reps.
 
 Protocol: progress goes to stderr one line per shape, so when the parent
 kills this process on timeout the last line names the shape it died on.
 Exit 0 with a full report; exit 2 with a partial report the moment a
-ceiling or a growth criterion fails, so a gross quadratic is red after the
+ceiling or the growth criterion fails, so a gross quadratic is red after the
 3 200-character stage — about a second — and a slow one after its first
 shape rather than its hundredth.
 """
@@ -64,12 +86,20 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import pathlib
 import sys
+import tempfile
 import time
 from unittest import mock
 
 SCRIPT = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "to_srt.py"
+
+# Shape kinds. `tail` is the issue's class; the rest exist because a guard
+# that grows only one region of the input guards only that region.
+KINDS = ("tail", "colon", "text", "mixed", "open", "end", "lead")
+STRIPS_TO_PREFIX = ("tail",)            # the pattern receives only the prefix
+REACHES_PATTERN = tuple(k for k in KINDS if k not in STRIPS_TO_PREFIX)
 
 
 def _load(script: str):
@@ -82,20 +112,27 @@ def _load(script: str):
 
 
 def bytes_per_char(s: str) -> int:
-    """CPython's compact representation: 1, 2 or 4 bytes per code point."""
+    """CPython's compact representation: 1, 2 or 4 bytes per code point.
+    The parent skips the family test on other implementations."""
     top = max(map(ord, s), default=0)
     return 1 if top <= 0xFF else 2 if top <= 0xFFFF else 4
 
 
 def build_line(kind: str, prefix: str, tail: str, n: int) -> str:
-    if kind == "tail":          # the issue's class: nothing after the prefix but whitespace
+    if kind == "tail":          # nothing after the prefix but whitespace
         return prefix + tail * n
     if kind == "colon":         # survives the strip; forces the speaker group to backtrack
         return prefix + "a" + tail * n + ":"
     if kind == "text":          # survives the strip; a long text group
         return prefix + "x" * n
     if kind == "mixed":         # survives the strip; text with internal whitespace runs
-        return prefix + ("x" + tail) * (n // 2)
+        return prefix + ("x" + tail) * (n // 2) + ("x" if n % 2 else "")
+    if kind == "open":          # no closing bracket: growth inside `[^\]]*` / `\s*`
+        return prefix + tail * n + "x"
+    if kind == "end":           # a growing end group that DOES close
+        return prefix + tail * n + "] S: x"
+    if kind == "lead":          # a growing run inside `\[\s*`
+        return prefix + tail * n + "00:10] S: x"
     raise SystemExit(f"unknown shape kind {kind!r}")
 
 
@@ -104,58 +141,92 @@ def control_line(line: str) -> str:
     return "x" + line[1:]
 
 
-def judge(spec: dict, path: str, p: list[float], c: list[float]) -> dict | None:
-    """The growth criteria, shared verbatim by this child (fail fast) and the
-    parent test (which re-judges every shape of a full report).
+class _Recorder:
+    """Stands in for `SEGMENT` inside the child: records the longest string
+    the pattern was actually handed, delegates everything else."""
+
+    def __init__(self, pattern):
+        self._pattern = pattern
+        self.longest = 0
+
+    def match(self, string, *args, **kwargs):
+        if len(string) > self.longest:
+            self.longest = len(string)
+        return self._pattern.match(string, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._pattern, name)
+
+
+def judge(spec: dict, p: list[float], c: list[float]) -> dict | None:
+    """The growth criterion, shared verbatim by this child (which stops at
+    the first shape it fails) and the parent test (which runs it again on
+    every shape of the report it accepts — the same function on the same
+    numbers, so the two cannot disagree; the parent's own contributions are
+    the report's completeness, the recorder and spy bounds, and the exit
+    codes).
 
     `p` and `c` are the shape's and its control's CPU milliseconds at the
     three growth sizes. What is judged is the EXCESS `p - c`: the work the
     shape triggers that its same-length, same-representation control does
     not. The copies, the cache misses and the load are in both and cancel;
-    the pattern's own cost — 60 bounded speaker attempts on the `a` + ws + `:`
-    shape, a scan on the long-text shapes, a `rstrip` on the tail shapes — is
-    what remains, and it must grow linearly: its increment at the top size
-    may be at most K_GROWTH x its increment at the middle size, plus a slack
-    of SLACK_MS and half the control's own top increment (the tail shapes'
-    excess is a few tenths of a millisecond, below the noise a bare slack
-    could absorb). On the `matcher` path there is no control — the helper on
-    a pre-built string is allocation-free CPU work — so its own increments
-    are the signal. The control carries the loose uniform bound: a quadratic
-    that hits every line equally shows there, and nowhere else.
+    the pattern's own cost is what remains, and it must grow linearly: its
+    increment at the top size may be at most K_GROWTH x its increment at the
+    middle size, plus a slack of SLACK_MS and half the control's own top
+    increment (the tail shapes' excess is a few tenths of a millisecond,
+    below the noise a bare slack could absorb). The control carries the
+    loose uniform bound: a quadratic that hits every line equally shows
+    there, and nowhere else — and its allowance grows with the control's
+    absolute cost, so on a path with a large fixed cost (`cli-preview`) a
+    uniform quadratic worth ~100 ms at 3.2 MB passes; that is the stated
+    residue of this bound.
     """
     # Increments are clamped at zero before they scale a bound: a first
-    # measurement that is a few hundred microseconds slower than the second
-    # (measured; CPU time is not immune to a cold cache) would otherwise turn
-    # the bound negative and report a ratio of a billion.
-    dp1, dp2 = max(p[1] - p[0], 0.0), p[2] - p[1]
+    # measurement a few hundred microseconds slower than the second
+    # (measured; CPU time is not immune to a cold cache) would otherwise
+    # turn the bound negative and report a ratio of a billion.
     k, s = spec["k_growth"], spec["slack_ms"]
-    if path == "matcher":
-        if dp2 > k * dp1 + s:
-            return {"stage": "matcher", "times": p, "ratio": dp2 / max(dp1, 1e-9),
-                    "admitted": (k - 4) * dp1 + s}
-        return None
     dc1, dc2 = max(c[1] - c[0], 0.0), c[2] - c[1]
     e = [pi - ci for pi, ci in zip(p, c)]
     de1, de2 = max(e[1] - e[0], 0.0), e[2] - e[1]
     allowance = s + max(dc2, 0.0) / 2
-    if de2 > k * de1 + allowance:
+    bound = k * de1 + allowance
+    if de2 > bound:
+        # `clear`: the miss is past TWICE the bound. That is what decides
+        # whether the child re-measures before calling it — not the ratio,
+        # which is meaningless when de1 is at the noise floor (a tail shape's
+        # excess is a few microseconds, and 2.8 ms over 0 µs is "infinite").
         return {"stage": "excess", "times": p, "control": c, "excess": e,
-                "ratio": de2 / max(de1, 1e-9), "admitted": (k - 4) * de1 + allowance}
-    # The uniform bound's allowance grows with the control's absolute cost at
-    # the middle size: when a fixed cost dominates, the increments are noise
-    # around zero and a bare slack would fire on correct code.
-    if dc2 > spec["k_uniform"] * dc1 + spec["uniform_slack_ms"] + 2 * c[1]:
-        return {"stage": "uniform", "control": c, "ratio": dc2 / max(dc1, 1e-9)}
+                "ratio": de2 / max(de1, 1e-9), "admitted": (k - 4) * de1 + allowance,
+                "clear": de2 > 2 * bound}
+    ubound = spec["k_uniform"] * dc1 + spec["uniform_slack_ms"] + 2 * c[1]
+    if dc2 > ubound:
+        return {"stage": "uniform", "control": c, "ratio": dc2 / max(dc1, 1e-9),
+                "clear": dc2 > 2 * ubound}
     return None
+
+
+def _sandboxed(path: pathlib.Path) -> bool:
+    tmp = pathlib.Path(tempfile.gettempdir()).resolve()
+    return path.resolve().is_relative_to(tmp)
 
 
 def main() -> int:
     if len(sys.argv) != 2:
-        raise SystemExit("usage: probe_segment_timing.py <spec.json>")
+        raise SystemExit("usage: probe_segment_timing.py <spec.json>  (run by the parent test)")
     with open(sys.argv[1], encoding="utf-8") as fh:
         spec = json.load(fh)
+    if not os.environ.get("PLAUD_CACHE_DIR"):
+        raise SystemExit("refusing to run: PLAUD_CACHE_DIR is not set, so the CLI would use "
+                         "the real cache and the --preview-sources fixtures would overwrite it")
     to_srt = _load(spec["script"])
     path = spec["path"]
+    cache = pathlib.Path(to_srt.CACHE_DIR)     # pinned by the parent's cli_env
+    work = pathlib.Path(spec["work"])           # scratch OUTSIDE the cache dir
+    for what, p in (("cache", cache), ("work", work)):
+        if not _sandboxed(p):
+            raise SystemExit(f"refusing to run: {what} directory {p} is not under the "
+                             f"system temp directory; this probe writes and unlinks there")
 
     seen = {"max": 0}
     real = to_srt._match_segment
@@ -166,12 +237,12 @@ def main() -> int:
         return real(line)
 
     to_srt._match_segment = spy
-    cache = pathlib.Path(to_srt.CACHE_DIR)     # pinned by the parent's cli_env
-    work = pathlib.Path(spec["work"])           # scratch OUTSIDE the cache dir
+    recorder = _Recorder(to_srt.SEGMENT)
+    to_srt.SEGMENT = recorder                   # the helper looks it up at call time
 
     def run_path(line: str) -> tuple[float, dict | None]:
         """CPU seconds for one pass of `line` through `path`, plus exit info."""
-        if path == "matcher":
+        if path.startswith("matcher"):
             # The helper itself, called directly so no spy frame sits inside
             # the timed region; the line demonstrably reached it, so record
             # the length the spy would have.
@@ -179,7 +250,7 @@ def main() -> int:
             t0 = time.process_time()
             real(line)
             return time.process_time() - t0, None
-        if path == "lib":
+        if path.startswith("lib"):
             t0 = time.process_time()
             to_srt.parse_transcript(line + "\n")
             return time.process_time() - t0, None
@@ -191,8 +262,10 @@ def main() -> int:
         out.unlink(missing_ok=True)
         if path == "cli-preview":
             # `--preview-sources` → `differing_sample` → `_cue_lines` → the
-            # parser, on BOTH the transcript and its polished twin; both drop
-            # the line, so the comparison is refused (exit 3) — after parsing.
+            # parser, on BOTH the transcript and its polished twin. A line
+            # that yields no cue is a drop on both sides; one that yields a
+            # cue yields the same cue on both. Either way the comparison is
+            # refused (exit 3) — after both files were parsed.
             (cache / "polish").mkdir(exist_ok=True)
             (cache / "rec.md").write_text("---\ntitle: x\n---\n" + line + "\n[00:10] S: hello\n",
                                           encoding="utf-8")
@@ -269,14 +342,19 @@ def main() -> int:
 
     report = {"path": path, "shapes": [], "failed": None}
     for kind, prefix, tail in spec["shapes"]:
-        seen["max"] = 0
+        seen["max"], recorder.longest = 0, 0
         bpc = bytes_per_char(prefix + tail)
         shape = {"kind": kind, "prefix": prefix, "tail": tail, "bpc": bpc,
-                 "ceiling": {}, "growth": {}, "spy_max": 0, "exit": None, "retried": False}
+                 "ceiling": {}, "growth": {}, "spy_max": 0, "pattern_max": 0,
+                 "exit": None, "retried": False}
         report["shapes"].append(shape)
         label = f"{path} {kind} {prefix!r} + {tail!r}"
         for n, limit in spec["ceilings"]:
-            ms, _, _ = best_pair(kind, prefix, tail, n, spec["ceiling_reps"])
+            # Shape only: a ceiling is an absolute bound on the shape's own
+            # cost, so the control has nothing to say here — measuring it
+            # doubled the cheapest stage's cost for nothing.
+            ms = min(run_path(build_line(kind, prefix, tail, n + rep))[0]
+                     for rep in range(spec["ceiling_reps"])) * 1000
             shape["ceiling"][str(n)] = ms
             if ms >= limit:
                 return fail(report, label=label, stage="ceiling", n=n, ms=ms)
@@ -287,27 +365,33 @@ def main() -> int:
         best_pair(kind, prefix, tail, spec["growth"][0] // bpc, 1)
         sizes = [n // bpc for n in spec["growth"]]
         p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"])
-        verdict = judge(spec, path, p, c)
-        if verdict is not None:
-            # Measure the shape ONCE MORE, with more reps, before calling it.
+        verdict = judge(spec, p, c)
+        if verdict is not None and not verdict["clear"]:
+            # Measure the shape ONCE MORE, with more reps, before calling it —
+            # but only when the miss is within a factor of two of the bound.
+            # A miss past twice the bound is not scheduling noise (a linear
+            # helper under nine busy cores missed by 1.3x, never 2x), and
+            # re-measuring a real quadratic just doubled the time to red.
             # Under load (nine busy cores of eighteen) a linear helper measured
             # 10.2x once in three runs: the top-size sample is the longest and
             # the likeliest to straddle a migration to a slower core. A real
             # quadratic fails the second measurement exactly as it failed the
             # first; a scheduling artefact does not repeat. The numbers kept
-            # in the report are the ones the verdict was reached on.
-            p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"] + 2)
-            verdict = judge(spec, path, p, c)
+            # in the report are the ones the verdict was reached on, and the
+            # second verdict REPLACES the first — a shape is never called on
+            # one measurement.
+            p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"] + 4)
+            verdict = judge(spec, p, c)
             shape["retried"] = True
         for n, mp, mc in zip(spec["growth"], p, c):
             shape["growth"][str(n)] = [mp, mc]
         shape["exit"] = last
-        shape["spy_max"] = seen["max"]
+        shape["spy_max"], shape["pattern_max"] = seen["max"], recorder.longest
         if verdict is not None:
             return fail(report, label=label, **verdict)
         print(f"{label}: " + " ".join(f"{n}={mp:.3f}/{mc:.3f}" for n, (mp, mc)
-                                      in shape["growth"].items()),
-              file=sys.stderr, flush=True)
+                                      in shape["growth"].items())
+              + f" pattern_max={recorder.longest}", file=sys.stderr, flush=True)
     print(json.dumps(report))
     return 0
 
