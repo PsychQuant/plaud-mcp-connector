@@ -16,11 +16,18 @@ hand it wrote its `--preview-sources` fixtures straight into
 `<work>/out.srt` at whatever path the JSON named. Round 6 found the refusal
 that replaced that checked against `tempfile.gettempdir()` — against
 `TMPDIR`, which the same caller sets — so `TMPDIR=$HOME` reproduced the
-incident exactly. The root now comes from the spec and is checked against
-what it must not be, not against this process's environment, and a write
-follows no symlink out of it. A tracked, directly runnable file that writes
-and deletes paths from a JSON blob is a gadget; the refusals are what make
-it not one.
+incident exactly. Round 7 found the replacement — the root named in the
+spec, refused when it is or contains the home directory or the repository —
+accepting every directory INSIDE the home directory, `~/.plaud-connector`
+included, so the incident was one level deeper than the refusal. The root
+must now carry a marker the parent test wrote with the nonce the spec
+names, may not contain the default cache directory, and every write, mkdir
+and unlink resolves symlinks before it acts (checked, then done: the two
+are not one atomic step, which the parent's fresh private directory makes
+moot and a hand-run against a shared directory does not). A tracked,
+directly runnable file that writes and deletes paths from a JSON blob is a
+gadget; the refusals narrow what it can reach to directories this test
+suite created.
 
 It is a separate PROCESS, not a helper function, because three things the
 in-process version could not have are had at once: a HARD TIMEOUT (a regex
@@ -55,8 +62,11 @@ WHAT IS MEASURED, AND AGAINST WHAT — the lessons of rounds 4 to 6.
     shape that fails a ceiling or the growth criterion is measured once more
     with more reps before it is called (`growth_series` and the retry below
     say why: the cores are not all the same speed, and CPU time cannot
-    tell). The warm-up runs BEFORE the smallest ceiling: round 6 found the
-    tightest absolute bound in the class taking the one cold sample.
+    tell). The warm-up runs BEFORE the smallest ceiling, at a size no rep
+    re-uses: round 6 found the tightest absolute bound in the class taking
+    the one cold sample, and round 7 found the warm-up building the very
+    string rep 0 then measured, which a memoizing helper would have served
+    from cache.
   * The pattern is wrapped in a recorder and the helper in a spy, and each
     keeps its maximum PER ROLE: the shape's runs and the control's runs are
     counted apart. Round 4 found the family never let the pattern see more
@@ -73,9 +83,14 @@ WHAT IS MEASURED, AND AGAINST WHAT — the lessons of rounds 4 to 6.
     which round 6 found no shape growing at the pattern); before it (`open`:
     no closing bracket at all, the #50/#55 cubic branch; `end`: a growing
     end group that does close; `lead`: a growing run after `[`); and in the
-    LINE COUNT (`many`: n characters of short lines — round 6 found every
-    fixture a single line, so a quadratic in the per-line bookkeeping cost
-    7 s per 0.8 MB of ordinary markdown with everything green).
+    LINE COUNT (`many`: n characters of short lines that are dropped, kept
+    as cues, or kept with a lost end — round 6 found every fixture a single
+    line, so a quadratic in the per-line bookkeeping cost 7 s per 0.8 MB of
+    ordinary markdown with everything green; round 7 found the cue count
+    never reaching `build_cues`, and the same block used as the control, so
+    the axis was judged by the loose uniform bound alone). A `many` shape's
+    control is ONE line of the same length: the per-line work is in the
+    shape only, and the excess criterion judges it.
 
 Per-rep content is DISTINCT (the run is `n + rep` long, and `mixed` adds a
 character when `n` is odd so integer division cannot fold two reps into one
@@ -160,8 +175,14 @@ def build_line(kind: str, prefix: str, tail: str, n: int) -> str:
     raise SystemExit(f"unknown shape kind {kind!r}")
 
 
-def control_line(line: str) -> str:
-    """Same length, same representation, rejected by `^\\[` at character 0."""
+def control_line(kind: str, line: str) -> str:
+    """Same length, same representation, rejected by `^\\[` at character 0.
+    For the short-line kinds the control is also ONE line — the block's
+    newlines become spaces — so the line count, their axis, is in the shape
+    alone (round 7: the same block as control left one line's work in the
+    excess and the uniform bound as the only judge)."""
+    if kind in SHORT_LINES:
+        line = line.replace("\n", " ")
     return "x" + line[1:]
 
 
@@ -214,9 +235,10 @@ def judge(spec: dict, p: list[float], c: list[float]) -> dict | None:
     uniform quadratic worth some tens of milliseconds at 3.2 MB passes
     (measured in round 6: ≈ 22 ms on that path's `tail`, ≈ 1 ms on
     `matcher`'s `colon`); that is the stated residue of this bound. The
-    `many` shapes are judged by the uniform bound alone: their control is
-    the same block with one line changed, so their excess is one line's work
-    by construction, and the line count — their axis — is in both.
+    `many` shapes have a one-line control, so their per-line bookkeeping is
+    the excess and is judged by the excess bound like any other shape's work
+    (round 7 measured the uniform bound alone admitting 290–670 ms of
+    line-count quadratic on them).
     """
     # Increments are clamped at zero before they scale a bound: a first
     # measurement a few hundred microseconds slower than the second
@@ -254,19 +276,34 @@ def _contained(path: pathlib.Path, root: pathlib.Path) -> bool:
     return path.resolve().is_relative_to(root)
 
 
+MARKER = ".probe-sandbox"     # written by the parent test into the root it created
+
+
 def sandbox_root(spec: dict) -> pathlib.Path:
     """The one directory this child may write under. Named by the parent in
     the spec — not derived from this process's environment, which the same
-    caller controls — and refused when it is, or contains, the user's home
-    or this repository: the two places a hand-run with a careless spec
-    would do the round-5 damage."""
+    caller controls — and accepted only when it carries the marker file the
+    parent wrote with the spec's nonce: a directory this test suite created,
+    not one a hand-written spec points at. Refused outright when it is, or
+    contains, the user's home, this repository, or the default cache
+    directory (round 7: the round-6 refusals accepted every directory under
+    the home directory, `~/.plaud-connector` included)."""
     root = pathlib.Path(spec["sandbox"]).resolve()
     if not root.is_dir():
         raise SystemExit(f"refusing to run: sandbox {root} is not a directory")
-    for what, guarded in (("the home directory", pathlib.Path.home().resolve()),
-                          ("this repository", SCRIPT.parent.parent)):
+    home = pathlib.Path.home().resolve()
+    for what, guarded in (("the home directory", home),
+                          ("this repository", SCRIPT.parent.parent),
+                          ("the default cache directory", home / ".plaud-connector")):
         if guarded.is_relative_to(root):
             raise SystemExit(f"refusing to run: sandbox {root} contains {what}")
+    try:
+        stamp = (root / MARKER).read_text(encoding="utf-8")
+    except OSError:
+        raise SystemExit(f"refusing to run: sandbox {root} carries no {MARKER} marker — "
+                         f"not a directory the parent test created") from None
+    if not spec.get("nonce") or stamp != spec["nonce"]:
+        raise SystemExit(f"refusing to run: the {MARKER} marker in {root} does not match the spec")
     return root
 
 
@@ -288,10 +325,20 @@ def main() -> int:
             raise SystemExit(f"refusing to run: {what} directory {p} is not under the "
                              f"sandbox {root}; this probe writes and unlinks there")
 
-    def write(p: pathlib.Path, text: str) -> None:
+    def guard(p: pathlib.Path, verb: str) -> None:
+        # Checked, then acted on — not one atomic step. The parent's fresh,
+        # private sandbox makes the gap moot; a hand-run against a shared
+        # directory does not, and the module docstring says so.
         if p.is_symlink() or not _contained(p, root):
-            raise SystemExit(f"refusing to write {p}: a symlink, or outside the sandbox")
+            raise SystemExit(f"refusing to {verb} {p}: a symlink, or outside the sandbox")
+
+    def write(p: pathlib.Path, text: str) -> None:
+        guard(p, "write")
         p.write_text(text, encoding="utf-8")
+
+    def mkdir(p: pathlib.Path) -> None:
+        guard(p, "create")
+        p.mkdir(exist_ok=True)
 
     seen = {"role": "shape", "calls": 0,
             "longest": dict.fromkeys(ROLES, 0), "calls_max": dict.fromkeys(ROLES, 0)}
@@ -324,8 +371,7 @@ def main() -> int:
             to_srt.parse_segments(line + "\n")
             return time.process_time() - t0, None
         out = work / "out.srt"
-        if out.is_symlink() or not _contained(out, root):
-            raise SystemExit(f"refusing to unlink {out}: a symlink, or outside the sandbox")
+        guard(out, "unlink")
         out.unlink(missing_ok=True)
         if path == "cli-preview":
             # `--preview-sources` → `differing_sample` → `_cue_lines` → the
@@ -333,7 +379,7 @@ def main() -> int:
             # that yields no cue is a drop on both sides; one that yields a
             # cue yields the same cue on both. Either way the comparison is
             # refused (exit 3) — after both files were parsed.
-            (cache / "polish").mkdir(exist_ok=True)
+            mkdir(cache / "polish")
             write(cache / "rec.md", "---\ntitle: x\n---\n" + line + "\n[00:10] S: hello\n")
             write(cache / "polish" / "rec.md", line + "\n[00:10] S: hello\n")
             argv = ["to_srt.py", "rec", "--preview-sources"]
@@ -342,7 +388,7 @@ def main() -> int:
                 text = "---\ntitle: x\n" + line + "\n---\n[00:10] S: hello\n"
             elif path == "cli-zero":
                 text = line + "\n"
-            elif path == "cli-body":
+            elif path.startswith("cli-body"):
                 text = "[00:10] S: hello\n" + line + "\n"
             else:
                 raise SystemExit(f"unknown path {path!r}")
@@ -385,7 +431,7 @@ def main() -> int:
         bp, bc, last = float("inf"), float("inf"), None
         for rep in range(reps):
             line = build_line(kind, prefix, tail, n + rep)
-            dc, _ = run_path(control_line(line), "control")
+            dc, _ = run_path(control_line(kind, line), "control")
             dp, last = run_path(line, "shape")
             bp, bc = min(bp, dp), min(bc, dc)
         return bp * 1000, bc * 1000, last
@@ -411,7 +457,7 @@ def main() -> int:
         for rep in range(reps):
             for i, n in enumerate(sizes):
                 line = build_line(kind, prefix, tail, n + rep)
-                dc, _ = run_path(control_line(line), "control")
+                dc, _ = run_path(control_line(kind, line), "control")
                 dp, last = run_path(line, "shape")
                 bp[i], bc[i] = min(bp[i], dp), min(bc[i], dc)
         return [x * 1000 for x in bp], [x * 1000 for x in bc], last
@@ -440,8 +486,10 @@ def main() -> int:
         # the smallest ceiling — the tightest absolute bound in the class. At
         # the smallest size so that a cubic still dies here in milliseconds:
         # the ceilings exist so the growth sizes are never reached by one.
+        # And at a size no rep re-uses (rep r builds `n + r`, the retry adds
+        # two reps), so a memoizing helper cannot serve rep 0 from here.
         first = spec["ceilings"][0][0]
-        best_pair(kind, prefix, tail, first, 1)
+        best_pair(kind, prefix, tail, first + spec["ceiling_reps"] + 2, 1)
         for n, limit in spec["ceilings"]:
             ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"])
             if ms >= limit:
@@ -456,7 +504,7 @@ def main() -> int:
         # Warm the first growth size for BOTH roles: the ceilings ran the
         # shape there but never its control, and a cold control at the first
         # size would shrink `dc1` and tighten the uniform bound.
-        best_pair(kind, prefix, tail, spec["growth"][0] // bpc, 1)
+        best_pair(kind, prefix, tail, spec["growth"][0] // bpc + spec["growth_reps"] + 4, 1)
         sizes = [n // bpc for n in spec["growth"]]
         p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"])
         verdict = judge(spec, p, c)

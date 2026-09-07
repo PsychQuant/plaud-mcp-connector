@@ -136,14 +136,16 @@ rest as text. `--file` accepts any markdown, so that was a reachable local
 denial of service. Matching now strips the tail first, in the one place the
 pattern is applied, and no captured group changes (checked over every code
 point against the pattern's own flags). The test suite times a family of such
-lines — 312 shapes: the pattern's bracket forms crossed with the four named
+lines — 315 shapes: the pattern's bracket forms crossed with the four named
 whitespace classes and, on a spanning subset of the forms, with every class
 the parser leaves inside a line; lines that survive the strip, in Latin, CJK
 and tab-mixed text; lines with no closing bracket, or that grow inside one;
-and blocks of many short lines — on every path a line can reach the pattern,
-in child processes with a hard timeout, each against a same-length control
-line, because six rounds of review each found the previous guard covering one
-region of the defect.
+and blocks of many short lines that are dropped, kept as cues, or kept with a
+lost end — on every path a line can reach the pattern, in child processes
+with a hard timeout, each against a same-length control line, because seven
+rounds of review each found the previous guard covering one region of the
+defect. The guard is now most of the suite's wall time: `make test` went from
+about 11 s to about 24 s on an 18-core machine.
 
 **Five other things changed in the same release**, each out of a review round on
 that fix, and none of them announced by the paragraph above until a reviewer
