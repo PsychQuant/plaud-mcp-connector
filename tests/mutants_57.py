@@ -19,7 +19,10 @@ applies fails loudly instead of testing nothing.
 """
 from __future__ import annotations
 
+import os
+import ast
 import pathlib
+import pwd
 import re
 import shutil
 import subprocess
@@ -107,6 +110,43 @@ MUTANTS = {
         '    all_lines = [l.rstrip("\\r") for l in text.split("\\n")]\n',
         '    all_lines = [l.rstrip("\\r") for l in text.split("\\n")]\n'
         '    _L, _j = len(all_lines), 0\n    for _ in range(_L * _L // 2000):\n        _j += 1\n'),
+
+    # Round 8: seven per-line / per-cue walks the family reached only at
+    # count 1-3, each demonstrated superlinear on `--file` or
+    # `--preview-sources` with the whole suite green.
+    "M28 header gate goes quadratic (the fix's own second call site, walked per header line)": lambda s: sub(s,
+        "        ate = [line for line in header if _match_segment(line)]\n",
+        "        ate = []\n        for _l in header:\n"
+        "            if _match_segment(_l):\n                ate = ate + [_l]\n"),
+    "M29 header list itself goes quadratic": lambda s: sub(s,
+        '    header = [line for line in front if line.strip()]\n',
+        '    header = []\n    for _l in front:\n        if _l.strip():\n            header = header + [_l]\n'),
+    "M30 the no-cue exit's re-walk of dropped lines goes quadratic": lambda s: sub(s,
+        "        stamped = [l for l in dropped if CUE_SHAPED.match(l)]\n",
+        "        stamped = []\n        for _l in dropped:\n"
+        "            if CUE_SHAPED.match(_l):\n                stamped = stamped + [_l]\n"),
+    "M31 _cue_lines' per-cue pairing goes quadratic (--preview-sources only)": lambda s: sub(s,
+        '    return ([(c["start"], b["text"], b["stripped"]) for c, b in zip(cues, built)],\n'
+        '            len(dropped), len(header_ate))\n',
+        '    _rows = []\n    for c, b in zip(cues, built):\n'
+        '        _rows = _rows + [(c["start"], b["text"], b["stripped"])]\n'
+        '    return (_rows, len(dropped), len(header_ate))\n'),
+    "M32 collapse_runs accumulation goes quadratic (the heaviest shape's own dominant cost)": lambda s: sub(sub(s,
+        "            out.append(run)\n            continue\n",
+        "            out = out + [run]\n            continue\n"),
+        '        out.append(" ")\n', '        out = out + [" "]\n'),
+    "M33 wrap_cue_text's Latin branch goes quadratic (M21 mutates only the CJK one)": lambda s: sub(sub(s,
+        "            lines.append(current)\n            current = word\n",
+        "            lines = lines + [current]\n            current = word\n"),
+        "    if current:\n        lines.append(current)\n",
+        "    if current:\n        lines = lines + [current]\n"),
+    "M34 build_cues' warnings list goes quadratic (grows with the cue count)": lambda s: sub(s,
+        '            warnings.append(\n'
+        '                f"cue at {format_timestamp(seg[\'start\'])} {what} to "\n'
+        '                f"{format_timestamp(end)} — {why}")\n',
+        '            warnings = warnings + [\n'
+        '                f"cue at {format_timestamp(seg[\'start\'])} {what} to "\n'
+        '                f"{format_timestamp(end)} — {why}"]\n'),
 }
 
 
@@ -114,8 +154,23 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         raise SystemExit(__doc__)
     copy = pathlib.Path(argv[1]).resolve()
-    if copy == REPO or REPO.is_relative_to(copy):
-        raise SystemExit(f"refusing to mutate {copy}: that is this repository; give it an rsync copy")
+    # The same reasoning the probe's sandbox got over rounds 5-8, applied to
+    # the other runnable file this suite ships: it rewrites `to_srt.py` and
+    # deletes `<copy>/work`, so it must refuse anything that could be a live
+    # working tree rather than the throwaway the docstring asks for.
+    home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    # The repository in BOTH directions (a subdirectory of it is a live tree
+    # too), the home directory and its ancestors. Not every path under the
+    # home directory: a scratch copy usually lives there, and what actually
+    # distinguishes a working tree from a throwaway is the `.git` below.
+    if copy == REPO or REPO.is_relative_to(copy) or copy.is_relative_to(REPO):
+        raise SystemExit(f"refusing to mutate {copy}: it is inside, or contains, this "
+                         f"repository; give it an rsync copy outside it")
+    if copy == home or home.is_relative_to(copy):
+        raise SystemExit(f"refusing to mutate {copy}: it is, or contains, the home directory")
+    if (copy / ".git").exists():
+        raise SystemExit(f"refusing to mutate {copy}: it has a .git, so it is a working tree, "
+                         f"not the throwaway copy this expects")
     if not (copy / "scripts" / "to_srt.py").is_file():
         raise SystemExit(f"{copy} has no scripts/to_srt.py")
     selected = argv[2:]
@@ -130,10 +185,18 @@ def main(argv: list[str]) -> int:
         if selected and not any(name.startswith(x) for x in selected):
             continue
         work = copy / "work"
-        shutil.rmtree(work, ignore_errors=True)
+        # Not `ignore_errors`: a caller who mistyped the target should see
+        # what could not be removed rather than nothing.
+        if work.exists():
+            shutil.rmtree(work)
         shutil.copytree(base, work)
         target = work / "scripts" / "to_srt.py"
-        target.write_text(mutate(target.read_text(encoding="utf-8")), encoding="utf-8")
+        mutated = mutate(target.read_text(encoding="utf-8"))
+        # A mutant that does not PARSE is red for the wrong reason — round 9
+        # had one going red in 0.1 s on an unbalanced bracket, which says
+        # nothing about the guard.
+        ast.parse(mutated)
+        target.write_text(mutated, encoding="utf-8")
         t0 = time.perf_counter()
         run = subprocess.run([sys.executable, "-m", "unittest",
                               "tests.test_to_srt.TestSegmentMatchingHasOneEntryPoint",

@@ -111,6 +111,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import pwd
+import re
 import os
 import pathlib
 import sys
@@ -291,12 +293,22 @@ def sandbox_root(spec: dict) -> pathlib.Path:
     root = pathlib.Path(spec["sandbox"]).resolve()
     if not root.is_dir():
         raise SystemExit(f"refusing to run: sandbox {root} is not a directory")
-    home = pathlib.Path.home().resolve()
+    # From the password database, not `$HOME` — round 8 found the home and
+    # cache refusals reading a variable the same caller sets, which is round
+    # 6's `TMPDIR` finding one variable over, and the parent's test computing
+    # its expectations from the same variable so the two agreed by
+    # construction.
+    home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
     for what, guarded in (("the home directory", home),
                           ("this repository", SCRIPT.parent.parent),
                           ("the default cache directory", home / ".plaud-connector")):
-        if guarded.is_relative_to(root):
-            raise SystemExit(f"refusing to run: sandbox {root} contains {what}")
+        # BOTH directions: a root that contains the guarded path, and a root
+        # inside it. Round 7 found every directory under the home directory
+        # accepted; round 8 found the same for the repository's own
+        # subdirectories and for the cache directory one level below the
+        # guarded name.
+        if guarded.is_relative_to(root) or root.is_relative_to(guarded):
+            raise SystemExit(f"refusing to run: sandbox {root} is inside, or contains, {what}")
     try:
         stamp = (root / MARKER).read_text(encoding="utf-8")
     except OSError:
@@ -340,8 +352,19 @@ def main() -> int:
         guard(p, "create")
         p.mkdir(exist_ok=True)
 
-    seen = {"role": "shape", "calls": 0,
-            "longest": dict.fromkeys(ROLES, 0), "calls_max": dict.fromkeys(ROLES, 0)}
+    # Every file this child writes carries the run's nonce, so a collision
+    # with real data is impossible whatever the root turns out to be — the
+    # refusals decide WHERE it may write, this decides that what it writes
+    # cannot be something somebody already had (round 8: fixed names).
+    # Per RUN and per PATH: the cache directory is shared by every child, so
+    # a name that varied only by run had the two `--preview-sources` children
+    # writing the same file at the same time.
+    rec = f"probe-{spec['nonce'][:8]}-{path}"
+
+    seen = {"role": "shape", "calls": 0, "longest": dict.fromkeys(ROLES, 0),
+            "calls_max": dict.fromkeys(ROLES, 0), "cues_in": dict.fromkeys(ROLES, 0),
+            "parsed_cues": dict.fromkeys(ROLES, 0), "parsed_lost": dict.fromkeys(ROLES, 0),
+            "parsed_skipped": dict.fromkeys(ROLES, 0)}
     real = to_srt._match_segment
 
     def spy(line: str):
@@ -351,6 +374,32 @@ def main() -> int:
         return real(line)
 
     to_srt._match_segment = spy
+    real_build = to_srt.build_cues
+
+    def build_spy(segments, **kwargs):
+        # The longest cue list `build_cues` was handed, per role. `main` and
+        # `_cue_lines` both call it, and `--preview-sources` prints no ledger
+        # at all, so the count has to be observed rather than read back out
+        # of the CLI's output (round 8: the cue count was in the fixture and
+        # in no assertion).
+        if len(segments) > seen["cues_in"][seen["role"]]:
+            seen["cues_in"][seen["role"]] = len(segments)
+        return real_build(segments, **kwargs)
+
+    to_srt.build_cues = build_spy
+    real_parse = to_srt.parse_transcript
+
+    def parse_spy(text, **kwargs):
+        # The parser's own two growing lists, per role — the analogue of the
+        # `build_cues` count for the paths that stop at the parser.
+        cues, skipped, front, lost = real_parse(text, **kwargs)
+        for key, value in (("parsed_cues", cues), ("parsed_lost", lost),
+                           ("parsed_skipped", skipped)):
+            if len(value) > seen[key][seen["role"]]:
+                seen[key][seen["role"]] = len(value)
+        return cues, skipped, front, lost
+
+    to_srt.parse_transcript = parse_spy
     recorder = _Recorder(to_srt.SEGMENT)
     to_srt.SEGMENT = recorder                   # the helper looks it up at call time
 
@@ -370,19 +419,19 @@ def main() -> int:
             t0 = time.process_time()
             to_srt.parse_segments(line + "\n")
             return time.process_time() - t0, None
-        out = work / "out.srt"
+        out = work / f"{rec}.srt"
         guard(out, "unlink")
         out.unlink(missing_ok=True)
-        if path == "cli-preview":
+        if path.startswith("cli-preview"):
             # `--preview-sources` → `differing_sample` → `_cue_lines` → the
             # parser, on BOTH the transcript and its polished twin. A line
             # that yields no cue is a drop on both sides; one that yields a
             # cue yields the same cue on both. Either way the comparison is
             # refused (exit 3) — after both files were parsed.
             mkdir(cache / "polish")
-            write(cache / "rec.md", "---\ntitle: x\n---\n" + line + "\n[00:10] S: hello\n")
-            write(cache / "polish" / "rec.md", line + "\n[00:10] S: hello\n")
-            argv = ["to_srt.py", "rec", "--preview-sources"]
+            write(cache / f"{rec}.md", "---\ntitle: x\n---\n" + line + "\n[00:10] S: hello\n")
+            write(cache / "polish" / f"{rec}.md", line + "\n[00:10] S: hello\n")
+            argv = ["to_srt.py", rec, "--preview-sources"]
         else:
             if path == "cli-header":
                 text = "---\ntitle: x\n" + line + "\n---\n[00:10] S: hello\n"
@@ -392,7 +441,7 @@ def main() -> int:
                 text = "[00:10] S: hello\n" + line + "\n"
             else:
                 raise SystemExit(f"unknown path {path!r}")
-            src = work / "in.md"
+            src = work / f"{rec}.md"
             write(src, text)
             argv = ["to_srt.py", "--file", str(src), "-o", str(out)]
         stdout, stderr = io.StringIO(), io.StringIO()
@@ -414,7 +463,21 @@ def main() -> int:
                     if e.code is not None:
                         stderr.write(str(e.code))
             dt = time.process_time() - t0
-        return dt, {"code": code, "wrote": out.exists(),
+        # The CLI's own ledger, parsed rather than pattern-matched by the
+        # parent: `stdout` and `stderr` are truncated for diagnostics, and
+        # round 8 found the cue count present in the fixture but asserted
+        # nowhere — the numbers have to survive the trip in full.
+        both = stdout.getvalue() + "\n" + stderr.getvalue()
+        ledger = {}
+        for key, pattern in (("cues", r"wrote (\d+) cues"),
+                             ("dropped", r"(\d+) content line\(s\) dropped"),
+                             ("lost_ends", r"(\d+) declared end\(s\) discarded"),
+                             ("zero_dropped", r"(\d+) content line\(s\) and \d+ header"),
+                             ("zero_stamped", r"(\d+) of the content lines DID carry"),
+                             ("header", r"\((\d+) header[,)]")):
+            m = re.search(pattern, both)
+            ledger[key] = int(m.group(1)) if m else 0
+        return dt, {"code": code, "wrote": out.exists(), "ledger": ledger,
                     "stdout": stdout.getvalue()[:200], "stderr": stderr.getvalue()[:300]}
 
     def run_path(line: str, role: str) -> tuple[float, dict | None]:
@@ -436,11 +499,15 @@ def main() -> int:
             bp, bc = min(bp, dp), min(bc, dc)
         return bp * 1000, bc * 1000, last
 
-    def ceiling_ms(kind, prefix, tail, n, reps) -> float:
+    def ceiling_ms(kind, prefix, tail, n, reps, bpc) -> float:
         # Shape only: a ceiling is an absolute bound on the shape's own cost,
         # so the control has nothing to say here — measuring it doubled the
-        # cheapest stage's cost for nothing.
-        return min(run_path(build_line(kind, prefix, tail, n + rep), "shape")[0]
+        # cheapest stage's cost for nothing. Byte-equalised like the growth
+        # sizes (the docstring said sizes were, and this stage was not), and
+        # offset off the growth grid: `GROWTH`'s two smaller sizes are also
+        # ceiling sizes, so rep 0 of each built the string the ceiling had
+        # just built and a memoizing helper could serve it (round 8).
+        return min(run_path(build_line(kind, prefix, tail, n // bpc + 10 + rep), "shape")[0]
                    for rep in range(reps)) * 1000
 
     def growth_series(kind, prefix, tail, sizes, reps):
@@ -471,13 +538,19 @@ def main() -> int:
     for kind, prefix, tail in spec["shapes"]:
         recorder.reset()
         seen["longest"], seen["calls_max"] = dict.fromkeys(ROLES, 0), dict.fromkeys(ROLES, 0)
+        seen["cues_in"] = dict.fromkeys(ROLES, 0)
+        seen["parsed_cues"] = dict.fromkeys(ROLES, 0)
+        seen["parsed_lost"] = dict.fromkeys(ROLES, 0)
+        seen["parsed_skipped"] = dict.fromkeys(ROLES, 0)
         # Bytes per character of the line as BUILT, not of its parts: a `cjk`
         # text is two bytes a character on a one-byte prefix and tail.
         bpc = bytes_per_char(build_line(kind, prefix, tail, 256))
         shape = {"kind": kind, "prefix": prefix, "tail": tail, "bpc": bpc,
                  "ceiling": {}, "growth": {}, "exit": None, "retried": False,
                  "spy_max": 0, "pattern_max": 0, "spy_calls": 0,
-                 "control_spy_max": 0, "control_pattern_max": 0, "control_spy_calls": 0}
+                 "control_spy_max": 0, "control_pattern_max": 0, "control_spy_calls": 0,
+                 "cues_in": 0, "control_cues_in": 0, "parsed_cues": 0, "parsed_lost": 0,
+                 "parsed_skipped": 0}
         report["shapes"].append(shape)
         label = f"{path} {kind} {prefix!r} + {tail!r}"
         # Warm the path once, at the SMALLEST size, and discard it: the first
@@ -489,14 +562,14 @@ def main() -> int:
         # And at a size no rep re-uses (rep r builds `n + r`, the retry adds
         # two reps), so a memoizing helper cannot serve rep 0 from here.
         first = spec["ceilings"][0][0]
-        best_pair(kind, prefix, tail, first + spec["ceiling_reps"] + 2, 1)
+        best_pair(kind, prefix, tail, first // bpc + spec["ceiling_reps"] + 20, 1)
         for n, limit in spec["ceilings"]:
-            ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"])
+            ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"], bpc)
             if ms >= limit:
                 # Once more, with more reps, before calling it — the same
                 # treatment the growth stage gets; a real quadratic misses a
                 # 100x-headroom ceiling the second time as it did the first.
-                ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"] + 2)
+                ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"] + 2, bpc)
                 shape["retried"] = True
             shape["ceiling"][str(n)] = ms
             if ms >= limit:
@@ -533,6 +606,11 @@ def main() -> int:
         shape["control_pattern_max"] = recorder.longest["control"]
         shape["spy_calls"], shape["control_spy_calls"] = (seen["calls_max"]["shape"],
                                                           seen["calls_max"]["control"])
+        shape["cues_in"], shape["control_cues_in"] = (seen["cues_in"]["shape"],
+                                                      seen["cues_in"]["control"])
+        shape["parsed_cues"] = seen["parsed_cues"]["shape"]
+        shape["parsed_lost"] = seen["parsed_lost"]["shape"]
+        shape["parsed_skipped"] = seen["parsed_skipped"]["shape"]
         if verdict is not None:
             return fail(report, label=label, **verdict)
         print(f"{label}: " + " ".join(f"{n}={mp:.3f}/{mc:.3f}" for n, (mp, mc)
