@@ -169,11 +169,25 @@ def build_line(kind: str, prefix: str, tail: str, n: int) -> str:
         return prefix + tail * n + "00:10] S: x"
     if kind == "many":
         # n characters of SHORT lines: the line count is the axis. Each line
-        # is the prefix and a short tail, so it strips to the prefix and takes
-        # the branch a `tail` shape takes, `n // len(unit)` times over; the
-        # remainder is a final line, so consecutive reps still differ.
+        # is the prefix and a short tail, so it strips to the prefix and
+        # takes the branch a `tail` shape takes.
+        #
+        # EVERY line is well formed, including the last. The remainder used
+        # to be a bare `xxx…` fragment, which the parser drops — and one
+        # dropped line on each side is enough for `differing_sample` to
+        # refuse before it reaches the per-cue walk this block exists to
+        # time, so round 9 found that walk running at most twice in the whole
+        # family. The final line absorbs the remainder as extra tail instead,
+        # which keeps the total length exactly `n` (so reps still differ)
+        # with nothing for the parser to drop.
         unit = prefix + tail * 8 + "\n"
-        return unit * (n // len(unit)) + "x" * (n % len(unit))
+        floor = len(prefix) + 1              # the shortest well-formed line
+        whole, rest = divmod(n, len(unit))
+        if rest and rest < floor:            # borrow a unit so the last line fits
+            whole, rest = whole - 1, rest + len(unit)
+        if whole < 1:
+            raise SystemExit(f"`many` needs at least {len(unit) + floor} characters, got {n}")
+        return unit * whole + (prefix + tail * (rest - floor) + "\n" if rest else "")
     raise SystemExit(f"unknown shape kind {kind!r}")
 
 
@@ -299,16 +313,24 @@ def sandbox_root(spec: dict) -> pathlib.Path:
     # its expectations from the same variable so the two agreed by
     # construction.
     home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
-    for what, guarded in (("the home directory", home),
-                          ("this repository", SCRIPT.parent.parent),
+    # The repository and the cache are refused in BOTH directions — a root
+    # that contains one, and a root inside one — because nothing legitimate
+    # puts scratch there (round 8: a repo subdirectory and the cache one
+    # level below the guarded name both passed).
+    for what, guarded in (("this repository", SCRIPT.parent.parent),
                           ("the default cache directory", home / ".plaud-connector")):
-        # BOTH directions: a root that contains the guarded path, and a root
-        # inside it. Round 7 found every directory under the home directory
-        # accepted; round 8 found the same for the repository's own
-        # subdirectories and for the cache directory one level below the
-        # guarded name.
         if guarded.is_relative_to(root) or root.is_relative_to(guarded):
             raise SystemExit(f"refusing to run: sandbox {root} is inside, or contains, {what}")
+    # The HOME directory is refused one way only: as itself or as something
+    # the root contains. Round 9 made this bidirectional too and broke every
+    # machine whose `TMPDIR` resolves under the home directory — the parent's
+    # sandbox is a `TemporaryDirectory`, so all eleven children refused to
+    # start and blamed the sandbox. Scratch lives under the home directory on
+    # ordinary machines; `tests/mutants_57.py` says so about its own copy in
+    # the same words. What stops the probe writing somewhere it was not
+    # invited is the marker below, not this rule.
+    if home == root or home.is_relative_to(root):
+        raise SystemExit(f"refusing to run: sandbox {root} is, or contains, the home directory")
     try:
         stamp = (root / MARKER).read_text(encoding="utf-8")
     except OSError:
@@ -364,7 +386,7 @@ def main() -> int:
     seen = {"role": "shape", "calls": 0, "longest": dict.fromkeys(ROLES, 0),
             "calls_max": dict.fromkeys(ROLES, 0), "cues_in": dict.fromkeys(ROLES, 0),
             "parsed_cues": dict.fromkeys(ROLES, 0), "parsed_lost": dict.fromkeys(ROLES, 0),
-            "parsed_skipped": dict.fromkeys(ROLES, 0)}
+            "parsed_skipped": dict.fromkeys(ROLES, 0), "cue_chars": dict.fromkeys(ROLES, 0)}
     real = to_srt._match_segment
 
     def spy(line: str):
@@ -384,6 +406,15 @@ def main() -> int:
         # in no assertion).
         if len(segments) > seen["cues_in"][seen["role"]]:
             seen["cues_in"][seen["role"]] = len(segments)
+        # And the longest cue TEXT it was handed. Round 9 showed a silent
+        # `if len(seg["text"]) > 1_000_000: continue` at the head of
+        # `build_cues` passing every test and running FASTER, because the
+        # survivor shapes' whole job — pushing one multi-megabyte cue through
+        # collapse, wrap and the writer — was simply not done any more, and
+        # nothing counted the characters that arrived.
+        longest = max((len(seg["text"]) for seg in segments), default=0)
+        if longest > seen["cue_chars"][seen["role"]]:
+            seen["cue_chars"][seen["role"]] = longest
         return real_build(segments, **kwargs)
 
     to_srt.build_cues = build_spy
@@ -542,6 +573,7 @@ def main() -> int:
         seen["parsed_cues"] = dict.fromkeys(ROLES, 0)
         seen["parsed_lost"] = dict.fromkeys(ROLES, 0)
         seen["parsed_skipped"] = dict.fromkeys(ROLES, 0)
+        seen["cue_chars"] = dict.fromkeys(ROLES, 0)
         # Bytes per character of the line as BUILT, not of its parts: a `cjk`
         # text is two bytes a character on a one-byte prefix and tail.
         bpc = bytes_per_char(build_line(kind, prefix, tail, 256))
@@ -550,7 +582,7 @@ def main() -> int:
                  "spy_max": 0, "pattern_max": 0, "spy_calls": 0,
                  "control_spy_max": 0, "control_pattern_max": 0, "control_spy_calls": 0,
                  "cues_in": 0, "control_cues_in": 0, "parsed_cues": 0, "parsed_lost": 0,
-                 "parsed_skipped": 0}
+                 "parsed_skipped": 0, "cue_chars": 0}
         report["shapes"].append(shape)
         label = f"{path} {kind} {prefix!r} + {tail!r}"
         # Warm the path once, at the SMALLEST size, and discard it: the first
@@ -611,6 +643,7 @@ def main() -> int:
         shape["parsed_cues"] = seen["parsed_cues"]["shape"]
         shape["parsed_lost"] = seen["parsed_lost"]["shape"]
         shape["parsed_skipped"] = seen["parsed_skipped"]["shape"]
+        shape["cue_chars"] = seen["cue_chars"]["shape"]
         if verdict is not None:
             return fail(report, label=label, **verdict)
         print(f"{label}: " + " ".join(f"{n}={mp:.3f}/{mc:.3f}" for n, (mp, mc)

@@ -147,6 +147,25 @@ MUTANTS = {
         '            warnings = warnings + [\n'
         '                f"cue at {format_timestamp(seg[\'start\'])} {what} to "\n'
         '                f"{format_timestamp(end)} — {why}"]\n'),
+
+    # Round 9: three more walks the family reached only at count 1-3, and the
+    # one the round-9 fixture itself could not reach because a remainder line
+    # made `differing_sample` refuse before its own per-cue loop.
+    "M35 differing_sample's per-cue pairing goes quadratic (--preview-sources, round 9)": lambda s: sub(s,
+        "    for (p_start, tidy, p_alt), (v_start, raw, v_alt) in zip(polished, verbatim):\n",
+        "    _paired = []\n"
+        "    for (p_start, tidy, p_alt), (v_start, raw, v_alt) in zip(polished, verbatim):\n"
+        "        _paired = _paired + [p_start]\n"),
+    "M36 header_oddities goes quadratic (the third frontmatter walk)": lambda s: sub(s,
+        '    return [l for l in lines\n'
+        '            if l.strip() and l.strip() != "---"\n'
+        '            and not re.match(r"^[A-Za-z_][\\w-]*\\s*:", l)]\n',
+        '    _odd = []\n    for l in lines:\n'
+        '        if l.strip() and l.strip() != "---" and not re.match(r"^[A-Za-z_][\\w-]*\\s*:", l):\n'
+        '            _odd = _odd + [l]\n    return _odd\n'),
+    "M37 _frontmatter_span's own scan goes quadratic": lambda s: sub(s,
+        "    for i in range(1, len(lines)):\n",
+        "    _walked = []\n    for i in range(1, len(lines)):\n        _walked = _walked + [i]\n"),
 }
 
 
@@ -198,13 +217,21 @@ def main(argv: list[str]) -> int:
         ast.parse(mutated)
         target.write_text(mutated, encoding="utf-8")
         t0 = time.perf_counter()
-        run = subprocess.run([sys.executable, "-m", "unittest",
-                              "tests.test_to_srt.TestSegmentMatchingHasOneEntryPoint",
-                              "tests.test_to_srt.TestThereIsOnlyOneParse"],
-                             cwd=work, capture_output=True, text=True, timeout=600)
+        try:
+            run = subprocess.run([sys.executable, "-m", "unittest",
+                                  "tests.test_to_srt.TestSegmentMatchingHasOneEntryPoint",
+                                  "tests.test_to_srt.TestThereIsOnlyOneParse"],
+                                 cwd=work, capture_output=True, text=True, timeout=1200)
+            out = run.stdout + run.stderr
+            verdict = "GREEN" if run.returncode == 0 else "red"
+        except subprocess.TimeoutExpired as exc:
+            # A mutant that never finishes IS caught — that is the verdict
+            # this ledger wants. Round 9 found the bare `timeout=` aborting
+            # the whole run instead, so one slow mutant suppressed the
+            # verdicts of every other one.
+            out = "".join(x for x in (exc.stdout, exc.stderr) if isinstance(x, str))
+            verdict = "red"
         elapsed = time.perf_counter() - t0
-        out = run.stdout + run.stderr
-        verdict = "GREEN" if run.returncode == 0 else "red"
         first = re.search(r"AssertionError: (.*)", out)
         results.append((name, verdict))
         print(f"{verdict:5} {elapsed:6.1f}s  {name}\n      first: {(first.group(1) if first else '')[:230]}", flush=True)
