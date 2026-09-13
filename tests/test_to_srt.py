@@ -17,6 +17,7 @@ import secrets
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 import types
@@ -3829,6 +3830,18 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     to measure; and its wall-clock deadline, calibrated against efficiency
     cores and against load one at a time, was consumed exactly by the two
     composed — eleven healthy children killed and reported as a quadratic.
+    Round 10 answered that size cap by recording what `build_cues` was
+    HANDED, which is upstream of the cap, so the same mutant passed again
+    and again ran faster — and the same blindness held for `wrap_cue_text`
+    (which `cjk` exists to time) and for `render_srt`, where writing 1 000
+    of 156 039 cues left every test green under a success line reading
+    `wrote 156039 cues`; its line-count blocks were one line repeated, so
+    the whole cue axis ran at cardinality ONE and three costs that are
+    superlinear only when cues DIFFER measured linear at 156 038 cues; and
+    its replacement for the wall clock — a fraction of the ceiling deciding
+    whether a path may use the looser table — was an absolute CPU time
+    inside a correctness verdict with 1.30x of margin, most of it already
+    spent by a follow-up that round had itself filed.
     Each guard covered exactly the region its author was looking at.
 
     WHAT THIS CLASS GUARANTEES NOW.
@@ -3869,15 +3882,31 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     (`many`: n characters of short lines that are dropped, kept as cues, or
     kept with a lost end — on every path that walks a per-line or per-cue
     list THE FAMILY REACHES: `lib`, `segments`, the `--file` body (where the
-    count reaches `build_cues` and `render_srt`), the frontmatter (where it
+    count reaches `build_cues` and `render_srt`, its `warnings` list, and
+    `main`'s sum over every cue's `stripped`), the frontmatter (where it
     reaches this fix's second call site), the no-cue exit (its drop count and
-    the cue-shaped subset it keeps), and `--preview-sources` (both
-    `_cue_lines`' pairing and `differing_sample`'s own). Not every list in
-    the tool: `build_cues`' warnings, `collapse_runs`' output and the wrap's
-    lines grow with ONE cue's length rather than with a count, and the
-    survivor shapes cover those instead. The
-    cue-producing prefixes carry a word, so the count does not rest on the
-    parser's leniency for a bare speaker label.)
+    the cue-shaped subset it keeps), and `--preview-sources` (`_cue_lines`'
+    pairing, `differing_sample`'s `ambiguous` Counter, and its own per-cue
+    loop). Not every list in the tool: `collapse_runs`' output, the wrap's
+    lines, `sanitise`'s surviving characters and `detect_script`'s
+    per-character counts grow with ONE cue's length rather than with a count,
+    and the survivor shapes cover those instead. (`build_cues`' warnings was
+    named in THAT list until round 11 and does not belong there: every
+    `many` cue's end needs correcting, so the list grows with the cue count
+    — that is what the ledger's M34 mutates and why M34 is red — while the
+    survivor shapes cover it at length ZERO, one cue having no successor to
+    be clamped against. The list read as closed and was wrong in the
+    direction of understating its own coverage.)
+    EVERY LINE OF A BLOCK DIFFERS from every other, in both of a cue's
+    fields: a descending `HH:MM:SS` and a per-line counter in the text. Round
+    10's blocks were one line repeated, so 156 038 cues carried one timestamp
+    and one text, and every per-cue cost that is superlinear only when the
+    cues DIFFER — a dedup scan, a duplicate-timestamp counter, an
+    order-preserving rewrite of `ambiguous` — measured linear here and cost
+    seconds on a real transcript (M41-M43). Descending rather than ascending
+    so the clamp above still fires on every cue.
+    The cue-producing prefixes carry a word, so the count does not rest on
+    the parser's leniency for a bare speaker label.)
     Prefixes are a spanning set of the pattern's branches (point / ranged /
     empty / malformed end; no / short / spaced speaker; inner bracket
     whitespace). Tails are the four classes the issue and round 3 named
@@ -3886,9 +3915,12 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     test below, not listed from memory. The full prefix × class product
     runs for the four named classes; the eight in-line classes run on the
     spanning prefixes only (the strip treats them alike; the full product
-    was 168 further shapes of `rstrip`), and `mixed`, `run`, `end` and `lead` run
-    on all twelve (`colon`, `open` and `many` do not; their tables say
-    why). Which prefix grows which of the pattern's eight unbounded
+    was 168 further shapes of `rstrip`). Which kinds see how many classes,
+    as a CLOSED list of all ten — round 10 found this sentence naming four
+    of the twelve-class kinds and three of the one-class ones, which reads
+    as complete and is not: `tail`, `mixed`, `run`, `end` and `lead` run all
+    twelve; `open` runs two; `colon`, `text`, `cjk` and `many` run one (the
+    space). Their tables say why each is where it is. Which prefix grows which of the pattern's eight unbounded
     quantifiers, so the next reader need not re-derive it:
 
       `\[\s*`                    `lead` / `[`, `open` / `[`
@@ -3926,24 +3958,25 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     `SLACK_MS` and half the control's own top increment. A quadratic passes
     only if its extra cost at the top size is under `(K_GROWTH − 4) × de1 +
     SLACK_MS + dc2 / 2` — printed in the failure message for the shape at
-    hand. Measured across all 323 shapes, that admits
-    1–10 ms on the `tail` shapes and 2–7 ms on `run`; 105–122 ms at the top
-    of `cjk`, `open` and `text`; 172–193 ms on `colon`, whose excess is the
-    pattern's own 60 bounded speaker attempts (≈ 200 ms at 3.2 MB, linear);
-    60–700 ms on the `many` blocks, whose excess is the per-line bookkeeping
-    of 131–193 thousand lines; and 724 ms on the tab-mixed `cli-body`
-    survivor, whose excess is `collapse_runs` over 1.6 million runs. Every band is listed because round 8 found the ~100 ms one
-    missing from a list that read as complete. The control's uniform bound
-    is looser: a quadratic that slows every line equally is caught only past
-    `8 × dc1 + 1 ms + 2 × c[1]`, which admits ≈ 91 ms at 3.2 MB on
-    `cli-preview` and ≈ 82 ms on `cli-header` (the largest fixed costs),
-    31–43 ms on the other CLI exits and on `lib` and `segments`, and 10–25
-    ms on `matcher`, `cli-body-2` and `cli-preview-2`. All of these move
+    hand. Measured across all 323 shapes, twice, that admits
+    1–15 ms on the `tail` shapes, 1–2 ms on `end` and 3–6 ms on `run` and
+    `lead`; 109–132 ms at the top of `text`, `open` and `cjk`; 163–197 ms on
+    `colon`, whose excess is the pattern's own 60 bounded speaker attempts
+    (≈ 200 ms at 3.2 MB, linear); 47–520 ms on the `many` blocks, whose
+    excess is the per-line bookkeeping of 99–164 thousand lines; and
+    797–811 ms on the tab-mixed `cli-body` survivor, whose excess is
+    `collapse_runs` over 1.6 million runs. Every band is listed because
+    round 8 found the ~100 ms one missing from a list that read as complete.
+    The control's uniform bound is looser: a quadratic that slows every line
+    equally is caught only past `8 × dc1 + 1 ms + 2 × c[1]`, which admits
+    ≈ 37–40 ms at 3.2 MB on `cli-header` and `cli-preview` (the largest
+    fixed costs), ≈ 28 ms on `cli-zero`, 13–23 ms on `cli-body`, `lib` and
+    `segments`, and 6–14 ms on `matcher`, `cli-body-2` and `cli-preview-2`. All of these move
     with the machine and the load — they are a range taken idle, not
     constants. Read those as COEFFICIENTS, not as costs:
-    what is admitted is a QUADRATIC, so ≈ 730 ms at 3.28 MB is
-    q ≈ 6.8e-11 ms/char², which reaches a second at 3.8 MB, five seconds at
-    8.6 MB and a minute at 30 MB — and `--file` bounds neither line length
+    what is admitted is a QUADRATIC, so ≈ 805 ms at 3.28 MB is
+    q ≈ 7.5e-11 ms/char², which reaches a second at 3.7 MB, five seconds at
+    8.2 MB and a minute at 28 MB — and `--file` bounds neither line length
     nor line count. (Round 9 caught the previous version of this sentence
     understating those by 20-25%: the arithmetic is q·size², nothing else.) A regression that
     stays under the criterion is the same defect class the issue is about
@@ -3957,20 +3990,37 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     test; the defence there is that the chokepoint is one line a reviewer
     can read. The ceilings and slacks are absolute numbers calibrated on an
     18-core machine and are fail-fast heuristics, not the guarantee (each
-    is re-measured once before it fails a shape); the growth criteria are
+    is re-measured once, on reps the first pass did not build, before it
+    fails a shape); the growth criteria are
     relative and are. The family runs on CPython only (`bytes_per_char`
     assumes its compact strings). The eight in-line classes run on four of
-    the twenty-five prefixes. The line-count blocks are lines of 16 to 24
-    characters whose cue text is four, so "many medium-sized cues" is a shape
+    the twenty-five prefixes. The line-count blocks are lines of 19 to 32
+    characters whose cue text is nine, so "many medium-sized cues" is a shape
     the family does not have. MEMORY is not measured at all — the criterion is CPU time by
     design, round 4's repair for false reds — while `collapse_runs`
-    materialises one match object per run, about 80 bytes for every input
-    byte — 8 MB of alternating runs costs 640 MB, and `--file` bounds
-    neither, so the RATIO is the number that matters rather than the 550 MB
-    one 3.2 MB line happens to cost (this issue's own shape, a pure
-    whitespace tail, costs nothing extra: `\s+` collapses it into one run).
-    Filed as #59. This class's own children peak on the order of a gigabyte
-    together.
+    materialises one match object per run, and alternating single characters
+    make one run per CHARACTER: 120 bytes for the match plus 8 for its list
+    slot is 128 BYTES FOR EVERY INPUT BYTE, which is a floor, not an
+    estimate. Measured with `tracemalloc` on `list(re.finditer(...))` alone:
+    128.1 / 128.2 / 128.3 bytes per byte at 1 / 2 / 4 MB of `"a "`, and 64 on
+    `"abc "`, one run per two characters. So 8 MB of the worst shape costs
+    ≈1.03 GB before the output list and the join, and `--file` bounds
+    neither. The RATIO is the number that matters rather than the 550 MB one
+    3.2 MB line happens to cost end to end — and the two are consistent
+    (3.28 MB × 128 = 420 MB of match objects, the rest `out` and the joined
+    string), which the round-10 wording at 80 bytes/byte was not. This
+    issue's own shape, a pure whitespace tail, costs nothing extra: `\s+`
+    collapses it into one run. Every CLI shape passes `-o`, so the STREAMING
+    output branch (`sys.stdout.write(srt)` when no `-o` is given) is not
+    timed by any shape: it is the same string through a different sink, one
+    `write` after `render_srt` with no per-cue work of its own, so it is a
+    gap in the family rather than an untimed walk — and it is why the `.srt`
+    byte floor is asserted only where a file was written.
+    Filed as #59, whose body reports 80 because it
+    measured `ru_maxrss` deltas within one process — a lifetime high-water
+    mark that cannot fall, so every size after the first is measured against
+    an inflated baseline. This class's own children peak on the order of two
+    gigabytes together.
     `segments` runs the light survivor set, so four class variants of
     `colon` / `text` / `mixed` that earlier tables ran there now run on
     `matcher` only. A silent DROP keyed on a head predicate with a threshold
@@ -4102,7 +4152,9 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     # table; every other shape is under 120 ms there. Headroom on the
     # binding shape is ~5x idle and ~4x under load, not the "100x" an
     # earlier comment claimed, and
-    # a missed ceiling is re-measured once before it fails a shape.
+    # a missed ceiling is re-measured once before it fails a shape — on
+    # FRESH reps: the ledger's M3 (`lru_cache` on the helper) served the
+    # re-measure's first rep from the first pass's, and `min` took it.
     CEILINGS = ((800, 10.0), (3200, 25.0), (12800, 100.0), (51200, 100.0),
                 (204800, 200.0), (819200, 400.0))
     CEILINGS_CUE = ((800, 10.0), (3200, 25.0), (12800, 100.0), (51200, 100.0),
@@ -4123,12 +4175,30 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     # (5.8x) with ordinary load (3.9x) consumes 23x, and the budget had 23x.
     #
     # So the deadline is on PROGRESS instead: a child prints one line per
-    # shape, and one that has printed nothing for STALL_TIMEOUT is stuck,
-    # whatever the machine is doing. A slow machine slows every shape and
-    # still prints; a hang prints nothing. The bound is per shape rather
+    # shape, and one that has printed nothing for its own stall bound is
+    # stuck, whatever the machine is doing. A slow machine slows every shape
+    # and still prints; a hang prints nothing. The bound is per shape rather
     # than per run, so it does not grow with the table. HARD_CAP is the
     # backstop for a child that neither finishes nor stops printing.
+    #
+    # Two changes, because round 10 shipped one line per SHAPE and a flat
+    # 300 s. A shape is six ceiling sizes plus a growth series plus, on a
+    # miss, a second growth series: ~5 s on the calibration machine and ~17 s
+    # with the retry, so 300 s was 18x — BELOW the 23x this comment measured
+    # two paragraphs up, and the retry is triggered by exactly the noise a
+    # slow or loaded machine produces.
+    #
+    # The child prints once per STAGE now (each ceiling size, each growth
+    # rep), so the gap the bound has to cover is ONE measurement, ~0.1-2 s,
+    # and 300 s is 150x of it. On top of that the bound scales with what THIS
+    # child has already shown: a machine that takes a minute a stage has to
+    # go eight quiet minutes before it is called stuck. The two together are
+    # what let a hang still be reported in five minutes without a slow
+    # machine ever being called one — round 10's repair, at one line a shape,
+    # could only buy the second by making the first much larger, which cost
+    # fifteen minutes per genuinely stuck child in the mutation ledger.
     STALL_TIMEOUT = 300.0
+    STALL_FACTOR = 8.0
     HARD_CAP = 3600.0
 
     # path → (shapes, expected exit code or None for a library call,
@@ -4155,7 +4225,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
         # bare `S:` as the text — so one plausible parser tightening ("a bare
         # speaker label is not speech") emptied all three blocks at once and
         # took the whole cue-count axis with them, silently.
-        dropped = ("many", "[00:10] ", " ")
+        dropped = cls.MANY_DROPPED
         # Dropped AND cue-shaped: `[99999:00]` is five digits, which `_STAMP`
         # does not admit, so the line never matches and lands in `skipped` —
         # but `CUE_SHAPED` (the rough hint) does match it, so the no-cue
@@ -4170,9 +4240,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
         # `SEGMENT` already matched `_STAMP` to get there. Verified by
         # enumerating the stamp forms; no shape can cover a branch that
         # cannot fire.)
-        stamped = ("many", "[99999:00] S: x", " ")
-        kept = ("many", "[00:10] S: x", " ")
-        lost = ("many", "[00:10 - z] S: x", " ")
+        stamped, kept, lost = cls.MANY_STAMPED, cls.MANY_KEPT, cls.MANY_LOST
         return {
             "matcher-1":   (matcher[0::2], None, None),
             "matcher-2":   (matcher[1::2], None, None),
@@ -4203,7 +4271,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                             1, "looked like segments"),
             "cli-body":    (cls._shapes(cls.SPAN_PREFIXES, cls.SPAN_TAILS, "light", "open"),
                             0, "wrote "),
-            # The same `--file` body branch, in a child of its own: 160 000
+            # The same `--file` body branch, in a child of its own: 113 000
             # cues through `build_cues` and `render_srt` per rep is the
             # heaviest work in the family.
             "cli-body-2":  ([dropped, kept, lost], 0, "wrote "),
@@ -4242,24 +4310,45 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
     # against the table each path gets: cli-body 21%, cli-preview-2 17%,
     # cli-body-2 16%, everything else at most 16%.
     CUE_HEAVY = ("cli-body", "cli-body-2", "cli-preview-2")
-    # A named path must MEASURE cue-heavy, and an unnamed one must not.
-    # Against the ordinary table the three named paths sit at 58-78% of the
-    # limit and every other path at most 17% — measured, eleven children,
-    # several runs, idle and under load — so the two groups are separated by
-    # a factor of three and this threshold sits in the gap. Round 9 found the previous
-    # pin firing only one way and never at all for `cli-body`, so a name
-    # could buy a 3.75x looser bound with nothing to earn it back.
-    CUE_HEAVY_FRACTION = 0.40
+    # A named path must MEASURE cue-heavy, and an unnamed one must not —
+    # judged by comparing the paths WITH EACH OTHER in the same run (see the
+    # end of `test_every_reachable_path_is_linear_across_the_input_family`),
+    # not against a fraction of the table. Every path in a run is scaled the
+    # same way by the machine it runs on, so the ORDER survives what an
+    # absolute fraction does not. Round 10 used `>= 0.40 x ordinary` and had
+    # 1.30x of margin downward, most of which its own filed follow-up (`#59`)
+    # was about to spend; round 11's edit to the `many` blocks then spent the
+    # rest for real.
+    CUE_HEAVY_MARGIN = 1.5
 
     # The paths whose SURVIVOR shapes become one long cue, so `build_cues`
     # and everything after it is handed megabytes of text on a single cue.
     # (`cli-header` puts its survivors in the frontmatter and `cli-zero`
     # carries none, so neither is here.) Round 9 found a silent size cap in
-    # `build_cues` passing all fourteen tests — the run kept exiting 0 and
-    # writing a file with `wrote 1 cues`, and nothing said the long cue had
-    # to arrive. Both this and `CUE_HEAVY` are asserted in BOTH directions
-    # below: earned implies named, and named implies earned.
+    # `build_cues` passing every test — the run kept exiting 0 and writing a
+    # file with `wrote 1 cues`, and nothing said the long cue had to arrive;
+    # round 10 then pinned the ARRIVAL, which the cap does not touch, so the
+    # mutant passed again. What is pinned now is the whole way through: the
+    # characters arrive (`cue_chars_in`), come back out of `build_cues`
+    # (`cue_chars`), and reach the file (`srt_bytes`). This is asserted in
+    # both directions — earned implies named, named implies earned —
+    # while `CUE_HEAVY`'s reverse direction is a comparison BETWEEN paths in
+    # the same run, made where every path's report is in hand.
     LONG_CUE_PATHS = ("cli-body", "cli-preview")
+
+    # The four short-line blocks, by name. `{t}` is filled with a DESCENDING
+    # `HH:MM:SS` and `{i:06d}` with the line's index, so every line of a
+    # block differs from every other in both of a cue's fields (round 10:
+    # 156 038 cues carrying one timestamp and one text made every per-cue
+    # cost that needs DISTINCT cues read as linear — see `build_line`).
+    # Named rather than sniffed: `_judge` used to decide what a block was
+    # from `prefix.endswith("x")` and `"-" in prefix`, which is a second
+    # spelling of the table that drifts from it silently.
+    MANY_DROPPED = ("many", "[{t}] ", " ")             # no text after `]`
+    MANY_STAMPED = ("many", "[99999:00] S: {i:06d}", " ")  # cue-shaped, unparsable
+    MANY_KEPT    = ("many", "[{t}] S: {i:06d}", " ")   # becomes a cue
+    MANY_LOST    = ("many", "[{t} - z] S: {i:06d}", " ")  # a cue with a discarded end
+    MANY_CUE_BLOCKS = (MANY_KEPT, MANY_LOST)
 
     @classmethod
     def _ceilings(cls, path):
@@ -4368,17 +4457,21 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                              f"{kind} no longer runs every class on matcher")
         many = {pre for p, (sh, _, _) in paths.items() if p.startswith("cli-body")
                 for k, pre, _ in sh if k == "many"}
-        self.assertEqual({"[00:10] ", "[00:10] S: x", "[00:10 - z] S: x"}, many,
+        self.assertEqual({p for _, p, _ in (self.MANY_DROPPED, self.MANY_KEPT,
+                                            self.MANY_LOST)}, many,
                          "the --file body path no longer grows dropped lines, cues AND lost "
                          "ends (round 7: only dropped lines, so build_cues never saw the count)")
         # Every path that walks a per-line or per-cue list gets the count
         # axis, and the cue-producing blocks carry a word rather than leaning
         # on the bare-label leniency (round 8, both findings).
-        for path, want in (("cli-header", {"[00:10] S: x"}),
-                           ("cli-zero", {"[00:10] ", "[99999:00] S: x"}),
-                           ("cli-preview", {"[00:10] S: x", "[00:10 - z] S: x"}),
-                           ("segments", {"[00:10] ", "[00:10] S: x", "[00:10 - z] S: x"}),
-                           ("lib", {"[00:10] ", "[00:10] S: x", "[00:10 - z] S: x"})):
+        pre = {name: block[1] for name, block in
+               (("dropped", self.MANY_DROPPED), ("stamped", self.MANY_STAMPED),
+                ("kept", self.MANY_KEPT), ("lost", self.MANY_LOST))}
+        for path, want in (("cli-header", {pre["kept"]}),
+                           ("cli-zero", {pre["dropped"], pre["stamped"]}),
+                           ("cli-preview", {pre["kept"], pre["lost"]}),
+                           ("segments", {pre["dropped"], pre["kept"], pre["lost"]}),
+                           ("lib", {pre["dropped"], pre["kept"], pre["lost"]})):
             got = {pre for p, (sh, _, _) in paths.items() if p.startswith(path)
                    for k, pre, _ in sh if k == "many"}
             with self.subTest(path=path):
@@ -4425,18 +4518,27 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                 # this test still green.
                 self.assertIn("or contains", str(caught.exception),
                               f"{bad} was refused for the wrong reason: {caught.exception}")
-        # A planted marker does not buy entry to a guarded tree.
-        planted = REPO / "tests" / "_sandbox_probe_check"
-        planted.mkdir(exist_ok=True)
+        # A planted marker does not buy entry to a guarded tree. Planted in
+        # a directory that already exists, as ONE file that is removed
+        # again: round 10's version made a directory inside the repository
+        # under test and `shutil.rmtree`d it, which is both a write into the
+        # tree the suite is measuring and an untracked path nobody had
+        # ignored.
+        planted = REPO / "tests" / _probe.MARKER
         try:
-            (planted / _probe.MARKER).write_text("n", encoding="utf-8")
+            planted.write_text("n", encoding="utf-8")
             with self.assertRaises(SystemExit):
-                _probe.sandbox_root({"sandbox": str(planted), "nonce": "n"})
+                _probe.sandbox_root({"sandbox": str(REPO / "tests"), "nonce": "n"})
         finally:
-            shutil.rmtree(planted, ignore_errors=True)
+            planted.unlink(missing_ok=True)
         # A scratch directory UNDER the home directory is fine — that is
         # where `TMPDIR` usually points, and round 9 broke every such
-        # machine by refusing it. The marker is what makes it ours.
+        # machine by refusing it. What this pins is the round-9 regression,
+        # not a security property: the marker is written from the spec's own
+        # nonce, so it separates an invited directory from an occupied one,
+        # and nothing more. Whoever tightens the home rule back to both
+        # directions has to change this line — deliberately, having read the
+        # residue paragraph in `sandbox_root`.
         with tempfile.TemporaryDirectory(dir=home) as under_home:
             u = pathlib.Path(under_home).resolve()
             (u / _probe.MARKER).write_text("n", encoding="utf-8")
@@ -4482,85 +4584,241 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                 # found a superlinear path, and the siblings — still grinding a
                 # regressed helper towards the deadline — are killed, so the
                 # time to red is the first child's, not the slowest's.
-                cap = time.monotonic() + self.HARD_CAP
-                # Per child: how much it has written, and when that last
-                # changed. Progress, not elapsed time, is what says it lives.
-                seen_bytes = dict.fromkeys(children, -1)
-                moved_at = dict.fromkeys(children, time.monotonic())
-                stalled = []
-                pending, rcs, stopped = dict(children), {}, {}
-                while pending and time.monotonic() < cap and not stalled:
-                    now = time.monotonic()
-                    for path in list(pending):
-                        try:
-                            grown = (scratch / path / "stderr.txt").stat().st_size
-                        except OSError:
-                            grown = seen_bytes[path]
-                        if grown != seen_bytes[path]:
-                            seen_bytes[path], moved_at[path] = grown, now
-                        elif now - moved_at[path] > self.STALL_TIMEOUT:
-                            stalled.append(path)
-                    for path, child in list(pending.items()):
-                        if child.poll() is None:
-                            continue
-                        rcs[path] = child.returncode
-                        del pending[path]
-                        if child.returncode == 2:
-                            for other, sibling in pending.items():
-                                # A sibling that has ALSO finished keeps its
-                                # report and its own code (round 6: a second
-                                # exit 2 in the same poll was reported as a
-                                # kill); one still running is killed.
-                                if sibling.poll() is None:
-                                    sibling.kill()
-                                    sibling.wait()
-                                    stopped[other] = path
-                                else:
-                                    rcs[other] = sibling.returncode
-                            pending.clear()
-                            break       # the snapshot list still holds the killed siblings
-                    time.sleep(0.2)
-                # Past the deadline: name EVERY child still running, not the
-                # first in insertion order (round 6: the message blamed an
-                # arbitrary sibling for the budget).
-                still = sorted(stalled) or sorted(pending)
-                for path, child in pending.items():
-                    child.kill()
-                    child.wait()
-                for path in children:
-                    work = scratch / path
-                    rc = rcs.get(path)
-                    results[path] = (rc, (work / "stdout.json").read_text(encoding="utf-8"),
-                                     (work / "stderr.txt").read_text(encoding="utf-8"),
-                                     stopped.get(path) or (still if rc is None else None))
+                self._await_children(children, scratch, results)
             finally:
                 for child in children.values():
                     if child.poll() is None:
                         child.kill()
                         child.wait()
 
+        fractions: dict[str, float] = {}
         for path, (rc, out, err, why) in results.items():
             shapes, want_exit, want_printed = self._paths()[path]
             if rc is None and isinstance(why, str) and results[why][0] == 2:
                 continue        # killed because a sibling already found the regression
             with self.subTest(path=path):
                 last = err.strip().splitlines()[-1] if err.strip() else "(no progress line)"
-                others = [w for w in why if w != path] if isinstance(why, list) else []
-                budget = (f" (and so did {', '.join(others)})" if others else "")
-                self.assertIsNotNone(
-                    rc, f"{path}: the probe printed nothing for {self.STALL_TIMEOUT:.0f} s"
-                        f"{budget} — one shape is not finishing, which a slow machine does "
-                        f"not cause (it slows every shape and still prints); last completed: "
-                        f"{last}")
+                if rc is None:
+                    reason, named = why
+                    others = [w for w in named if w != path]
+                    also = f" (and so did {', '.join(others)})" if others else ""
+                    if reason == "stall":
+                        self.fail(f"{path}: the probe printed nothing for "
+                                  f"{self.STALL_TIMEOUT:.0f} s{also} — one shape is not "
+                                  f"finishing, which a slow machine does not cause (it slows "
+                                  f"every shape and still prints); last completed: {last}")
+                    if reason == "bystander":
+                        self.fail(f"{path}: killed while it was still printing, because "
+                                  f"{', '.join(named)} stopped — this child is a bystander "
+                                  f"and says nothing about the code; last completed: {last}")
+                    self.fail(f"{path}: still running after the {self.HARD_CAP / 60:.0f}-minute "
+                              f"cap{also}, and still printing the whole time — this is a "
+                              f"machine far slower than the one these bounds were measured "
+                              f"on, not a hang; last completed: {last}")
                 try:
                     report = json.loads(out)
                 except json.JSONDecodeError:
                     self.fail(f"{path}: probe exited {rc} without a report; stderr tail:\n"
                               + err[-1500:])
+                # Anything the library paths printed. Empty on correct
+                # code; not empty means the report channel and the parent's
+                # progress detector were both being written to from inside a
+                # timed shape (round 10 found neither redirected there).
+                self.assertEqual("", report.get("stray", ""),
+                                 f"{path}: the library paths wrote to stdout/stderr from "
+                                 f"inside a shape: {report.get('stray', '')!r}")
                 if report["failed"]:
                     self._explain(report["failed"])
                 self.assertEqual(0, rc, f"{path}: probe exited {rc}; stderr tail:\n" + err[-1500:])
-                self._judge(path, shapes, report, want_exit, want_printed)
+                fractions[path] = self._judge(path, shapes, report, want_exit,
+                                              want_printed)
+        # Whether a path is cue-heavy is decided by comparing the paths WITH
+        # EACH OTHER, in this run, on this machine, under whatever load it
+        # is under — not against a fraction of the ceiling table.
+        #
+        # Round 10 wrote that comparison as `any(ceiling >= 0.40 * ordinary)`
+        # and asserted it in both directions. That is an absolute CPU time
+        # deciding a correctness verdict, which is what the class docstring
+        # says the absolute numbers are NOT for, and it was measured at
+        # 1.30x of margin downward: the fix for `#59` this change's own round
+        # filed, plus one obvious optimisation, put the binding path at
+        # 40.5-42.8% against a 40.0% line — a correct, faster tool failing a
+        # test about a naming table. Round 11's own edit to the `many` blocks
+        # then pushed `cli-body-2` under it for real, which is how this is
+        # written down rather than argued about.
+        #
+        # The ordering is what the name actually claims, and it is invariant
+        # under machine speed: every path in the run is scaled the same way.
+        if len(fractions) == len(results):
+            named = {p: f for p, f in fractions.items() if p in self.CUE_HEAVY}
+            other = {p: f for p, f in fractions.items() if p not in self.CUE_HEAVY}
+            floor, ceil_ = min(named.values()), max(other.values())
+            self.assertGreaterEqual(
+                floor, self.CUE_HEAVY_MARGIN * ceil_,
+                "the cue-heavy names no longer describe this run: the lightest named path "
+                f"is at {floor:.0%} of the ordinary ceiling and the heaviest unnamed one at "
+                f"{ceil_:.0%}, less than {self.CUE_HEAVY_MARGIN}x apart. Named: "
+                + ", ".join(f"{p} {f:.0%}" for p, f in sorted(named.items(), key=lambda kv: -kv[1]))
+                + "; unnamed: "
+                + ", ".join(f"{p} {f:.0%}" for p, f in sorted(other.items(), key=lambda kv: -kv[1])))
+
+    def _await_children(self, children, scratch, results):
+        """Wait for the eleven children, and say WHY each one that did not
+        finish was stopped. Extracted so it can be tested: it is the one
+        mechanism in this class that can kill eleven healthy processes and
+        report a defect, and round 10 shipped it with no test at all (its
+        author checked it by hand against a fake child, and that check did
+        not enter the tree)."""
+        cap = time.monotonic() + self.HARD_CAP
+        # Per child: how much it has written, and when that last
+        # changed. Progress, not elapsed time, is what says it lives.
+        seen_bytes = dict.fromkeys(children, -1)
+        moved_at = dict.fromkeys(children, time.monotonic())
+        # The longest gap this child has already survived, which is
+        # what its own bound scales with.
+        worst_gap = dict.fromkeys(children, 0.0)
+        stalled = []
+        pending, rcs, stopped = dict(children), {}, {}
+        while pending and time.monotonic() < cap and not stalled:
+            now = time.monotonic()
+            for path in list(pending):
+                try:
+                    grown = (scratch / path / "stderr.txt").stat().st_size
+                except OSError:
+                    grown = seen_bytes[path]
+                if grown != seen_bytes[path]:
+                    worst_gap[path] = max(worst_gap[path], now - moved_at[path])
+                    seen_bytes[path], moved_at[path] = grown, now
+                elif now - moved_at[path] > max(self.STALL_TIMEOUT,
+                                                self.STALL_FACTOR * worst_gap[path]):
+                    stalled.append(path)
+            for path, child in list(pending.items()):
+                if child.poll() is None:
+                    continue
+                rcs[path] = child.returncode
+                del pending[path]
+                if child.returncode == 2:
+                    for other, sibling in pending.items():
+                        # A sibling that has ALSO finished keeps its
+                        # report and its own code (round 6: a second
+                        # exit 2 in the same poll was reported as a
+                        # kill); one still running is killed.
+                        if sibling.poll() is None:
+                            sibling.kill()
+                            sibling.wait()
+                            stopped[other] = path
+                        else:
+                            rcs[other] = sibling.returncode
+                    pending.clear()
+                    break       # the snapshot list still holds the killed siblings
+            time.sleep(0.2)
+        # WHY each unfinished child was killed, told apart rather
+        # than given one sentence. Round 6's message blamed an
+        # arbitrary sibling for the budget; round 10 named every
+        # stalled child but then told the ten BYSTANDERS — killed
+        # while printing normally — that they had printed nothing for
+        # 300 s, which is false about ten of the eleven, and reused
+        # the same sentence on the HARD_CAP exit, where "a slow
+        # machine does not cause this" is exactly backwards.
+        if stalled:
+            reason, named = "stall", sorted(stalled)
+        else:
+            reason, named = "cap", sorted(pending)
+        for path, child in pending.items():
+            child.kill()
+            child.wait()
+        for path in children:
+            work = scratch / path
+            rc = rcs.get(path)
+            if rc is not None:
+                why = None
+            elif stopped.get(path):
+                why = stopped[path]
+            elif reason == "stall" and path not in named:
+                why = ("bystander", named)
+            else:
+                why = (reason, named)
+            results[path] = (rc, (work / "stdout.json").read_text(encoding="utf-8"),
+                             (work / "stderr.txt").read_text(encoding="utf-8"), why)
+
+
+    def test_the_stall_detector_tells_a_hang_from_a_slow_machine(self):
+        """The one mechanism here that can kill eleven healthy processes.
+
+        Round 9's fixed wall clock killed all eleven while they were working
+        and reported each as a quadratic; round 10 replaced it with progress
+        detection but told the ten BYSTANDERS the same sentence — "printed
+        nothing for 300 s" — which was false about every one of them, and
+        reused it again on the HARD_CAP exit, where a slow machine IS the
+        cause. None of that had a test: it was checked by hand against a fake
+        child, and the check did not enter the tree. This is that check.
+        """
+        class Fake:
+            """A child process: alive until `ends`, and no more than that."""
+            def __init__(self, ends=None):
+                self.ends, self.returncode, self.killed = ends, None, False
+
+            def poll(self):
+                if self.ends is not None and time.monotonic() >= self.ends:
+                    self.returncode = 0
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+
+            def wait(self):
+                return self.returncode
+
+        def run(children, printing, ends=None, stall=0.6, cap=6.0):
+            """Drive the loop with `printing` naming the children that keep
+            writing to their stderr, and return `results`."""
+            with tempfile.TemporaryDirectory() as d:
+                scratch = pathlib.Path(d)
+                for path in children:
+                    (scratch / path).mkdir()
+                    (scratch / path / "stdout.json").write_text("{}", encoding="utf-8")
+                    (scratch / path / "stderr.txt").write_text("start\n", encoding="utf-8")
+                stop = threading.Event()
+
+                def tick():
+                    while not stop.wait(0.1):
+                        for path in printing:
+                            with open(scratch / path / "stderr.txt", "a") as fh:
+                                fh.write("shape done\n")
+
+                self.STALL_TIMEOUT, self.HARD_CAP = stall, cap
+                pump = threading.Thread(target=tick, daemon=True)
+                pump.start()
+                try:
+                    results = {}
+                    self._await_children(dict(children), scratch, results)
+                    return results
+                finally:
+                    stop.set()
+                    pump.join(2)
+
+        # One child stops printing; the others do not. The stalled one is
+        # named, and the bystanders are told they are bystanders.
+        kids = {"stuck": Fake(), "busy-1": Fake(), "busy-2": Fake()}
+        results = run(kids, printing=("busy-1", "busy-2"))
+        self.assertEqual(("stall", ["stuck"]), results["stuck"][3])
+        for path in ("busy-1", "busy-2"):
+            self.assertEqual(("bystander", ["stuck"]), results[path][3],
+                             f"{path} was killed as a bystander and must be told so")
+        self.assertTrue(all(k.killed for k in kids.values()))
+
+        # Everybody keeps printing and nobody finishes: that is a slow
+        # machine, not a hang, and it has to reach the cap rather than the
+        # stall bound — which is what the two-part bound above is for.
+        results = run({"slow-1": Fake(), "slow-2": Fake()},
+                      printing=("slow-1", "slow-2"), stall=0.6, cap=2.0)
+        for path in ("slow-1", "slow-2"):
+            self.assertEqual(("cap", ["slow-1", "slow-2"]), results[path][3],
+                             f"{path} kept printing, so it is the cap that stopped it")
+
+        # And a child that simply finishes is not accused of anything.
+        results = run({"done": Fake(ends=time.monotonic() + 0.3)}, printing=("done",))
+        self.assertEqual((0, None), (results["done"][0], results["done"][3]))
 
     def _explain(self, f):
         """The child stopped at the first failing shape; say which and why."""
@@ -4595,7 +4853,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
         self.assertEqual([tuple(s) for s in shapes],
                          [(sh["kind"], sh["prefix"], sh["tail"]) for sh in report["shapes"]],
                          f"{path}: the report does not cover the shapes that were asked for")
-        heavy = long_cue = False
+        heaviest = long_cue = 0.0
         for sh in report["shapes"]:
             label = f"{path} {sh['kind']} {sh['prefix']!r} + {sh['tail']!r}"
             # Sized from the parent's own build of the shape, not from the
@@ -4613,8 +4871,8 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                 for n, limit in self._ceilings(path):
                     # Does this path actually MEASURE cue-heavy? (Below.)
                     ordinary = dict(self.CEILINGS).get(n)
-                    if ordinary and sh["ceiling"][str(n)] >= self.CUE_HEAVY_FRACTION * ordinary:
-                        heavy = True
+                    if ordinary:
+                        heaviest = max(heaviest, sh["ceiling"][str(n)] / ordinary)
                     self.assertLess(sh["ceiling"][str(n)], limit,
                                     f"{label}: n={n} took {sh['ceiling'][str(n)]:.1f} ms")
                 p = [sh["growth"][str(n)][0] for n in self.GROWTH]
@@ -4634,8 +4892,21 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                     # Round 8 found the cue count present in the fixture and
                     # asserted nowhere, so an unrelated parser tightening took
                     # it to 1 with everything green.
-                    want = lines // 2
+                    # Every line of these blocks becomes exactly one entry
+                    # in the list the path walks, so the bar is the line
+                    # count less a handful for the fixture's own cue and for
+                    # the reps that build a slightly longer block than the
+                    # one measured here. Round 10 used `lines // 2`, which
+                    # left the whole count axis 2x of slack: half the lines
+                    # could stop arriving with everything green.
+                    want = lines - 4
                     led = (sh["exit"] or {}).get("ledger") or {}
+                    # WHICH block this is, by identity against the table that
+                    # defined it — not by `prefix.endswith("x")` and
+                    # `"-" in prefix`, which were a second spelling of the
+                    # table and would have quietly stopped matching when
+                    # round 11 changed the prefixes to templates.
+                    block = (sh["kind"], sh["prefix"], sh["tail"])
                     # Whether this path is cue-heavy is decided by what the
                     # run actually did, not by its name: a block that reached
                     # `build_cues` in quantity belongs on the looser ceiling
@@ -4659,13 +4930,13 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                         # And what the re-walk KEPT, for the block whose
                         # lines are cue-shaped: `zero_dropped` is the length
                         # of the iteration, `zero_stamped` the accumulator.
-                        if sh["prefix"].endswith("x"):
+                        if block == self.MANY_STAMPED:
                             self.assertGreaterEqual(
                                 led.get("zero_stamped", 0), want,
                                 f"{label}: the no-cue exit kept {led.get('zero_stamped', 0)} "
                                 f"cue-shaped lines of {lines} — the accumulator this walk "
                                 f"builds is not growing")
-                    elif sh["prefix"].endswith("x"):
+                    elif block in self.MANY_CUE_BLOCKS:
                         # Observed, not read back out of the CLI's output:
                         # `--preview-sources` prints no ledger at all. The
                         # library paths stop at the parser, so their analogue
@@ -4674,7 +4945,7 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                             sh["parsed_cues"], want,
                             f"{label}: the parser returned {sh['parsed_cues']} cues from "
                             f"{lines} lines — these lines are supposed to BECOME cues")
-                        if "-" in sh["prefix"]:
+                        if block == self.MANY_LOST:
                             self.assertGreaterEqual(
                                 sh["parsed_lost"], want,
                                 f"{label}: the parser returned {sh['parsed_lost']} lost ends "
@@ -4684,12 +4955,22 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                                 sh["cues_in"], want,
                                 f"{label}: build_cues was handed {sh['cues_in']} cues from "
                                 f"{lines} lines — build_cues and render_srt are timed at one")
+                            # And what it RETURNED. The argument is upstream
+                            # of everything `build_cues` does, so a cap
+                            # inside it leaves the count above untouched —
+                            # round 10 pinned only the argument and the
+                            # round-9 mutant passed again, FASTER again.
+                            self.assertGreaterEqual(
+                                sh["cues_out"], want,
+                                f"{label}: build_cues returned {sh['cues_out']} cues of the "
+                                f"{sh['cues_in']} it was handed — the work these lines exist "
+                                f"to time is being skipped inside it")
                         if want_exit == 0:
                             self.assertGreaterEqual(
                                 led.get("cues", 0), want,
                                 f"{label}: the run reported {led.get('cues', 0)} cues of "
                                 f"{lines} lines")
-                            if "-" in sh["prefix"]:
+                            if block == self.MANY_LOST:
                                 self.assertGreaterEqual(
                                     led.get("lost_ends", 0), want,
                                     f"{label}: {led.get('lost_ends', 0)} declared ends "
@@ -4757,18 +5038,55 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                             f"characters ({role}) — this shape is supposed to reach it at "
                             f"full length, or the guard is back to round 4's blindness")
                 # A survivor that becomes one long cue: the characters have
-                # to ARRIVE at `build_cues`, not merely the cue count.
+                # to ARRIVE at `build_cues`, and — for the kinds whose text
+                # is not itself the whitespace `collapse_runs` exists to
+                # collapse — they have to come back OUT of it too. A `colon`
+                # survivor legitimately arrives 3.3 MB long and leaves three
+                # characters, so only its arrival can be pinned; `text`,
+                # `cjk` and `mixed` keep their length through the collapse
+                # and so must still be long on the way out. That second half
+                # is what a cap inside `build_cues` cannot fake, and round 10
+                # asserted only the first — the round-9 mutant passed again,
+                # and again ran FASTER than the unmutated code.
                 if sh["kind"] in ("colon", "text", "cjk", "mixed"):
-                    if sh["cue_chars"] >= n_top // 2:
-                        long_cue = True
+                    if sh["cue_chars_in"] >= n_top // 2:
+                        long_cue = 1
+                        if sh["kind"] != "colon":
+                            self.assertGreaterEqual(
+                                sh["cue_chars"], n_top // 2,
+                                f"{label}: {sh['cue_chars_in']} characters reached "
+                                f"build_cues and {sh['cue_chars']} came back out — the cue "
+                                f"pipeline is being skipped inside it, and collapse, wrap "
+                                f"and the writer are timed on what is left")
                     elif path in self.LONG_CUE_PATHS:
                         self.fail(f"{label}: the longest cue build_cues was handed is "
-                                  f"{sh['cue_chars']} characters of {n_top} — this path's "
+                                  f"{sh['cue_chars_in']} characters of {n_top} — this path's "
                                   f"survivors are supposed to carry the whole line into the "
                                   f"cue pipeline, or collapse, wrap and the writer are timed "
                                   f"on nothing")
                 if want_exit is not None:
                     ex = sh["exit"]
+                    # What reached the DISK. `cue_chars` and `cues_out` are
+                    # read at `build_cues`' return, so neither sees a cap in
+                    # `wrap_cue_text` or a slice in `render_srt` — round 10
+                    # found both passing all 649 tests, one of them deleting
+                    # 2.2 MB of a 3.3 MB sentence and the other writing
+                    # 1 000 of 156 039 cues under a success line that read
+                    # `wrote 156039 cues`. Every cue costs at least its
+                    # timestamp line (29 characters), an index, a newline and
+                    # a blank line; every character of the longest cue is
+                    # still there after a wrap, which only substitutes and
+                    # adds newlines. Both bounds are floors with room to
+                    # spare, not estimates of the size.
+                    if ex["wrote"]:
+                        wrote_cues = ((sh["exit"] or {}).get("ledger") or {}).get("cues", 0)
+                        floor = max(sh["cue_chars"], wrote_cues * 30)
+                        self.assertGreaterEqual(
+                            sh["srt_bytes"], floor,
+                            f"{label}: the .srt is {sh['srt_bytes']} bytes for "
+                            f"{wrote_cues} cues and a longest cue of {sh['cue_chars']} "
+                            f"characters — the writer and the wrap are not doing the work "
+                            f"the ledger claims")
                     self.assertEqual(want_exit, ex["code"],
                                      f"{label}: main exited {ex['code']}, expected "
                                      f"{want_exit}; stderr: {ex['stderr']!r}")
@@ -4781,23 +5099,15 @@ class TestSegmentMatchingHasOneEntryPoint(unittest.TestCase):
                                   f"exists to time; stdout={ex['stdout']!r} stderr={ex['stderr']!r}")
         # A path that is NOT named cue-heavy is already held to the ordinary
         # table above, so the direction "needs it => named" is enforced by the
-        # ceilings themselves. What was missing is the other one: round 9
-        # found the pin firing only one way and never at all for `cli-body`,
-        # the path whose ceilings it loosens most, so a name could be added
-        # to buy a 3.75x looser bound with nothing to earn it back. A named
-        # path must have at least one shape the ordinary table would have
-        # failed.
-        self.assertEqual(path in self.CUE_HEAVY, heavy,
-                         f"{path}: " + ("named cue-heavy, but no shape reaches "
-                                        f"{self.CUE_HEAVY_FRACTION:.0%} of the ordinary "
-                                        "ceiling — the looser table is not earned"
-                                        if path in self.CUE_HEAVY else
-                                        f"a shape reaches {self.CUE_HEAVY_FRACTION:.0%} of the "
-                                        "ordinary ceiling but the path is held to it"))
-        self.assertEqual(path in self.LONG_CUE_PATHS, long_cue,
+        # ceilings themselves. The other direction — a name buying a 3.75x
+        # looser bound with nothing to earn it back — is decided by the
+        # caller, which can compare this path's cost against the others' in
+        # the same run rather than against a constant.
+        self.assertEqual(path in self.LONG_CUE_PATHS, bool(long_cue),
                          f"{path}: " + ("named a long-cue path but no survivor delivered one"
                                         if path in self.LONG_CUE_PATHS else
                                         "delivered a long cue but is not named one"))
+        return heaviest
 
     def test_the_helper_behaves_exactly_as_the_bare_pattern(self):
         """The helper is a chokepoint whose docstring is 35 lines of

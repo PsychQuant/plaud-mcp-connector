@@ -145,6 +145,38 @@ def bytes_per_char(s: str) -> int:
     return 1 if top <= 0xFF else 2 if top <= 0xFFFF else 4
 
 
+MANY_SECONDS = 200_000      # `many` timestamps count DOWN from here, one a line
+MANY_TEXTS = 1_000_000      # and their texts cycle through this many
+
+
+def many_prefix(template: str, i: int) -> str:
+    """Line `i` of a `many` block: the template with its timestamp and its
+    text filled in, always at the SAME width so the block's length arithmetic
+    stays exact. `HH:MM:SS` is 8 characters for every second `_STAMP` admits
+    (two-digit hours), and the text counter is zero-padded."""
+    s = MANY_SECONDS - i
+    if s < 0 or i >= MANY_TEXTS:
+        raise SystemExit(f"`many` line {i} runs past the distinct timestamps or texts "
+                         f"this block can carry ({MANY_SECONDS}, {MANY_TEXTS})")
+    return template.format(t=f"{s // 3600:02d}:{s // 60 % 60:02d}:{s % 60:02d}", i=i)
+
+
+_MANY_LINES: dict[str, list[str]] = {}
+
+
+def many_prefixes(template: str, count: int) -> list[str]:
+    """The first `count` filled prefixes for this template, built once.
+    A `many` block is up to 164 000 lines and every rep rebuilds it, so
+    formatting each line every time cost seconds of the class's wall time
+    for values that never change. The cache is per template and grows only
+    upwards; nothing here depends on the block's LENGTH, which is what
+    differs between reps."""
+    have = _MANY_LINES.setdefault(template, [])
+    while len(have) < count:
+        have.append(many_prefix(template, len(have)))
+    return have
+
+
 def build_line(kind: str, prefix: str, tail: str, n: int) -> str:
     if kind == "tail":          # nothing after the prefix but whitespace
         return prefix + tail * n
@@ -180,14 +212,37 @@ def build_line(kind: str, prefix: str, tail: str, n: int) -> str:
         # family. The final line absorbs the remainder as extra tail instead,
         # which keeps the total length exactly `n` (so reps still differ)
         # with nothing for the parser to drop.
-        unit = prefix + tail * 8 + "\n"
+        #
+        # And EVERY line differs from every other, in both fields a cue has.
+        # Round 10 found the axis running at cardinality one: `unit * whole`
+        # made 156 038 cues carrying one timestamp and one text, so every
+        # per-cue cost that is superlinear only when the cues DIFFER read as
+        # linear. Three such changes passed the whole family — a dedup scan in
+        # `build_cues`, an order-preserving rewrite of `differing_sample`'s
+        # `ambiguous` set, and a duplicate-timestamp counter on the main
+        # conversion path — while costing 8 s on 40 000 real cues. Real
+        # transcripts are the opposite: their timestamps are nearly all
+        # distinct, and the family had picked the degenerate side.
+        #
+        # The timestamps count DOWN, one second a line. Distinct is what the
+        # cardinality needs; DESCENDING is what keeps `build_cues`' clamp
+        # firing on every cue (`end = nxt` lands at or before `start`), which
+        # is the per-cue `warnings` list the ledger's M34 mutates. Ascending
+        # timestamps would have closed one hole by opening another.
+        template, prefix = prefix, many_prefix(prefix, 0)
+        unit_len = len(prefix) + 8 + 1
         floor = len(prefix) + 1              # the shortest well-formed line
-        whole, rest = divmod(n, len(unit))
+        whole, rest = divmod(n, unit_len)
         if rest and rest < floor:            # borrow a unit so the last line fits
-            whole, rest = whole - 1, rest + len(unit)
+            whole, rest = whole - 1, rest + unit_len
         if whole < 1:
-            raise SystemExit(f"`many` needs at least {len(unit) + floor} characters, got {n}")
-        return unit * whole + (prefix + tail * (rest - floor) + "\n" if rest else "")
+            raise SystemExit(f"`many` needs at least {unit_len + floor} characters, got {n}")
+        filled = many_prefixes(template, whole + (1 if rest else 0))
+        pad = tail * 8 + "\n"
+        out = [line + pad for line in filled[:whole]]
+        if rest:
+            out.append(filled[whole] + tail * (rest - floor) + "\n")
+        return "".join(out)
     raise SystemExit(f"unknown shape kind {kind!r}")
 
 
@@ -299,14 +354,27 @@ def sandbox_root(spec: dict) -> pathlib.Path:
     """The one directory this child may write under. Named by the parent in
     the spec — not derived from this process's environment, which the same
     caller controls — and accepted only when it carries the marker file the
-    parent wrote with the spec's nonce: a directory this test suite created,
-    not one a hand-written spec points at. Refused outright when it is, or
+    parent wrote with the spec's nonce. Refused outright when it is, or
     contains, the user's home, this repository, or the default cache
     directory (round 7: the round-6 refusals accepted every directory under
-    the home directory, `~/.plaud-connector` included)."""
+    the home directory, `~/.plaud-connector` included).
+
+    What the marker is and is not (round 10 found both sentences it replaces
+    overstated): the nonce lives in the spec, so whoever writes a spec by
+    hand can also write the marker. It separates a directory whoever ran this
+    invited from one already holding somebody else's files — not "a directory
+    this test suite created" from "one a hand-written spec points at". What
+    keeps a hand-written spec off the rest of the disk is the refusal list
+    above plus the fact that every name this child writes is derived from the
+    nonce; the marker only stops it from landing in an occupied directory."""
     root = pathlib.Path(spec["sandbox"]).resolve()
-    if not root.is_dir():
-        raise SystemExit(f"refusing to run: sandbox {root} is not a directory")
+    # The containment rules come FIRST, before the directory is required to
+    # exist: they are pure path arithmetic, and being guarded is the stronger
+    # objection. Round 10 asserted the refusal REASON and put the `is_dir()`
+    # check ahead of it, so on any machine without `~/.plaud-connector` — a
+    # fresh checkout, a CI runner, a new developer — the cache fixtures were
+    # refused for not existing and the assertion failed. Nothing in the suite
+    # creates that directory: every test pins `PLAUD_CACHE_DIR`.
     # From the password database, not `$HOME` — round 8 found the home and
     # cache refusals reading a variable the same caller sets, which is round
     # 6's `TMPDIR` finding one variable over, and the parent's test computing
@@ -326,11 +394,23 @@ def sandbox_root(spec: dict) -> pathlib.Path:
     # machine whose `TMPDIR` resolves under the home directory — the parent's
     # sandbox is a `TemporaryDirectory`, so all eleven children refused to
     # start and blamed the sandbox. Scratch lives under the home directory on
-    # ordinary machines; `tests/mutants_57.py` says so about its own copy in
-    # the same words. What stops the probe writing somewhere it was not
-    # invited is the marker below, not this rule.
+    # ordinary machines. (Round 10 cited `tests/mutants_57.py` as the
+    # precedent for this; round 10's own review pointed out that file has no
+    # marker at all — its equivalent is a `.git` check nobody can forge into
+    # absence — so the analogy was false and is withdrawn.)
+    #
+    # What is left under the home directory once this rule is one-directional:
+    # every writable directory except the repository, `~/.plaud-connector` and
+    # the home directory itself. The marker below narrows that to directories
+    # whoever ran this invited, and the nonce-derived filenames keep the child
+    # from colliding with anything already there — but a hand-written spec can
+    # write its own marker, so this rule, not the marker, is what bounds the
+    # damage. That is the residue of accepting `TMPDIR` under the home
+    # directory, and it is stated here rather than papered over.
     if home == root or home.is_relative_to(root):
         raise SystemExit(f"refusing to run: sandbox {root} is, or contains, the home directory")
+    if not root.is_dir():
+        raise SystemExit(f"refusing to run: sandbox {root} is not a directory")
     try:
         stamp = (root / MARKER).read_text(encoding="utf-8")
     except OSError:
@@ -382,11 +462,14 @@ def main() -> int:
     # a name that varied only by run had the two `--preview-sources` children
     # writing the same file at the same time.
     rec = f"probe-{spec['nonce'][:8]}-{path}"
+    stray = io.StringIO()       # anything the library paths print (see `timed`)
 
     seen = {"role": "shape", "calls": 0, "longest": dict.fromkeys(ROLES, 0),
             "calls_max": dict.fromkeys(ROLES, 0), "cues_in": dict.fromkeys(ROLES, 0),
             "parsed_cues": dict.fromkeys(ROLES, 0), "parsed_lost": dict.fromkeys(ROLES, 0),
-            "parsed_skipped": dict.fromkeys(ROLES, 0), "cue_chars": dict.fromkeys(ROLES, 0)}
+            "parsed_skipped": dict.fromkeys(ROLES, 0), "cue_chars": dict.fromkeys(ROLES, 0),
+            "cues_out": dict.fromkeys(ROLES, 0), "srt_bytes": dict.fromkeys(ROLES, 0),
+            "cue_chars_in": dict.fromkeys(ROLES, 0)}
     real = to_srt._match_segment
 
     def spy(line: str):
@@ -406,16 +489,31 @@ def main() -> int:
         # in no assertion).
         if len(segments) > seen["cues_in"][seen["role"]]:
             seen["cues_in"][seen["role"]] = len(segments)
-        # And the longest cue TEXT it was handed. Round 9 showed a silent
-        # `if len(seg["text"]) > 1_000_000: continue` at the head of
-        # `build_cues` passing every test and running FASTER, because the
-        # survivor shapes' whole job — pushing one multi-megabyte cue through
-        # collapse, wrap and the writer — was simply not done any more, and
-        # nothing counted the characters that arrived.
-        longest = max((len(seg["text"]) for seg in segments), default=0)
+        # And what it RETURNED: how many cues, and the longest cue text.
+        # Round 9 showed a silent `if len(seg["text"]) > 1_000_000: continue`
+        # at the head of `build_cues` passing every test and running FASTER,
+        # because the survivor shapes' whole job — pushing one multi-megabyte
+        # cue through collapse, wrap and the writer — was simply not done any
+        # more. Round 10 answered that by measuring the ARGUMENT, which the
+        # cap does not touch, and the same mutant passed again, faster again.
+        # The observation has to be downstream of the thing being observed.
+        # Both ends of it. The argument says the characters ARRIVED; the
+        # return says they were not dropped on the way through. Neither
+        # implies the other: a `colon` survivor arrives 4 000 characters long
+        # and leaves 3, because its text IS the whitespace run `collapse_runs`
+        # exists to collapse — so the arrival number is the one that can be
+        # asserted on every survivor, and the return number the one a cap
+        # inside `build_cues` cannot fake.
+        arrived = max((len(seg["text"]) for seg in segments), default=0)
+        if arrived > seen["cue_chars_in"][seen["role"]]:
+            seen["cue_chars_in"][seen["role"]] = arrived
+        built = real_build(segments, **kwargs)
+        if len(built) > seen["cues_out"][seen["role"]]:
+            seen["cues_out"][seen["role"]] = len(built)
+        longest = max((len(cue["text"]) for cue in built), default=0)
         if longest > seen["cue_chars"][seen["role"]]:
             seen["cue_chars"][seen["role"]] = longest
-        return real_build(segments, **kwargs)
+        return built
 
     to_srt.build_cues = build_spy
     real_parse = to_srt.parse_transcript
@@ -434,22 +532,50 @@ def main() -> int:
     recorder = _Recorder(to_srt.SEGMENT)
     to_srt.SEGMENT = recorder                   # the helper looks it up at call time
 
+    def beat(what: str) -> None:
+        """One line per STAGE, not per shape. The parent's stall detector
+        watches this stream, so its bound has to cover the longest gap
+        between two lines — and a whole shape is six ceiling sizes plus a
+        growth series plus, on a miss, a second growth series, which on the
+        calibration machine is ~17 s and on a slow one is that times the
+        machine. Round 10 printed once per shape and set the bound at 300 s,
+        which is 18x of that, below the 23x its own comment measured for
+        efficiency cores times load. Printing per stage makes the gap one
+        measurement instead of a dozen, which is what lets the bound be
+        generous in wall-clock terms and still tight in multiples."""
+        print(what, file=sys.stderr, flush=True)
+
     def timed(line: str) -> tuple[float, dict | None]:
         """CPU seconds for one pass of `line` through `path`, plus exit info."""
+        # The library paths get the same redirect the CLI path has always
+        # had, set up OUTSIDE the timed region. Two reasons, both found in
+        # round 10: this process's stdout IS the report channel, so one
+        # `print` anywhere under `parse_transcript` would make the parent say
+        # "probe exited 0 without a report" and point at the wrong thing;
+        # and this process's stderr is what the parent's stall detector
+        # watches for growth, so anything written there from inside a shape
+        # would let a stuck child look like a live one until HARD_CAP.
+        # Whatever lands in the sink is reported rather than swallowed.
         if path.startswith("matcher"):
             # The helper through the spy — one Python frame inside the timed
             # region, so the spy's count and length are measured, not stated.
-            t0 = time.process_time()
-            spy(line)
-            return time.process_time() - t0, None
+            with contextlib.redirect_stdout(stray), contextlib.redirect_stderr(stray):
+                t0 = time.process_time()
+                spy(line)
+                dt = time.process_time() - t0
+            return dt, None
         if path.startswith("lib"):
-            t0 = time.process_time()
-            to_srt.parse_transcript(line + "\n")
-            return time.process_time() - t0, None
+            with contextlib.redirect_stdout(stray), contextlib.redirect_stderr(stray):
+                t0 = time.process_time()
+                to_srt.parse_transcript(line + "\n")
+                dt = time.process_time() - t0
+            return dt, None
         if path == "segments":
-            t0 = time.process_time()
-            to_srt.parse_segments(line + "\n")
-            return time.process_time() - t0, None
+            with contextlib.redirect_stdout(stray), contextlib.redirect_stderr(stray):
+                t0 = time.process_time()
+                to_srt.parse_segments(line + "\n")
+                dt = time.process_time() - t0
+            return dt, None
         out = work / f"{rec}.srt"
         guard(out, "unlink")
         out.unlink(missing_ok=True)
@@ -508,6 +634,18 @@ def main() -> int:
                              ("header", r"\((\d+) header[,)]")):
             m = re.search(pattern, both)
             ledger[key] = int(m.group(1)) if m else 0
+        # The SIZE of what was written — the one number downstream of
+        # `wrap_cue_text` and `render_srt`, and outside the timed region.
+        # Round 10 found both of them capping silently with all 649 tests
+        # green: `text[:1_000_000]` in the wrap deleted 2.2 MB of a user's
+        # sentence, and `cues[:1000]` in the writer left 1 000 of 156 039
+        # cues in a file whose success line still read `wrote 156039 cues`.
+        # Neither touches anything `build_cues` returns, so nothing upstream
+        # can see them.
+        if out.exists():
+            size = out.stat().st_size
+            if size > seen["srt_bytes"][seen["role"]]:
+                seen["srt_bytes"][seen["role"]] = size
         return dt, {"code": code, "wrote": out.exists(), "ledger": ledger,
                     "stdout": stdout.getvalue()[:200], "stderr": stderr.getvalue()[:300]}
 
@@ -530,7 +668,7 @@ def main() -> int:
             bp, bc = min(bp, dp), min(bc, dc)
         return bp * 1000, bc * 1000, last
 
-    def ceiling_ms(kind, prefix, tail, n, reps, bpc) -> float:
+    def ceiling_ms(kind, prefix, tail, n, reps, bpc, skip=0) -> float:
         # Shape only: a ceiling is an absolute bound on the shape's own cost,
         # so the control has nothing to say here — measuring it doubled the
         # cheapest stage's cost for nothing. Byte-equalised like the growth
@@ -538,10 +676,20 @@ def main() -> int:
         # offset off the growth grid: `GROWTH`'s two smaller sizes are also
         # ceiling sizes, so rep 0 of each built the string the ceiling had
         # just built and a memoizing helper could serve it (round 8).
+        # `skip`: the re-measure starts PAST the reps the first measurement
+        # built. It used to restart at rep 0, so its first line was the very
+        # string the first pass had just measured — and a memoizing helper
+        # (the ledger's M3, `lru_cache` on `_match_segment`) served it in no
+        # time, `min` took that, and a shape that had just measured 361 ms
+        # against a 100 ms ceiling "passed" its re-measure and went on to
+        # spend 118 s on the next size. Round 11's per-stage progress lines
+        # are what made this visible: under one line per shape it looked
+        # like a stall and was killed as one, which is red for the wrong
+        # reason.
         return min(run_path(build_line(kind, prefix, tail, n // bpc + 10 + rep), "shape")[0]
-                   for rep in range(reps)) * 1000
+                   for rep in range(skip, skip + reps)) * 1000
 
-    def growth_series(kind, prefix, tail, sizes, reps):
+    def growth_series(kind, prefix, tail, sizes, reps, skip=0):
         """The three growth sizes measured ROUND-ROBIN inside each rep, then
         `min` per size. A child stays on one core for milliseconds at a time
         and Apple silicon's efficiency cores run this code at half speed, so
@@ -552,7 +700,8 @@ def main() -> int:
         """
         bp, bc = [float("inf")] * len(sizes), [float("inf")] * len(sizes)
         last = None
-        for rep in range(reps):
+        for rep in range(skip, skip + reps):    # `skip`: see `ceiling_ms`
+            beat(f"{label}: growth rep {rep + 1}/{skip + reps}")
             for i, n in enumerate(sizes):
                 line = build_line(kind, prefix, tail, n + rep)
                 dc, _ = run_path(control_line(kind, line), "control")
@@ -565,7 +714,7 @@ def main() -> int:
         print(json.dumps(report))
         return 2
 
-    report = {"path": path, "shapes": [], "failed": None}
+    report = {"path": path, "shapes": [], "failed": None, "stray": ""}
     for kind, prefix, tail in spec["shapes"]:
         recorder.reset()
         seen["longest"], seen["calls_max"] = dict.fromkeys(ROLES, 0), dict.fromkeys(ROLES, 0)
@@ -574,6 +723,9 @@ def main() -> int:
         seen["parsed_lost"] = dict.fromkeys(ROLES, 0)
         seen["parsed_skipped"] = dict.fromkeys(ROLES, 0)
         seen["cue_chars"] = dict.fromkeys(ROLES, 0)
+        seen["cues_out"] = dict.fromkeys(ROLES, 0)
+        seen["cue_chars_in"] = dict.fromkeys(ROLES, 0)
+        seen["srt_bytes"] = dict.fromkeys(ROLES, 0)
         # Bytes per character of the line as BUILT, not of its parts: a `cjk`
         # text is two bytes a character on a one-byte prefix and tail.
         bpc = bytes_per_char(build_line(kind, prefix, tail, 256))
@@ -582,7 +734,8 @@ def main() -> int:
                  "spy_max": 0, "pattern_max": 0, "spy_calls": 0,
                  "control_spy_max": 0, "control_pattern_max": 0, "control_spy_calls": 0,
                  "cues_in": 0, "control_cues_in": 0, "parsed_cues": 0, "parsed_lost": 0,
-                 "parsed_skipped": 0, "cue_chars": 0}
+                 "parsed_skipped": 0, "cue_chars": 0, "cues_out": 0, "srt_bytes": 0,
+                 "cue_chars_in": 0}
         report["shapes"].append(shape)
         label = f"{path} {kind} {prefix!r} + {tail!r}"
         # Warm the path once, at the SMALLEST size, and discard it: the first
@@ -597,11 +750,13 @@ def main() -> int:
         best_pair(kind, prefix, tail, first // bpc + spec["ceiling_reps"] + 20, 1)
         for n, limit in spec["ceilings"]:
             ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"], bpc)
+            beat(f"{label}: ceiling n={n} {ms:.1f} ms")
             if ms >= limit:
                 # Once more, with more reps, before calling it — the same
                 # treatment the growth stage gets; a real quadratic misses a
                 # 100x-headroom ceiling the second time as it did the first.
-                ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"] + 2, bpc)
+                ms = ceiling_ms(kind, prefix, tail, n, spec["ceiling_reps"] + 2, bpc,
+                                skip=spec["ceiling_reps"])
                 shape["retried"] = True
             shape["ceiling"][str(n)] = ms
             if ms >= limit:
@@ -609,7 +764,7 @@ def main() -> int:
         # Warm the first growth size for BOTH roles: the ceilings ran the
         # shape there but never its control, and a cold control at the first
         # size would shrink `dc1` and tighten the uniform bound.
-        best_pair(kind, prefix, tail, spec["growth"][0] // bpc + spec["growth_reps"] + 4, 1)
+        best_pair(kind, prefix, tail, spec["growth"][0] // bpc + 2 * spec["growth_reps"] + 20, 1)
         sizes = [n // bpc for n in spec["growth"]]
         p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"])
         verdict = judge(spec, p, c)
@@ -627,7 +782,8 @@ def main() -> int:
             # in the report are the ones the verdict was reached on, and the
             # second verdict REPLACES the first — a shape is never called on
             # one measurement.
-            p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"] + 4)
+            p, c, last = growth_series(kind, prefix, tail, sizes, spec["growth_reps"] + 4,
+                                       skip=spec["growth_reps"])
             verdict = judge(spec, p, c)
             shape["retried"] = True
         for n, mp, mc in zip(spec["growth"], p, c):
@@ -644,12 +800,17 @@ def main() -> int:
         shape["parsed_lost"] = seen["parsed_lost"]["shape"]
         shape["parsed_skipped"] = seen["parsed_skipped"]["shape"]
         shape["cue_chars"] = seen["cue_chars"]["shape"]
+        shape["cues_out"] = seen["cues_out"]["shape"]
+        shape["cue_chars_in"] = seen["cue_chars_in"]["shape"]
+        shape["srt_bytes"] = seen["srt_bytes"]["shape"]
         if verdict is not None:
+            report["stray"] = stray.getvalue()[:500]
             return fail(report, label=label, **verdict)
         print(f"{label}: " + " ".join(f"{n}={mp:.3f}/{mc:.3f}" for n, (mp, mc)
                                       in shape["growth"].items())
               + f" pattern_max={shape['pattern_max']}/{shape['control_pattern_max']}",
               file=sys.stderr, flush=True)
+    report["stray"] = stray.getvalue()[:500]
     print(json.dumps(report))
     return 0
 

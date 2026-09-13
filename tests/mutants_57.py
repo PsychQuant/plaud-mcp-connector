@@ -11,7 +11,17 @@ directory, so a reader could neither re-run it nor see which mutants it did
 NOT contain — and the one it did not contain (a quadratic in `build_cues`'
 accumulation) was that round's HIGH.
 
+    rsync -a --exclude .git <repo>/ <copy>/ && touch <copy>/.mutants-sandbox
     python3 tests/mutants_57.py <copy-of-the-repo> [M-prefix ...]
+
+The marker is not decoration. This script does `shutil.rmtree(<copy>/work)`
+before every mutant, and round 10 demonstrated a directory that satisfied
+every other check — `scripts/to_srt.py` present, no `.git` — losing a file
+under `work/`. An unpacked sdist, a vendored copy and a `git archive` export
+all have that shape. What the marker buys is protection against a MISTYPED
+path and against a directory that was never meant for this; a caller who
+writes the marker deliberately has said the directory is disposable, and
+nothing here can second-guess that.
 
 Each mutant is a function from the source text to the mutated source text;
 `sub` asserts its anchor occurs exactly once, so a mutant that no longer
@@ -30,6 +40,7 @@ import sys
 import time
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
+MARKER = ".mutants-sandbox"     # the caller's statement that <copy> is disposable
 RET = "    return SEGMENT.match(line.rstrip())\n"
 ZPAT = ('_Z = re.compile(\n    rf"^\\[\\s*(?P<ts>{_STAMP})\\s*(?:-(?P<end>[^\\]]*))?\\]\\s*"\n'
         '    r"(?:(?P<speaker>[^:\\[\\]]{1,60}?)\\s*:\\s*)?"\n    r"(?P<text>.*\\S)\\s*$"\n)\n')
@@ -166,6 +177,52 @@ MUTANTS = {
     "M37 _frontmatter_span's own scan goes quadratic": lambda s: sub(s,
         "    for i in range(1, len(lines)):\n",
         "    _walked = []\n    for i in range(1, len(lines)):\n        _walked = _walked + [i]\n"),
+
+    # Round 10, first half: three SILENT CAPS. None of them is quadratic —
+    # each one stops doing work the family claims to be timing, so the suite
+    # gets faster and stays green unless something downstream of the cap is
+    # observed. All three passed round 10's guard; M38's is the mutant round
+    # 9 named and round 10 answered by measuring `build_cues`' ARGUMENT.
+    "M38 build_cues silently skips cues over 1 MB (round 9's mutant, still green in round 10)":
+        lambda s: sub(s,
+        "    for i, seg in enumerate(segments):\n        nxt = ",
+        "    for i, seg in enumerate(segments):\n"
+        '        if len(seg["text"]) > 1_000_000:\n            continue\n        nxt = '),
+    "M39 wrap_cue_text silently truncates at 1 MB (the function `cjk` exists to time)":
+        lambda s: sub(s,
+        "    script = detect_script(text)\n",
+        "    if len(text) > 1_000_000:\n        text = text[:1_000_000]\n"
+        "    script = detect_script(text)\n"),
+    "M40 render_srt writes only the first 1000 cues (the ledger still claims all of them)":
+        lambda s: sub(s,
+        "    for n, cue in enumerate(cues, start=1):\n",
+        "    for n, cue in enumerate(cues[:1000], start=1):\n"),
+
+    # Round 10, second half: three costs that are superlinear ONLY when the
+    # cues differ from each other. The `many` blocks used to be one line
+    # repeated, so all three read as linear at 156 038 cues while costing
+    # seconds on a real transcript.
+    "M41 build_cues de-duplicates cue text (quadratic in DISTINCT cues)": lambda s: sub(s,
+        '        cues.append({"start": seg["start"], "end": end, "text": text,\n',
+        '        if text not in _seen_texts:\n            _seen_texts.append(text)\n'
+        '        cues.append({"start": seg["start"], "end": end, "text": text,\n').replace(
+        "    cues = []\n    for i, seg in enumerate(segments):",
+        "    cues = []\n    _seen_texts: list[str] = []\n    for i, seg in enumerate(segments):"),
+    "M42 differing_sample's ambiguous set becomes an order-preserving list": lambda s: sub(s,
+        "    ambiguous = {start for side in (polished, verbatim)\n",
+        "    _seen_starts: list[float] = []\n"
+        "    for _side in (polished, verbatim):\n"
+        "        for _s, _t, _a in _side:\n"
+        "            if _s not in _seen_starts:\n                _seen_starts.append(_s)\n"
+        "    ambiguous = {start for side in (polished, verbatim)\n"),
+    "M43 build_cues counts repeated timestamps with a list (main conversion path)": lambda s: sub(s,
+        "        nxt = segments[i + 1][\"start\"] if i + 1 < len(segments) else None\n",
+        "        if seg[\"start\"] in _starts_seen:\n            _dupes += 1\n"
+        "        else:\n            _starts_seen.append(seg[\"start\"])\n"
+        "        nxt = segments[i + 1][\"start\"] if i + 1 < len(segments) else None\n").replace(
+        "    cues = []\n    for i, seg in enumerate(segments):",
+        "    cues = []\n    _starts_seen: list[float] = []\n    _dupes = 0\n"
+        "    for i, seg in enumerate(segments):"),
 }
 
 
@@ -173,11 +230,14 @@ def main(argv: list[str]) -> int:
     if len(argv) < 2:
         raise SystemExit(__doc__)
     copy = pathlib.Path(argv[1]).resolve()
-    # The same reasoning the probe's sandbox got over rounds 5-8, applied to
-    # the other runnable file this suite ships: it rewrites `to_srt.py` and
+    # The refusals the probe's sandbox grew over rounds 5-8, applied to the
+    # other runnable file this suite ships: it rewrites `to_srt.py` and
     # deletes `<copy>/work`, so it must refuse anything that could be a live
-    # working tree rather than the throwaway the docstring asks for.
+    # working tree rather than the throwaway the docstring asks for. Round 10
+    # found this list claiming that parity while missing both the marker and
+    # the cache guard — in the file that runs `rmtree`.
     home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    cache = home / ".plaud-connector"
     # The repository in BOTH directions (a subdirectory of it is a live tree
     # too), the home directory and its ancestors. Not every path under the
     # home directory: a scratch copy usually lives there, and what actually
@@ -187,14 +247,28 @@ def main(argv: list[str]) -> int:
                          f"repository; give it an rsync copy outside it")
     if copy == home or home.is_relative_to(copy):
         raise SystemExit(f"refusing to mutate {copy}: it is, or contains, the home directory")
+    if cache.is_relative_to(copy) or copy.is_relative_to(cache):
+        raise SystemExit(f"refusing to mutate {copy}: it is inside, or contains, the default "
+                         f"cache directory")
     if (copy / ".git").exists():
         raise SystemExit(f"refusing to mutate {copy}: it has a .git, so it is a working tree, "
                          f"not the throwaway copy this expects")
+    if not (copy / MARKER).exists():
+        raise SystemExit(f"refusing to mutate {copy}: no {MARKER} marker. This deletes "
+                         f"{copy / 'work'} before every mutant, and 'holds scripts/to_srt.py "
+                         f"and has no .git' also describes an unpacked sdist or a vendored "
+                         f"copy. Run `touch {copy / MARKER}` if it really is disposable")
     if not (copy / "scripts" / "to_srt.py").is_file():
         raise SystemExit(f"{copy} has no scripts/to_srt.py")
     selected = argv[2:]
     base = copy / "base"
-    if not base.is_dir():          # first run: keep a pristine copy beside the working tree
+    if base.is_dir():
+        # Every mutant is diffed against `base`, so a stale or hand-made one
+        # silently becomes the definition of "unmutated". Say which is being
+        # used rather than letting the answer depend on what was left here.
+        print(f"reusing the existing pristine copy at {base} "
+              f"(delete it to re-take one from {copy})", file=sys.stderr)
+    else:                          # first run: keep a pristine copy beside the working tree
         base.mkdir()
         for name in ("scripts", "tests", "Makefile"):
             src = copy / name

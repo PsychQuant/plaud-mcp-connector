@@ -42,3 +42,6 @@ openspec/.vector-search.db*
 
 # Local codex-pro run artifacts — never part of the shipped plugin
 .codex-pro/
+
+# The probe sandbox marker, planted for one assertion in tests/test_to_srt.py
+.probe-sandbox

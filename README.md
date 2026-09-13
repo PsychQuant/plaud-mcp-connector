@@ -141,16 +141,19 @@ whitespace classes and, on a spanning subset of the forms, with every class
 the parser leaves inside a line; lines that survive the strip, in Latin, CJK
 and tab-mixed text; lines with no closing bracket, or that grow inside one;
 and blocks of many short lines that are dropped, kept as cues, or kept with a
-lost end — on every path a line can reach the pattern, and on every list the
-tool walks once per line or per cue that the family reaches (the class
-docstring names the ones it does not), in child processes that are killed
-when they stop making progress, each shape against a same-length control
-line, because nine rounds of review each found the previous guard covering
-one region of the defect. The guard is
-the suite's heaviest item and roughly half its wall time: on one 18-core
-machine `make test` went from 17 s to 40 s under the same conditions, of
-which the guard is 18 s, and its eleven child processes need on the order of
-a gigabyte between them. The absolute numbers move with the machine; the
+lost end, every line of a block carrying its own timestamp and its own text —
+on every path a line can reach the pattern, and on every list the tool walks
+once per line or per cue that the family reaches (the class docstring names
+the ones it does not), checking not only that the lines arrive but what they
+become: how many cues came back out, how long the longest one still is, and
+how many bytes reached the `.srt`. The children are killed when they stop
+making progress, and each shape is measured against a same-length control
+line, because ten rounds of review each found the previous guard covering one
+region of the defect. The guard is the suite's heaviest item and roughly
+three fifths of its wall time: on one 18-core machine, idle, `make test` went
+from 10.5 s (637 tests, before the fix) to 25.5 s (650 tests), of which the
+guard class is 15.2 s, and its eleven child processes need on the order of
+two gigabytes between them. The absolute numbers move with the machine; the
 ratio is the part worth remembering.
 
 **Five other things changed in the same release**, each out of a review round on
