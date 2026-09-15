@@ -1,0 +1,20 @@
+{
+  "name": "plaud-transcriber",
+  "version": "1.10.0",
+  "description": "Plaud AI transcription workflows for upload, status checks, downloads, search, and file management.",
+  "author": {
+    "name": "Che Cheng"
+  },
+  "license": "MIT",
+  "keywords": ["plaud", "transcription", "srt", "subtitle", "safari-browser"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "plaud-transcriber",
+    "shortDescription": "Upload, monitor, search, and download Plaud transcriptions.",
+    "longDescription": "Plaud AI transcription workflows using the shared local skills and Safari automation.",
+    "developerName": "Che Cheng",
+    "category": "productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": "Upload this recording to Plaud and monitor its transcription status."
+  }
+}

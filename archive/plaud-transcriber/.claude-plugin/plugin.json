@@ -1,0 +1,16 @@
+{
+  "name": "plaud-transcriber",
+  "version": "1.12.1",
+  "description": "Plaud AI 轉錄工具：上傳、檢查進度、下載、搜尋、檔案管理",
+  "author": {
+    "name": "Che Cheng"
+  },
+  "license": "MIT",
+  "keywords": [
+    "plaud",
+    "transcription",
+    "srt",
+    "subtitle",
+    "safari-browser"
+  ]
+}
