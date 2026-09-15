@@ -64,11 +64,10 @@ class TestIddScratchIsNotCommittable(unittest.TestCase):
 class TestWhatMustStayCommittable(unittest.TestCase):
     """A carve-out that swallows the wrong thing fails silently.
 
-    `.claude/.idd/local.json` does not exist in this repo today, so a rule
-    that wrongly excluded it would show no symptom here at all — the sibling
-    bestASR repo has one, and this repo may grow one. That is exactly the
-    kind of mistake worth a test: no feedback until much later, somewhere
-    else.
+    `.claude/.idd/local.json` has been tracked here since d00ed01 (#60), so a
+    rule that wrongly excluded it would now bite this repo directly — before
+    that it would have shown no symptom here at all, which is exactly the kind
+    of mistake worth a test: no feedback until much later, somewhere else.
     """
 
     MUST_NOT_BE_IGNORED = [
@@ -96,3 +95,24 @@ class TestWhatMustStayCommittable(unittest.TestCase):
                              cwd=REPO, capture_output=True, text=True).stdout
         self.assertGreater(len(out.strip().splitlines()), 5,
                            "no Spectra skills tracked — has .claude/skills moved?")
+
+
+class TestNoPerFileIddRules(unittest.TestCase):
+    """The `.claude/.idd/*` glob is the rule; per-file siblings are the regression.
+
+    #41 replaced a per-file `.claude/.idd/tree-lock` line with the glob because
+    the per-file shape silently missed `attachments/`. d00ed01 (#60) put the
+    per-file line back — `idd-tree-lock.sh acquire` appends it — and nothing
+    went red, because every test above asks only "is this path ignored?", and
+    a redundant subset rule leaves that answer unchanged. This test asks the
+    question the others cannot: is the glob still the ONLY rule for that
+    directory? (issue-driven-development#346 tracks the tool that re-adds it.)
+    """
+
+    def test_no_per_file_rules_under_claude_idd(self):
+        lines = [l.strip() for l in (REPO / ".gitignore").read_text().splitlines()]
+        per_file = [l for l in lines
+                    if l.startswith(".claude/.idd/") and l not in (".claude/.idd/*",)]
+        self.assertEqual(per_file, [], (
+            "per-file rules under .claude/.idd/ reintroduce the #41 regression; "
+            "the glob already covers them"))
