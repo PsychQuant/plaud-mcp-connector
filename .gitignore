@@ -45,3 +45,6 @@ openspec/.vector-search.db*
 
 # The probe sandbox marker, planted for one assertion in tests/test_to_srt.py
 .probe-sandbox
+
+# IDD tree-lock (idd-tree-lock.sh #183) — per-machine session state, not tracked
+.claude/.idd/tree-lock
