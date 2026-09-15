@@ -139,7 +139,7 @@ safari-browser js "
 ```
 | 檔案名稱 | Hash | 日期 | 時長 | 資料夾 |
 |---------|------|------|------|--------|
-| StudentD家教 | 0123... | MM-DD HH:MM | 1h 9m | <folder> |
+| StudentD家教 | 0000...01 | MM-DD HH:MM | 1h 9m | <folder> |
 ```
 
 ## 關鍵知識

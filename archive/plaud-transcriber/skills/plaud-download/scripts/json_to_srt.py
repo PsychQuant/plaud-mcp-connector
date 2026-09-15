@@ -16,7 +16,7 @@ spot them quickly. Use `--strip-hallucinations` to drop them entirely, or
 # Why detect hallucination?
 
 Plaud's `trans_result` JSON does NOT include per-segment confidence /
-no_speech_prob fields (verified on StudentA lesson 13, 2026-05-04). The schema
+no_speech_prob fields (verified on one tutoring recording, spring 2026). The schema
 is just `{content, start_time, end_time, speaker, original_speaker,
 embeddingKey}`. So we can't filter by Whisper's own probability metrics.
 
@@ -126,16 +126,16 @@ def detect_hallucination(entry: dict) -> Optional[tuple[str, str]]:
 
     # ---- Signal 1: silence-filled hallucination ----
     # The strongest signal — Whisper fills long silence with a tiny ghost
-    # token. Examples observed in StudentA #13: "中文。" (3 chars) stretched
+    # token. Examples observed in that recording: "中文。" (3 chars) stretched
     # across 41-57 seconds.
     #
     # Rule: duration > 15s AND chars-per-second < 0.3.
     #
-    # Tuning rationale (StudentA #13 data):
+    # Tuning rationale (same recording):
     #   - True hallucination: 3 chars / 41s = 0.07 cps  ✅ caught
     #   - True hallucination: 3 chars / 57s = 0.05 cps  ✅ caught
     #   - False-positive risk (StudentA hesitating mid-question):
-    #     "機率是推論統計的方法嗎。" 12 chars / 22s = 0.55 cps  ✅ NOT caught
+    #     "這個範例句是合成的慢速問句。" 12 chars / 22s = 0.55 cps  ✅ NOT caught
     #
     # The cps gap between hallucination (~0.05) and slow real speech
     # (~0.5+) is large enough that 0.3 is a safe threshold.
@@ -186,7 +186,7 @@ def detect_hallucination(entry: dict) -> Optional[tuple[str, str]]:
 
 def render_speaker(entry: dict, keep_original: bool) -> str:
     """Render the speaker tag. Default: use `speaker` (Plaud's merged label,
-    e.g. "che", "StudentA", or "Speaker 2"). When `--keep-original-speaker`,
+    e.g. "Teacher", "StudentA", or "Speaker 2"). When `--keep-original-speaker`,
     fall back to `original_speaker` (raw "Speaker 1/2/3/4")."""
     if keep_original:
         return entry.get("original_speaker", entry.get("speaker", ""))

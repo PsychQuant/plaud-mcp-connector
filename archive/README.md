@@ -135,7 +135,9 @@ rename / move / delete, and triggering transcription — back into this repo *la
 act, not an accident" still holds; for this entry the act is already scheduled.
 The file's first line — "code that used to ship and no longer does" — does not:
 none of this ever shipped from *this* repo. That is the second way this entry
-differs, and the layout rule (one archived skill, one directory) bends with it.
+differs, and the top-of-file layout rule (mirror the repo root so relative paths
+keep resolving) bends with it: this tree mirrors the *sibling's* root instead, and
+its relative paths resolve inside that subtree.
 
 **What it is.** The maintainer's sibling plugin `plaud-transcriber` (from the
 private `che-local-plugins` marketplace), snapshotted **whole**, mirroring its own
@@ -148,7 +150,9 @@ Safari/AppleScript-driven skills — `plaud-upload`, `plaud-download`, `plaud-se
 
 **Source, exactly.** che-claude-config `che-local-plugins/plugins/plaud-transcriber/`
 at repo HEAD `fbcead9`; the plugin's last own commit is `7e8076a` (2026-07-20);
-`plugin.json` version **1.12.1**; working tree clean under the plugin at snapshot
+`.claude-plugin/plugin.json` says **1.12.1** and `.codex-plugin/plugin.json` says
+**1.10.0** — that drift is the source's, kept as-is; working tree clean under the plugin at
+snapshot
 time, so snapshot == commit. It is kept in a **subdirectory of its own**, not merged
 into `archive/skills/`, because `archive/skills/plaud-upload/` above is a *descendant*
 of this plugin's `plaud-upload` (#4 ported it, #13 and #36 then changed it); merging
@@ -179,28 +183,31 @@ leaves its marketplace (che-claude-config#16) and lands here.
 **What it did have — and what #36 actually said.** The copy above lost its
 transcription claim in #36. *This* copy still carries the claim — the Chinese
 sentence 「上傳音訊/影片到 Plaud 並啟動轉錄。」 — **and** the code behind it: a
-Step 4 in `plaud-upload/SKILL.md` that clicks `Generate now` twice and checks for
+Step 4 in `plaud-upload/SKILL.md` that clicks 「產生」 then 「立即產生」 (`Generate now`) and checks for
 `Generating`. #36's evidence used this sibling as the control that *had* a trigger
 step; the "claimed and did not" verdict was about the port above, not this
 snapshot. Whether the sibling's step ever worked end-to-end is unverified here;
-the snapshot shows it was implemented, not that it succeeded. The four English pin
-regexes in `tests/test_skill_claims.py` do not match the Chinese sentence, and
-nothing here is registered as a skill, so the claim is inert. #61's scope should
+the snapshot shows it was implemented, not that it succeeded. The claim is inert
+only because `tests/test_skill_claims.py` scans `skills/*/SKILL.md` and never
+looks under `archive/`; its capability regex *is* bilingual (it matches 啟動／觸發
+＋轉錄) and would fire on this sentence and on `plaud-manage`'s description the
+moment either file is `git mv`'d back — see Restoring step 2b below. #61's scope should
 read this paragraph before listing "trigger transcription" as a capability to build
 from scratch.
 
 **Scrub delta — the only difference from `7e8076a`.** This repo is public. The
 first archive commit (`03c26e8`) replaced the maintainer's account e-mail and plan
-name in nine files (the gate also looked for absolute home paths; the source had none) and gated on
-`grep -rniE '@gmail|@icloud|/Users/'`. The verify pass on #60 showed that gate
+name in nine files (the gate also looked for absolute home paths; the source had
+none) and gated on `grep -rniE '@gmail|@icloud|/Users/'`. The verify pass on #60 showed that gate
 was blind to three shapes that were sitting in the tree it approved, and a
-second commit widened the scrub to ten files. Every replacement is a *literal
+second commit (`a5b393d`) widened the scrub to twelve archived files and a third
+removed the last verbatim third-party sentence, dates and a speaker alias. Every replacement is a *literal
 value*; no paragraph was removed:
 
 - `- Email：` / `- 方案：` lines (5 SKILL.md files, `CLAUDE.md`) → placeholders
 - the Keychain lookup's `-a "<e-mail>"` argument → `-a "<plaud-account-email>"`
 - `PLAUD_EMAIL="<e-mail>"` in the three batch scripts → `${PLAUD_EMAIL:?…}`, **and**
-  the login step's key-press sequence (`k+i+…+@+g+…`, the same address spelled
+  the login step's key-press sequence (`<c>+<c>+…+@+…`, the same address spelled
   one key at a time — invisible to a substring grep) → derived from `$PLAUD_EMAIL`
 - first names of tutoring students and a research collaborator, used as worked
   examples in `plaud-download/SKILL.md`, `json_to_srt.py`, `plaud-search/SKILL.md`,
@@ -228,9 +235,17 @@ che-claude-config#16 (the marketplace-side retirement).
 1. `/archive-first:archived-unlock` — see the note at the top of this file.
 2. `git mv archive/plaud-transcriber/skills/<skill> skills/<skill>` for the skills
    #61 chooses to revive; leave the rest here.
+   2b. Expect `make check` to go red at once: `tests/test_skill_claims.py` scans
+   `skills/*/SKILL.md` with a bilingual capability regex and the revived
+   descriptions say 啟動轉錄／觸發轉錄. Either implement and prove the capability
+   (then extend `ALLOWED_SENTENCES`) or rewrite the description — do not weaken
+   the guard.
 3. **`/archive-first:archived-lock` — immediately.**
 4. Put the account values back the way this repo does it (Keychain, generic).
 5. Write the reversal of #47/#48 into this file and into #61 *before* the first
    commit — otherwise #48's rationale is silently voided.
-6. Then the six advertising surfaces listed under `plaud-upload` above, plus a
-   version bump (#52): restoring a capability is a surface change; parking was not.
+6. Then the advertising surfaces — enumerate them from the tree at restore time
+   (`grep -rl plaud-upload README.md site/ .claude-plugin/ skills/`), not from the
+   list under `plaud-upload` above, which that entry itself shows was incomplete —
+   plus a version bump (#52): restoring a capability is a surface change; parking
+   was not.

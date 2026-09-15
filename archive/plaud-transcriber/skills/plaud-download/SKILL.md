@@ -63,13 +63,13 @@ Plaud 的 trans_result JSON **沒有** confidence / no_speech_prob 欄位（sche
 duration > 15 秒 AND chars-per-second < 0.3
 ```
 
-**Tuning rationale**（從 StudentA #13 真實資料校準）：
+**Tuning rationale**（從一份家教錄音校準）：
 
 | 場景 | chars / duration | cps | 是否 flag |
 |------|------------------|-----|-----------|
 | `中文。` 3 chars / 41s | | 0.07 | ✅ flag(真幻覺) |
 | `中文。` 3 chars / 57s | | 0.05 | ✅ flag |
-| StudentA 慢速問句 `機率是推論統計的方法嗎。` 12 chars / 22s | | 0.55 | ❌ 不 flag(真語音,只是慢) |
+| StudentA 慢速問句 `這個範例句是合成的慢速問句。` 12 chars / 22s | | 0.55 | ❌ 不 flag(真語音,只是慢) |
 
 cps gap 在「沉默幻覺」(~0.05) vs 「真實慢速語音」(~0.5+) 之間夠大,0.3 是安全 threshold。
 
@@ -335,7 +335,7 @@ safari-browser js "
 
 ## 中文 UI 與 Cookie consent dialog（CRITICAL）
 
-> **2026-05-23 StudentC 家教 session 學到的教訓**:中文版 Plaud + 新 session 同時觸發,batch_notes.sh 報「no export btn」,SRT 抓得到但 Notes MD/DOCX 全失敗。三個 root cause 都跟 i18n + 對話框遮蔽有關。
+> **某次 StudentC 家教 session 學到的教訓**:中文版 Plaud + 新 session 同時觸發,batch_notes.sh 報「no export btn」,SRT 抓得到但 Notes MD/DOCX 全失敗。三個 root cause 都跟 i18n + 對話框遮蔽有關。
 
 ### Cookie consent dialog（CookieYes，class `cky-*`）
 
@@ -490,7 +490,7 @@ DOM extract 出來的 markdown 結構**接近**但不完全等於 Plaud 官方�
 | **Timestamp filename demotion** | regex `^[0-9]{4}-[0-9]{2}-[0-9]{2}.*[0-9]{2}:[0-9]{2}:[0-9]{2}$` 命中 → 強烈降權重 | 高（負向）|
 | **Recency timing** | 對照「剛剛」≈ 幾小時內、「昨天」≈ 24h 內、「最近」≈ 一週內 | 低（消歧用）|
 
-**Timestamp filename = "未命名" signal**：Plaud 對未命名檔案 fallback 用 timestamp（如 `2026-05-08 14:32:12`）；AI 自動命名的描述性檔案才是 user 真在乎的。命中時 demote 到 ranking 後段。
+**Timestamp filename = "未命名" signal**：Plaud 對未命名檔案 fallback 用 timestamp（如 `YYYY-MM-DD HH:MM:SS`）；AI 自動命名的描述性檔案才是 user 真在乎的。命中時 demote 到 ranking 後段。
 
 #### Step B — AskUserQuestion fallback
 
@@ -513,14 +513,14 @@ User override path 永遠保留 — 不直接 AI 決定。
   Reason: sort=row {N}, keyword match {keywords}, recency match {timeframe}
 ```
 
-### Caution tale（2026-05-09 CollaboratorX research session）
+### Caution tale（某次 CollaboratorX research session）
 
 | Step | Bad path（**禁止**）| Good path |
 |------|--------------------|-----------|
 | User says | `/plaud-download 剛剛轉路的最新檔案` | 同左 |
 | Session context | 整 session 都在 CollaboratorX 的研究主題（該 session 的多張 issue 全部與之相關）| 同左 |
-| File-list row 1 | `2026-05-08 14:32:12` (timestamp, AI workshop, **無關** CollaboratorX) | 同左 |
-| File-list row 2 | `05-09 <與 CollaboratorX 研究主題相符的錄音標題>` (CollaboratorX match!) | 同左 |
+| File-list row 1 | `YYYY-MM-DD HH:MM:SS` (timestamp, an unrelated workshop, **無關** CollaboratorX) | 同左 |
+| File-list row 2 | `MM-DD <與 CollaboratorX 研究主題相符的錄音標題>` (CollaboratorX match!) | 同左 |
 | AI action | **直接抓 row 1**（用 batch workflow 的 collect snippet）→ 下載 AI workshop → user 介入 → 重抓 row 2 → 5 分鐘浪費 + recordings/ 污染 | 走本章節 → ranking 看到 row 1 timestamp demoted + row 2 keyword match CollaboratorX → 直接抓 row 2 |
 | Outcome | User 必須說「你可以看 plaud 標題的名稱來決定要選哪一個吧」AI 才轉抓 row 2。Audit trail（來源 marketplace repo 的第一張 issue）記錄為 bug | 0 round trip，0 cleanup |
 

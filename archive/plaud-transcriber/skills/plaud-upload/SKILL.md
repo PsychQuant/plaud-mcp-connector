@@ -205,10 +205,10 @@ safari-browser js "
 > **踩坑：「最新在最上方」不一定成立**。被**置頂（pinned）**的檔案會固定在列表頂端，把新上傳擠下去 → 上面那段抓到的會是置頂檔案的 hash，不是你剛傳的。更可靠的做法是**用檔名搜尋抓 hash**：點側邊欄「搜尋」，用 React-safe 方式設值（直接 `input.value=...` 不會觸發 Vue，要用 prototype setter）：
 >
 > ```bash
-> safari-browser js "(function(){var i=document.querySelector('input[placeholder*=\"搜尋\"]');var s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;s.call(i,'voice_12119');i.dispatchEvent(new Event('input',{bubbles:true}));return 'x';})();" --url plaud
+> safari-browser js "(function(){var i=document.querySelector('input[placeholder*=\"搜尋\"]');var s=Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;s.call(i,'voice_<id>');i.dispatchEvent(new Event('input',{bubbles:true}));return 'x';})();" --url plaud
 > sleep 3
 > # 搜尋結果項是 .search-list-item；列表項的 hash 在 li[id^="file-list-item-"] 的 **id**（不是 data-testid）
-> safari-browser js "(function(){var ls=document.querySelectorAll('li[id^=file-list-item-]');for(var i=0;i<ls.length;i++){if(ls[i].textContent.indexOf('voice_12119')>=0)return ls[i].id.replace('file-list-item-','');}return 'NOT_FOUND';})();" --url plaud
+> safari-browser js "(function(){var ls=document.querySelectorAll('li[id^=file-list-item-]');for(var i=0;i<ls.length;i++){if(ls[i].textContent.indexOf('voice_<id>')>=0)return ls[i].id.replace('file-list-item-','');}return 'NOT_FOUND';})();" --url plaud
 > ```
 
 ### Step 4: 導航到檔案頁面並啟動轉錄

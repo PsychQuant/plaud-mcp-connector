@@ -176,8 +176,8 @@ bash {plaud-download_skill_dir}/scripts/batch_generate.sh /tmp/plaud_files.txt
 ```bash
 # 準備改名清單（hash|||新名稱）
 cat > /tmp/plaud_rename.txt << 'EOF'
-0123456789abcdef0123456789abcdef|||20260312_01_StudentD家教
-0123456789abcdef0123456789abcde1|||20260312_02_統計講座
+00000000000000000000000000000001|||YYYYMMDD_01_StudentD家教
+00000000000000000000000000000002|||YYYYMMDD_02_課程錄音範例
 EOF
 
 # 逐一改名

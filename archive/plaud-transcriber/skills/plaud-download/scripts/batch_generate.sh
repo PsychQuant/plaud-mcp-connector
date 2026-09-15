@@ -5,7 +5,7 @@
 FILE_LIST="$1"
 
 TOTAL=$(wc -l < "$FILE_LIST" | tr -d ' ')
-PLAUD_EMAIL="${PLAUD_EMAIL:?set to the Plaud account email (archived copy: hardcoded value removed)}"
+PLAUD_EMAIL="${PLAUD_EMAIL:-}"   # archived copy: hardcoded value removed; required only when do_login runs
 SUCCESS=0
 FAIL=0
 
@@ -13,6 +13,7 @@ echo "=== Plaud Batch Generate ($TOTAL files) ==="
 echo ""
 
 do_login() {
+  : "${PLAUD_EMAIL:?set PLAUD_EMAIL to the Plaud account e-mail before a login is needed}"
   echo "  [LOGIN] Re-logging in..."
   PLAUD_PW=$(security find-generic-password -s "plaud" -a "$PLAUD_EMAIL" -w)
   KEY_SEQ=$(echo "$PLAUD_PW" | sed 's/./&+/g' | sed 's/+$//')
