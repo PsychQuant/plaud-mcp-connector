@@ -164,7 +164,7 @@ bash {plaud-download_skill_dir}/scripts/batch_generate.sh /tmp/plaud_files.txt
 
 **注意**：
 - 轉錄約需 10-30 分鐘/檔案
-- Plaud 有每日觸發上限（Unlimited 方案除外）
+- Plaud 有每日觸發上限（依方案而異）
 - `batch_generate.sh` 會偵測 "daily limit" 並自動停止
 
 ---
@@ -176,8 +176,8 @@ bash {plaud-download_skill_dir}/scripts/batch_generate.sh /tmp/plaud_files.txt
 ```bash
 # 準備改名清單（hash|||新名稱）
 cat > /tmp/plaud_rename.txt << 'EOF'
-bd3fcb6e52b9f07bc2ba84ae82761e08|||20260312_01_Pat家教
-f8a34359451fc83ef881e346c1bd89fa|||20260312_02_統計講座
+0123456789abcdef0123456789abcdef|||20260312_01_StudentD家教
+0123456789abcdef0123456789abcde1|||20260312_02_統計講座
 EOF
 
 # 逐一改名

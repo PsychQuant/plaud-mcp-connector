@@ -16,7 +16,7 @@ spot them quickly. Use `--strip-hallucinations` to drop them entirely, or
 # Why detect hallucination?
 
 Plaud's `trans_result` JSON does NOT include per-segment confidence /
-no_speech_prob fields (verified on Wei lesson 13, 2026-05-04). The schema
+no_speech_prob fields (verified on StudentA lesson 13, 2026-05-04). The schema
 is just `{content, start_time, end_time, speaker, original_speaker,
 embeddingKey}`. So we can't filter by Whisper's own probability metrics.
 
@@ -30,7 +30,7 @@ Instead, we use 3 heuristics observed in the wild:
 2. **Known Whisper ghost phrases**. Whisper variants tend to fall into
    the same handful of ghost outputs when fed silence or non-speech
    noise. The phrase library below is curated from real Plaud sessions
-   (Wei + Kelvin + Adrian 家教 recordings).
+   (StudentA + StudentB + StudentC 家教 recordings).
 
 3. **Internal token repetition** (same 3-12 char substring appearing
    ≥ 5 times in one segment). E.g. "他自己他自己他自己..." — Whisper
@@ -126,15 +126,15 @@ def detect_hallucination(entry: dict) -> Optional[tuple[str, str]]:
 
     # ---- Signal 1: silence-filled hallucination ----
     # The strongest signal — Whisper fills long silence with a tiny ghost
-    # token. Examples observed in Wei #13: "中文。" (3 chars) stretched
+    # token. Examples observed in StudentA #13: "中文。" (3 chars) stretched
     # across 41-57 seconds.
     #
     # Rule: duration > 15s AND chars-per-second < 0.3.
     #
-    # Tuning rationale (Wei #13 data):
+    # Tuning rationale (StudentA #13 data):
     #   - True hallucination: 3 chars / 41s = 0.07 cps  ✅ caught
     #   - True hallucination: 3 chars / 57s = 0.05 cps  ✅ caught
-    #   - False-positive risk (Wei hesitating mid-question):
+    #   - False-positive risk (StudentA hesitating mid-question):
     #     "機率是推論統計的方法嗎。" 12 chars / 22s = 0.55 cps  ✅ NOT caught
     #
     # The cps gap between hallucination (~0.05) and slow real speech
@@ -186,7 +186,7 @@ def detect_hallucination(entry: dict) -> Optional[tuple[str, str]]:
 
 def render_speaker(entry: dict, keep_original: bool) -> str:
     """Render the speaker tag. Default: use `speaker` (Plaud's merged label,
-    e.g. "che", "Wei", or "Speaker 2"). When `--keep-original-speaker`,
+    e.g. "che", "StudentA", or "Speaker 2"). When `--keep-original-speaker`,
     fall back to `original_speaker` (raw "Speaker 1/2/3/4")."""
     if keep_original:
         return entry.get("original_speaker", entry.get("speaker", ""))

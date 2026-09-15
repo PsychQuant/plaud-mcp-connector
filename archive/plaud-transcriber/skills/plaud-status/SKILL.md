@@ -125,8 +125,8 @@ safari-browser js "$(cat {skill_dir}/scripts/collect_files.js)" --url plaud
 輸出格式：
 ```
 66 files
-d0ca34da51fc8063a136267f291e7274|||453 早期課9-20200310 一花一世界
-bd451eae06a42176b35ee4677c7465cf|||451 早期課9-20200218如雷射光的出體之旅
+0123456789abcdef0123456789abcde2|||453 課程錄音範例甲
+0123456789abcdef0123456789abcde3|||451 課程錄音範例乙
 ...
 ```
 

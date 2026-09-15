@@ -105,7 +105,7 @@ safari-browser get url --url plaud
 safari-browser js "var b=document.querySelector('.cky-btn-accept'); if(b)b.click(); else document.querySelectorAll('[class*=cky]').forEach(e=>e.remove()); 'done'" --url plaud   # 點接受按鈕，沒有就 force-remove
 ```
 
-**多視窗支援（#26，safari-browser v2.4.0+）**：所有步驟都用 `--url plaud` 明確 target Plaud document — 不管 Plaud 在哪個 window / 哪個 tab、不管使用者當前焦點在哪，skill 都能正確執行。不再需要手動切 tab。
+**多視窗支援（safari-browser#26，safari-browser v2.4.0+）**：所有步驟都用 `--url plaud` 明確 target Plaud document — 不管 Plaud 在哪個 window / 哪個 tab、不管使用者當前焦點在哪，skill 都能正確執行。不再需要手動切 tab。
 
 ### Step 1: 點擊「新增音訊」→「匯入音訊」
 
@@ -129,10 +129,10 @@ sleep 1
 
 ### Step 2: 上傳檔案
 
-**一律使用 `--native --url plaud`**（#24 教訓 + #26 native-path resolver）：
+**一律使用 `--native --url plaud`**（safari-browser#24 教訓 + safari-browser#26 native-path resolver）：
 
 ```bash
-# #26: --native 現在接受 --url plaud — resolver 自動找到 Plaud 所在 window，
+# safari-browser#26: --native 現在接受 --url plaud — resolver 自動找到 Plaud 所在 window，
 # 必要時先 tab-switch 再 briefly raise 再 keystroke。
 # 不需要提前 safari-browser open，不需要手動切 tab。
 safari-browser upload --native "input[type='file']" "{完整檔案路徑}" --url plaud
@@ -144,18 +144,18 @@ sleep 30  # 等待上傳完成，大檔案可能需要更久（131 MB 約 30-60 
 1. Resolve `--url plaud` → 找到 Plaud 所在的 window + tab（同一個 process，race-free）
 2. 若 Plaud 是 background tab → 先 `set current tab of window N to tab T`（briefly switch tab）
 3. Briefly raise 目標 window 到前景
-4. Activate Safari + 驗證 frontmost（#15 race condition guard）
+4. Activate Safari + 驗證 frontmost（safari-browser#15 race condition guard）
 5. 用 `el.click()` 開啟 file dialog
 6. 鍵盤模擬 Cmd+Shift+G → 貼上路徑 → Enter → 點 Upload 按鈕
 7. 整個流程在**單一** osascript 裡完成
 
-**多 match fail-closed（#26）**：若 Safari 有多個 Plaud tab（e.g. `https://web.plaud.ai/file/a` 和 `https://web.plaud.ai/file/b`），`--url plaud` 會丟 `ambiguousWindowMatch` 列出所有 match。改用更具體 substring：`--url "plaud.ai/file/abc"`。
+**多 match fail-closed（safari-browser#26）**：若 Safari 有多個 Plaud tab（e.g. `https://web.plaud.ai/file/a` 和 `https://web.plaud.ai/file/b`），`--url plaud` 會丟 `ambiguousWindowMatch` 列出所有 match。改用更具體 substring：`--url "plaud.ai/file/abc"`。
 
-**為什麼不用 `--js`**（#24 的 lesson）：`--js` 用 base64 chunking + DataTransfer 注入，V8 字串串接對大檔 O(n²) — 131 MB 檔案會產生 ~500 MB+ transient 記憶體，Safari 崩潰並回報 AppleScript -609 連線錯誤。實測在 131 MB MP3 上 chunk 500/913 時 Safari 失去回應。
+**為什麼不用 `--js`**（safari-browser#24 的 lesson）：`--js` 用 base64 chunking + DataTransfer 注入，V8 字串串接對大檔 O(n²) — 131 MB 檔案會產生 ~500 MB+ transient 記憶體，Safari 崩潰並回報 AppleScript -609 連線錯誤。實測在 131 MB MP3 上 chunk 500/913 時 Safari 失去回應。
 
-**`--js` 的適用場景**：safari-browser #24 已 enforce 10 MB hard cap — `--js` 搭配超過 10 MB 的檔案會在 `validate()` 就被拒絕，錯誤訊息指向 `--native --url plaud`。對於教學影片、會議錄音等常見 >50 MB 的 use case，**一律 `--native --url plaud`**。
+**`--js` 的適用場景**：safari-browser#24 已 enforce 10 MB hard cap — `--js` 搭配超過 10 MB 的檔案會在 `validate()` 就被拒絕，錯誤訊息指向 `--native --url plaud`。對於教學影片、會議錄音等常見 >50 MB 的 use case，**一律 `--native --url plaud`**。
 
-**安全檢查**：`--native` 路徑已經在 `b8f3ef0` (#15) 修好 focus race condition，#26 進一步把 window 解析下沉到同一 AppleScript session，消除 documents → upload 之間的 race。
+**安全檢查**：`--native` 路徑已經在 `b8f3ef0` (safari-browser#15) 修好 focus race condition，safari-browser#26 進一步把 window 解析下沉到同一 AppleScript session，消除 documents → upload 之間的 race。
 
 ### Step 2 fallback：base64 in-page 注入（native + --js 都失敗時）
 
@@ -264,7 +264,7 @@ for f in "${FILES[@]}"; do
   safari-browser js "var items=document.querySelectorAll('.menu-item');for(var i=0;i<items.length;i++){if(items[i].textContent.trim()==='匯入音訊'){items[i].click();break;}} 'clicked'" --url plaud
   sleep 1
 
-  # Step 2: 上傳 — 一律用 --native --url plaud（#24 + #26）
+  # Step 2: 上傳 — 一律用 --native --url plaud（safari-browser#24 + safari-browser#26）
   safari-browser upload --native "input[type='file']" "$f" --url plaud
   sleep 30
 

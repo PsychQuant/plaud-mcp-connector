@@ -34,7 +34,7 @@ do_login() {
   safari-browser click @e2 2>/dev/null; sleep 0.5
   safari-browser press "Meta+a" 2>/dev/null; sleep 0.3
   safari-browser press "Backspace" 2>/dev/null; sleep 0.5
-  safari-browser press "k+i+k+i+8+3+0+6+2+1+@+g+m+a+i+l+.+c+o+m" 2>/dev/null; sleep 0.5
+  safari-browser press "$(printf %s "$PLAUD_EMAIL" | sed 's/./&+/g; s/+$//')" 2>/dev/null; sleep 0.5
   safari-browser snapshot 2>/dev/null
   safari-browser click @e3 2>/dev/null; sleep 0.5
   safari-browser press "Meta+a" 2>/dev/null; sleep 0.3

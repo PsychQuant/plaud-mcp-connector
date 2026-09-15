@@ -17,7 +17,7 @@ Input shape
 The DOM textContent is flat — segments are concatenated with no delimiters
 other than the inline timestamp + speaker label that prefixes each one:
 
-    00:00:49Speaker 1我會儘快趕回來啦。...00:00:56Speaker 2不要緊...
+    00:00:49Speaker 1第一句範例文字。...00:00:56Speaker 2第二句範例文字...
 
 So the segment boundary is the regex `(\d{2}:\d{2}:\d{2})(Speaker \d+)`. End
 time of each segment = start time of the next (last segment gets +5s).

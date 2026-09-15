@@ -147,6 +147,6 @@ Plaud 的 Webpack 環境中 `const`/`let` 偶爾會衝突。
 - SKILL.md 內容基於實際測試經驗，修改前請確認 Plaud UI 是否有變動
 - 批次腳本都支援斷點續傳（已存在的檔案自動跳過）
 - 下載腳本連續 5 個檔案都失敗時自動停止（避免浪費時間在未轉錄檔案上）
-- `batch_generate.sh` 偵測到每日 100 小時上限時自動停止
+- `batch_generate.sh` 偵測到帳號的每日轉錄上限時自動停止
 - 新增格式時，確認下載機制（S3 URL vs Blob）並加到格式支援表
 - 推薦用合併版腳本（`batch_srt_docx.sh` + `batch_notes.sh`），舊版分離腳本保留但不推薦

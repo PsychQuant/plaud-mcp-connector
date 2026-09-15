@@ -26,7 +26,7 @@ Plaud AI 轉錄工具，透過 `safari-browser` 自動化操作 web.plaud.ai。
 /plaud:upload /path/to/*.mp3              # 批次上傳
 /plaud:status                              # 檢查所有檔案進度
 /plaud:download 第01堂 srt /output/dir    # 下載指定檔案 SRT
-/plaud:download all 查-早期課9 /output/dir # 批次下載整個資料夾
+/plaud:download all 範例資料夾 /output/dir # 批次下載整個資料夾
 ```
 
 ## Bundled Scripts
