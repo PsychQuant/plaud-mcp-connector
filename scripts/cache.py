@@ -252,9 +252,16 @@ def list_cutoff(man: dict) -> str | None:
     """
     if not sweep_recorded(man):
         return None
+    # A record fetched on its own (`put --single-fetch`, written by fetch_one.py)
+    # says one transcript came down whole and nothing at all about the listing.
+    # Counting it moved the cutoff to the newest such recording, and the next
+    # incremental sync stopped there, skipping everything in between (verify R1).
+    # A later `put` WITHOUT the flag — a sync that listed its way to the recording —
+    # replaces the record and counts again, which is right: that walk covered it.
     times = [
         t for rec in man.get("recordings", {}).values()
-        if _is_complete(rec) and (t := _parse_api_time(rec.get("created_at"))) is not None
+        if _is_complete(rec) and rec.get("single_fetch") is not True
+        and (t := _parse_api_time(rec.get("created_at"))) is not None
     ]
     if not times:
         return None
@@ -517,6 +524,11 @@ def cmd_put(args) -> None:
         "last_cursor": None if complete else last_cursor,
         "indexed_at": _now(),
     }
+    # Written only when set, so every existing record and every record a listing
+    # walk writes keeps its exact shape. getattr for the same reason as `complete`
+    # above: hand-built Namespaces never pass through parse_args.
+    if getattr(args, "single_fetch", False):
+        man["recordings"][rec_id]["single_fetch"] = True
     _save_manifest(man)
     state = "complete" if complete else "INCOMPLETE"
     print(f"cached {rec_id} ({len(body):,} chars, {pages} page(s), {state}) → {path}{warning}")
@@ -774,6 +786,12 @@ def main() -> None:
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
+    p.add_argument("--single-fetch", action="store_true", dest="single_fetch",
+                   help="this recording was fetched on its own, NOT reached by walking the "
+                        "listing. It is cached normally but is ignored when working out where "
+                        "an incremental listing may stop paging (list_cutoff); without that, "
+                        "one fetch of a newer recording makes the next sync skip everything "
+                        "between the last real sync and that recording")
     p.set_defaults(func=cmd_put)
 
     p = sub.add_parser("mark-full-sweep",
