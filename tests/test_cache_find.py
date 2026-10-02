@@ -75,6 +75,15 @@ class TestFind(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("INCOMPLETE", proc.stdout)
 
+    def test_a_composed_and_a_decomposed_spelling_of_the_same_name_match(self):
+        """`put` already folds transcript bodies to NFC so the cache stops collecting
+        two spellings of one word; a name lookup that did not would miss `Café`
+        typed as `Cafe` + combining accent."""
+        self.put("r1", "Caf\u00e9 planning", "2026-09-01T09:00:00")          # composed
+        proc = self.cache("find", "cafe\u0301")                               # decomposed
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("r1", proc.stdout)
+
     def test_no_match_exits_3(self):
         self.put("r1", "Weekly sync", "2026-09-01T09:00:00")
         self.assertEqual(self.cache("find", "nothing like this").returncode, 3)
