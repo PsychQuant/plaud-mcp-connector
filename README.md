@@ -64,8 +64,8 @@ login (`plaud login`), separate from the MCP's.
 
 ## Skills
 
-Two skills were renamed so the name says what you would type to get the thing
-done. plaud-index is now `plaud-sync`; plaud-srt is now `plaud-to-srt`. The old
+As of v0.11.0 two skills are renamed so the name says what you would type to get
+the thing done. plaud-index is now `plaud-sync`; plaud-srt is now `plaud-to-srt`. The old
 names no longer exist, and nothing in your cache needs migrating.
 
 ### `plaud-sync` — land transcripts on disk
@@ -112,9 +112,15 @@ search my transcripts for "action item"
 
 ### `plaud-to-srt` — subtitles from a recording
 
-Converts a cached transcript to `.srt`. Neither the official MCP nor the official
-CLI produces timed subtitles — they return transcript text only. Runs on the local
-cache: no API call, no auth.
+Turns one recording into `.srt`. Neither the official MCP nor the official CLI
+produces timed subtitles — they return transcript text only. Give it a recording's
+name. If the transcript is already cached the conversion is local; if not, it
+fetches that one recording first — through the CLI when that is installed and
+logged in, otherwise through the MCP — so there is nothing to sync beforehand.
+
+Finding a recording by name scans the 500 most recent recordings. One older than
+that is not found, and the skill says how far back it looked instead of reporting
+the recording missing.
 
 How long each subtitle stays on screen depends on which way you indexed. The
 official CLI reports a start **and an end** for every segment, and those end
