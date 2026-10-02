@@ -123,12 +123,19 @@ that is not found, and the skill says how far back it looked instead of reportin
 the recording missing.
 
 How long each subtitle stays on screen depends on what the cache holds. Both
-the official CLI and the MCP return a start **and an end** for every segment.
-Where the cache keeps those ends — the CLI path does, and so does the MCP path
-of `plaud-to-srt` — they are used as given. `plaud-sync`'s MCP path writes
-start-only lines, so for a recording synced that way a cue runs until the next
-one begins and the final cue gets a four-second guess. Installing the CLI (above)
-gives exact timing for everything it syncs, as well as a cheaper sync.
+the official CLI and the MCP return a start **and an end** for every segment, but
+not at the same resolution: the MCP in milliseconds, the CLI as whole seconds
+rounded down. On one recording, all twenty segments compared were the MCP's
+millisecond value truncated, and four of its 95 segments (`First.`, `Thank you.`)
+landed on a single second, which `to_srt` lengthens to half a second and reports.
+So a subtitle from the CLI path can appear up to a second early.
+
+Where the cache keeps the ends they are used as given. The CLI path does, at that
+one-second resolution. `plaud-to-srt`'s MCP path does, in milliseconds.
+`plaud-sync`'s MCP path writes start-only lines, so for a recording synced that way
+a cue runs until the next one begins and the final cue gets a four-second guess.
+The CLI is still the cheaper way to sync, because the text never passes through
+the conversation.
 
 **Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
 silently truncated at the 100-minute mark and the `.srt` gave no sign of it —

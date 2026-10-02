@@ -81,6 +81,12 @@ next:
 | 5 | the CLI is not logged in | tell the user to run `plaud login` — the CLI keeps its own login, separate from the MCP's — or use the MCP path if they would rather not |
 | 4 | the CLI answered with nothing | say so and stop; do not pretend a recording was fetched |
 
+The CLI's timestamps are whole seconds, rounded down (measured against the MCP's
+milliseconds), so a subtitle from this path can appear up to a second early and a
+very short segment can share one second with its neighbour. The MCP path below
+keeps milliseconds but passes the whole transcript through the conversation. Use
+the CLI unless sub-second timing matters more than that.
+
 **The MCP path** (CLI absent or not logged in). Fetch with `get_transcript` for
 this one recording: the default block for the raw transcript, then
 `block="transaction_polish"` for the polished one. Follow the paging rules in
