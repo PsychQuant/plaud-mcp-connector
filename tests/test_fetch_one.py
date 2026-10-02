@@ -68,10 +68,24 @@ POLISHED_MARK = "the budget is split"
 FAKE_PLAUD = textwrap.dedent('''\
     #!{python}
     import os, sys
+    import time
     mode = os.environ.get("FAKE_PLAUD_MODE", "ok")
     args = sys.argv[1:]
     out = args[args.index("-o") + 1] if "-o" in args else None
     polished = "--polished" in args
+    if args and args[0] == "file":
+        # what the real `plaud file <id>` prints: a header, then `key: value` lines
+        if mode == "auth_fail":
+            sys.stderr.write("\\u2717 [AUTH_FAILED] Token invalid or expired. Run `plaud login`.\\n")
+            sys.exit(1)
+        sys.stdout.write("- Fetching file...\\n\\nFile Details:\\n\\n")
+        sys.stdout.write("  id:           " + args[1] + "\\n")
+        sys.stdout.write("  name:         " + os.environ.get("FAKE_PLAUD_NAME", "Named by the CLI") + "\\n")
+        sys.stdout.write("  created_at:   2026-10-01T09:00:00\\n")
+        sys.stdout.write("  duration:     1h02m03s\\n")
+        sys.exit(0)
+    if mode == "hang" or (mode == "polish_hang" and polished):
+        time.sleep(30)
     if mode == "auth_fail":
         sys.stderr.write("\\u2717 [AUTH_FAILED] Token invalid or expired. Run `plaud login`.\\n")
         sys.exit(1)
@@ -199,6 +213,112 @@ class TestFetchOnePolishIsBestEffort(FetchOneTestCase):
         # The polished sentence is not a substring of the raw one (raw has "um"
         # in the middle), so its presence can only mean the stale file was read.
         self.assertNotIn(POLISHED_MARK, out.stdout)
+
+
+class TestFetchOneMetadata(FetchOneTestCase):
+    """The skill passes only `--id`. Recording names come from Plaud and can contain
+    anything, so they must not be pasted into a shell command line; the script
+    reads `name`, `created_at` and `duration` from `plaud file <id>` itself."""
+
+    def fetch_id_only(self, **kw) -> subprocess.CompletedProcess:
+        env = self._env(kw.pop("mode", "ok"))
+        env.update(kw.pop("extra_env", {}))
+        return subprocess.run([sys.executable, str(FETCH_ONE), "--id", "rec1", *kw.pop("args", [])],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def shown(self) -> str:
+        return self.cache_py("show", "rec1").stdout
+
+    def test_metadata_is_read_from_plaud_file_when_not_given(self):
+        proc = self.fetch_id_only(extra_env={"FAKE_PLAUD_NAME": "Budget review"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        shown = self.shown()
+        self.assertIn('name: "Budget review"', shown)
+        self.assertIn("created_at: 2026-10-01T09:00:00", shown)
+        self.assertIn("duration_ms: 3723000", shown)  # 1h02m03s
+
+    def test_a_shell_hostile_name_is_stored_verbatim_and_runs_nothing(self):
+        hostile = 'x"; touch PWNED; echo "$(id)'
+        proc = self.fetch_id_only(extra_env={"FAKE_PLAUD_NAME": hostile})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(pathlib.Path("PWNED").exists())
+        self.assertIn("touch PWNED", self.shown())
+
+    def test_explicit_flags_win_over_what_plaud_file_says(self):
+        proc = self.fetch(extra_env={"FAKE_PLAUD_NAME": "Named by the CLI"}) \
+            if False else subprocess.run(
+                [sys.executable, str(FETCH_ONE), "--id", "rec1", "--name", "Given name"],
+                capture_output=True, text=True, env=self._env(), timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn('name: "Given name"', self.shown())
+
+    def test_a_logged_out_cli_fails_on_plaud_file_with_exit_5(self):
+        proc = self.fetch_id_only(mode="auth_fail")
+        self.assertEqual(proc.returncode, 5, proc.stderr)
+        self.assertEqual(self.cached_count(), "0 recordings")
+
+
+class TestFetchOneRobustness(FetchOneTestCase):
+    """What verify R1 found outside the happy path."""
+
+    def run_fetch(self, *args: str, mode: str = "ok", timeout_s: str = "300") -> subprocess.CompletedProcess:
+        env = self._env(mode)
+        env["PLAUD_FETCH_TIMEOUT"] = timeout_s
+        return subprocess.run([sys.executable, str(FETCH_ONE), *args], capture_output=True,
+                              text=True, env=env, timeout=120)
+
+    def test_a_raw_fetch_that_hangs_exits_4_and_writes_nothing(self):
+        proc = self.run_fetch("--id", "rec1", mode="hang", timeout_s="1")
+        self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertIn("timed out", proc.stderr)
+        self.assertEqual(self.cached_count(), "0 recordings")
+
+    def test_a_polish_fetch_that_hangs_on_a_refresh_does_not_leave_a_stale_polish(self):
+        self.assertEqual(self.run_fetch("--id", "rec1").returncode, 0)
+        self.assertIn(POLISHED_MARK, self.srt().stdout)
+        proc = self.run_fetch("--id", "rec1", "--force", mode="polish_hang", timeout_s="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("older polished", proc.stderr)
+        out = self.srt()
+        self.assertIn(RAW_MARK, out.stdout)
+        self.assertNotIn(POLISHED_MARK, out.stdout)
+
+    def test_an_id_that_could_pass_as_an_option_is_rejected_with_exit_2(self):
+        for bad in ("-o", "--help", "-rf"):
+            proc = self.run_fetch(f"--id={bad}")
+            self.assertEqual(proc.returncode, 2, f"{bad!r}: {proc.stderr}")
+        self.assertEqual(self.cached_count(), "0 recordings")
+
+    def test_an_id_with_shell_metacharacters_is_rejected_with_exit_2(self):
+        proc = self.run_fetch("--id", 'x"; echo pwned; "')
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+
+    def test_a_manifest_that_says_complete_but_whose_file_is_gone_is_fetched_again(self):
+        self.assertEqual(self.run_fetch("--id", "rec1").returncode, 0)
+        (self.cache_dir / "rec1.md").unlink()
+        proc = self.run_fetch("--id", "rec1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("already cached", proc.stdout)
+        self.assertTrue((self.cache_dir / "rec1.md").is_file())
+
+
+class TestFetchOneAndTheSyncCutoff(FetchOneTestCase):
+    def test_fetching_one_recording_does_not_move_the_incremental_cutoff(self):
+        """Found by verify R1. A cache that had a full sweep reports where an
+        incremental `plaud-sync` may stop paging. Fetching ONE newer recording used
+        to move that point to the new recording, so the next sync skipped every
+        recording between the last real sync and it — silently."""
+        self.assertEqual(self.cache_py(
+            "put", "--id", "old1", "--created-at", "2026-03-01T09:00:00",
+            "--complete", "true", "--last-cursor", "",
+            stdin="[00:00:01] Speaker 1: hi\n").returncode, 0)
+        self.assertEqual(self.cache_py("mark-full-sweep").returncode, 0)
+        before = self.cache_py("status", "--list-cutoff").stdout.strip()
+        self.assertEqual(before, "2026-02-28T09:00:00")
+
+        proc = self.fetch()  # created-at 2026-10-01 — far newer than the March record
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.cache_py("status", "--list-cutoff").stdout.strip(), before)
 
 
 class TestFetchOneIdempotence(FetchOneTestCase):
