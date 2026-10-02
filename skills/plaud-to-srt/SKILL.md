@@ -2,22 +2,24 @@
 name: plaud-to-srt
 description: |
   Turn a Plaud recording into SubRip (.srt) subtitles for video editing,
-  lecture captions, or class recordings. Use when the user asks for subtitles,
-  captions, an SRT file, 字幕, 逐字稿轉字幕, "make subtitles from this
-  recording", or wants to caption a video whose audio is in Plaud. Generates the
-  cues from the locally cached transcript — it does not download a subtitle file
-  Plaud already produced, and needs no network. Neither the official Plaud MCP
-  nor the official CLI can produce timed subtitles — they return transcript text
-  only.
+  lecture captions, or class recordings — give the recording's name and get the
+  file. Use when the user asks for subtitles, captions, an SRT file, 字幕,
+  逐字稿轉字幕, "make subtitles from this recording", "把這場錄音做成 SRT", or
+  wants to caption a video whose audio is in Plaud. If that recording is not on
+  disk yet, this skill fetches that one recording first; the rest of the library
+  does not need to be synced. It builds the cues itself — it does not download a
+  subtitle file Plaud already produced. Neither the official Plaud MCP nor the
+  official CLI can produce timed subtitles — they return transcript text only.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Untertitel erstellen", "crear subtítulos", "créer des sous-titres", "字幕を作成", "creare sottotitoli", "ondertitels maken", "criar legendas", "tạo phụ đề", "สร้างคำบรรยาย", "buat sari kata", "إنشاء ترجمة".
 argument-hint: "<recording name or id> [-o out.srt]"
 ---
 
-# Plaud SRT
+# Plaud to SRT
 
-Converts a cached transcript into `.srt`. Runs entirely on the local cache — no
-API call, no auth, no re-fetch.
+Turns one recording into `.srt`. The conversion itself runs on the local cache.
+If the recording is not cached yet, step 1 fetches that one recording — only
+that one — so there is nothing to sync first.
 
 ## Why this exists
 
@@ -29,17 +31,67 @@ has to build that timing themselves.
 
 ## Steps
 
-### 1. Find the recording
+### 1. Find the recording — and fetch it if it is not on disk yet
 
-The user will normally give a name, not an id. Resolve it:
+The user will normally give a name, not an id.
+
+**1a. Look in the cache.**
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
 ```
 
-`search` prints the id under each hit. If the recording is not cached, run
-`plaud-sync` first — this skill never fetches.
+`search` prints the id under each hit. One hit: go to step 2. Several hits with
+similar names: list name, date and length and ask which. Never guess.
+
+**1b. Not cached — find it in Plaud.** `list_files` takes a `query` (a
+case-insensitive substring of the recording name). The Plaud CLI's equivalent is
+`plaud search "<words>"`.
+
+Read `complete` and `scanned_back_to` in the answer before you say anything about
+what was or was not found. The filter scans only the **500 most recent**
+recordings (measured 2026-10-02 on a library longer than that: `scanned: 500`,
+`complete: false`, `scanned_back_to: 2026-04-13`). Cost therefore does not grow
+with the library, and recordings older than the window cannot be found by name.
+
+| Result | What to do |
+|---|---|
+| exactly one match | go to 1c |
+| several matches | list name, date, length; ask which |
+| none, `complete: true` | say no recording has that name |
+| none, `complete: false` | **do not say it does not exist.** Say how far back the search reached (`scanned_back_to`) and offer to look further back. That means paging `list_files` without filters (`page`, `page_size`) and matching names yourself, and it costs more the further back the recording is — ask before doing it. `date_from` / `date_to` do not help: they filter inside the same 500-recording window |
+
+**1c. Fetch that one recording.**
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_one.py" \
+  --id "<id>" --name "<name>" --created-at "<created_at>" --duration "<duration>"
+```
+
+It writes the raw transcript and the polished version to the cache, through
+`cache.py put`, without putting the text through the conversation. If a complete
+copy is already cached it does nothing and says so. Its exit code says what to do
+next:
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| 0 | cached | go to step 2 |
+| 3 | the `plaud` CLI is not installed | use the MCP path below |
+| 5 | the CLI is not logged in | tell the user to run `plaud login` — the CLI keeps its own login, separate from the MCP's — or use the MCP path if they would rather not |
+| 4 | the CLI answered with nothing | say so and stop; do not pretend a recording was fetched |
+
+**The MCP path** (CLI absent or not logged in). Fetch with `get_transcript` for
+this one recording: the default block for the raw transcript, then
+`block="transaction_polish"` for the polished one. Follow the paging rules in
+`plaud-sync` — "`get_transcript` is paginated" and "Write the cache **once**, after
+the loop" — with this one recording instead of a library. Do not call
+`cache.py put` once per page; it overwrites.
+
+Say what this path costs: the whole transcript passes through the conversation,
+on the order of a hundred thousand characters for an hour of speech. It also
+reports only where each segment starts, so each subtitle runs until the next one
+begins and the last one is a guess; the CLI path has exact end times.
 
 ### 2. Pick the source — ask once, then remember
 
