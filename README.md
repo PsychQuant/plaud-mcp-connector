@@ -122,11 +122,13 @@ Finding a recording by name scans the 500 most recent recordings. One older than
 that is not found, and the skill says how far back it looked instead of reporting
 the recording missing.
 
-How long each subtitle stays on screen depends on which way you indexed. The
-official CLI reports a start **and an end** for every segment, and those end
-times are used as given. The MCP reports only starts, so a cue has to run until
-the next one begins and the final cue gets a four-second guess. Installing the
-CLI (above) buys exact timing as well as a cheaper index.
+How long each subtitle stays on screen depends on what the cache holds. Both
+the official CLI and the MCP return a start **and an end** for every segment.
+Where the cache keeps those ends — the CLI path does, and so does the MCP path
+of `plaud-to-srt` — they are used as given. `plaud-sync`'s MCP path writes
+start-only lines, so for a recording synced that way a cue runs until the next
+one begins and the final cue gets a four-second guess. Installing the CLI (above)
+gives exact timing for everything it syncs, as well as a cheaper sync.
 
 **Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
 silently truncated at the 100-minute mark and the `.srt` gave no sign of it —
