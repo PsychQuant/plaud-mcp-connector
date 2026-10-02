@@ -88,10 +88,19 @@ this one recording: the default block for the raw transcript, then
 the loop" — with this one recording instead of a library. Do not call
 `cache.py put` once per page; it overwrites.
 
+Write each segment as a range line and keep the end the MCP returns for it:
+
+```
+[HH:MM:SS.fff - HH:MM:SS.fff] Speaker N: <content>
+```
+
+built from the segment's `start_time` and `end_time`, which are milliseconds.
+Start-only lines (`[HH:MM:SS] Speaker N: …`) are accepted as well, but then every
+subtitle runs on until the next one starts, so a pause is shown as if the last
+words were still being spoken, and the final subtitle's length is a guess.
+
 Say what this path costs: the whole transcript passes through the conversation,
-on the order of a hundred thousand characters for an hour of speech. It also
-reports only where each segment starts, so each subtitle runs until the next one
-begins and the last one is a guess; the CLI path has exact end times.
+on the order of a hundred thousand characters for an hour of speech.
 
 ### 2. Pick the source — ask once, then remember
 
