@@ -1124,7 +1124,8 @@ def main() -> None:
         # line reporting it. The comment beside the drop warning named this
         # channel and only the one sentence being written at the time was fixed
         # — one root cause, three exits, two of them left open for two rounds.
-        sys.exit(f"error: {str(path)!r} not found — run the plaud-sync skill first")
+        sys.exit(f"error: {str(path)!r} not found — fetch that recording first "
+                 f"(the plaud-to-srt skill does, or fetch_one.py --id <id>)")
 
     # `utf-8-sig`, so a byte-order mark is consumed rather than left on line 1
     # where it defeats `SEGMENT`'s `^\[`. This matters most for polish files:
@@ -1350,7 +1351,9 @@ def main() -> None:
                       file=sys.stderr)
     if "complete: false" in completeness_source[:400]:
         print(f"⚠ {path.name!r} is marked incomplete — these subtitles cover only the "
-              f"part that was fetched. Re-run plaud-sync first.", file=sys.stderr)
+              f"part that was fetched. Fetch it again first "
+              f"(fetch_one.py --id <id> does, and so does the plaud-to-srt skill).",
+              file=sys.stderr)
 
     # `build_cues` has always appended its trim corrections "when a list is
     # passed", and this call never passed one — so in the only shipped path the

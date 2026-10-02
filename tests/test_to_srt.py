@@ -2799,7 +2799,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("main", "config: PLAUD_SUBTITLE_SOURCE= is not one of —", "prefer"): "echoes the bad value",
         ("main", "error: no lines in looked like segments. Expec", "detail"):   "the composed diagnostic, checked by its parts",
         ("main", "error: no lines in looked like segments. Expec", "str(path)"): "a path",
-        ("main", "error: not found — run the plaud-sync skill fi", "str(path)"): "a path",
+        ("main", "error: not found — fetch that recording first ", "str(path)"): "a path",
         ("main", "error: refusing unsafe recording id:", "args.id"):            "echoes the rejected id",
         ("main", "note: could not read to check whether this rec", "exc.strerror"): "an OS message",
         ("main", "note: could not read to check whether this rec", "transcript.name"): "a filename",
