@@ -1,5 +1,5 @@
 ---
-name: plaud-index
+name: plaud-sync
 description: |
   Build or refresh the local Plaud transcript cache so recordings can be searched
   by their CONTENT, not just their filename. Use when the user says "index my

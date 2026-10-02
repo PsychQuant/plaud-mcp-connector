@@ -53,7 +53,7 @@ tool directly. It opens a browser for OAuth and stores the token in
 Requirements: **Node.js ≥ 20** and a Plaud account with Cloud Sync (PCS) enabled.
 
 **Strongly recommended for large libraries**: `npm install -g @plaud-ai/cli`.
-With the CLI present, `plaud-index` writes transcripts straight to disk instead of
+With the CLI present, `plaud-sync` writes transcripts straight to disk instead of
 reading every one through the model context — the difference between a few minutes
 and a very expensive afternoon on a library of hundreds. Note the CLI keeps its own
 login (`plaud login`), separate from the MCP's.
@@ -64,7 +64,11 @@ login (`plaud login`), separate from the MCP's.
 
 ## Skills
 
-### `plaud-index` — land transcripts on disk
+Two skills were renamed so the name says what you would type to get the thing
+done. plaud-index is now `plaud-sync`; plaud-srt is now `plaud-to-srt`. The old
+names no longer exist, and nothing in your cache needs migrating.
+
+### `plaud-sync` — land transcripts on disk
 
 Walks `list_files`, fetches `get_transcript` for anything not already cached, and
 writes one markdown file per recording to `~/.plaud-connector/cache/`. Incremental:
@@ -106,7 +110,7 @@ which recording mentions Kubernetes migration
 search my transcripts for "action item"
 ```
 
-### `plaud-srt` — subtitles from a recording
+### `plaud-to-srt` — subtitles from a recording
 
 Converts a cached transcript to `.srt`. Neither the official MCP nor the official
 CLI produces timed subtitles — they return transcript text only. Runs on the local
@@ -291,7 +295,7 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
 ```
 
 Three more commands exist for the incremental listing. They are called by
-`plaud-index`, not by hand, but they are the answer to "why did it stop
+`plaud-sync`, not by hand, but they are the answer to "why did it stop
 paging there" when a run looks wrong:
 
 | Command | Answers |
@@ -307,7 +311,7 @@ nothing else makes it visible.
 ## Limits — stated plainly
 
 - **Search covers what you indexed.** A recording made after your last
-  `plaud-index` run is not searchable. `cache.py status` prints the covered date
+  `plaud-sync` run is not searchable. `cache.py status` prints the covered date
   range; the skill is instructed to report it rather than answer "not found".
 - **An incremental run is a fast path, not a completeness guarantee.** It stops
   listing once it is past everything it holds. A recording that reaches the

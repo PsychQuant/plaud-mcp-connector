@@ -122,5 +122,24 @@ class TestSkillNames(unittest.TestCase):
         )
 
 
+class TestIntentNames(unittest.TestCase):
+    """The two renames of #65, pinned so they cannot quietly revert.
+
+    `plaud-srt` named a file format and `plaud-index` named an internal mechanism;
+    neither is what a person types when they want something done. The names are
+    now `plaud-to-srt` ("turn a recording into SRT") and `plaud-sync` ("bring
+    transcripts down"). If either old name reappears as a directory, the old
+    muscle memory and the new docs are pointing at two different skills.
+    """
+
+    RENAMED = {"plaud-srt": "plaud-to-srt", "plaud-index": "plaud-sync"}
+
+    def test_new_names_exist_and_old_names_are_gone(self):
+        existing = {s.name for s in skill_dirs()}
+        for old, new in self.RENAMED.items():
+            self.assertIn(new, existing, f"skills/{new}/ is missing — the rename of {old} did not land")
+            self.assertNotIn(old, existing, f"skills/{old}/ still exists beside skills/{new}/")
+
+
 if __name__ == "__main__":
     unittest.main()

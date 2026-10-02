@@ -693,7 +693,7 @@ class TestLiveDescriptions(unittest.TestCase):
 class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
     """A closed list of signals in the operator's instructions must stay closed.
 
-    `skills/plaud-srt/SKILL.md` is the only caller of `scripts/to_srt.py` in
+    `skills/plaud-to-srt/SKILL.md` is the only caller of `scripts/to_srt.py` in
     this repo, and its step 4 tells the operator — a model — which stderr
     signals to pass on. It enumerated exactly two, with the justification
     "because neither is visible in the resulting `.srt`".
@@ -718,7 +718,7 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
     below is the sentence, as a test.
     """
 
-    SKILL = pathlib.Path(__file__).resolve().parent.parent / "skills" / "plaud-srt" / "SKILL.md"
+    SKILL = pathlib.Path(__file__).resolve().parent.parent / "skills" / "plaud-to-srt" / "SKILL.md"
 
     def _skill_text(self) -> str:
         return self.SKILL.read_text(encoding="utf-8")
@@ -800,7 +800,7 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
             # still an enumeration, one line away.
             #
             # Anything sentence-shaped is checked now: long enough to be a
-            # message, with a space in it. `key: value` and `plaud-index` fall
+            # message, with a space in it. `key: value` and `plaud-sync` fall
             # under that on length and shape, and erring toward checking more is
             # the right direction for a guard whose failure mode has twice been
             # "did not look".
@@ -900,7 +900,7 @@ class TestStepFourQuotesToolOutputInBackticks(unittest.TestCase):
     widening can do.
     """
 
-    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+    SKILL = SKILLS_DIR / "plaud-to-srt" / "SKILL.md"
 
     def test_step_four_uses_no_ascii_double_quotes(self):
         text = self.SKILL.read_text(encoding="utf-8")
@@ -929,7 +929,7 @@ class TestEveryWarningReachesTheGlossary(unittest.TestCase):
     output terminating at a line the operator's checklist said to skip.
     """
 
-    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+    SKILL = SKILLS_DIR / "plaud-to-srt" / "SKILL.md"
     SCRIPT = REPO_ROOT / "scripts" / "to_srt.py"
 
     def _warnings(self) -> list[str]:
@@ -1044,7 +1044,7 @@ class TestEveryWarningInTheSkillIsQuotedWhereTheGuardsCanSeeIt(unittest.TestCase
     Requiring the one form the guards can read is not.
     """
 
-    SKILL = SKILLS_DIR / "plaud-srt" / "SKILL.md"
+    SKILL = SKILLS_DIR / "plaud-to-srt" / "SKILL.md"
 
     def test_no_warning_text_sits_outside_backticks(self):
         text = re.sub(r"```.*?```", " ", self.SKILL.read_text(encoding="utf-8"),

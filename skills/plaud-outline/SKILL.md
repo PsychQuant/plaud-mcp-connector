@@ -83,7 +83,7 @@ reprocessed. There is no staleness check: at 2,502 B against a transcript's
 stale.
 
 Either way it is small. Reading it into the conversation is fine — that is the
-point of this skill. A full transcript is not, and `plaud-index` exists so you
+point of this skill. A full transcript is not, and `plaud-sync` exists so you
 never have to.
 
 ### 3. Report

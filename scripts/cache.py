@@ -387,7 +387,7 @@ def cmd_status(args) -> None:
     print(f"cache dir : {CACHE_DIR}")
     print(f"cached    : {len(recs)} recordings")
     if incomplete:
-        print(f"incomplete: {len(incomplete)} (will be re-fetched on the next plaud-index run)")
+        print(f"incomplete: {len(incomplete)} (will be re-fetched on the next plaud-sync run)")
     if recs:
         dates = sorted(r.get("created_at", "") for r in recs.values() if r.get("created_at"))
         if dates:
@@ -416,13 +416,13 @@ def cmd_status(args) -> None:
                   "the clock; treat the coverage claim as unverified")
         elif age is None:
             print("full sweep: never — incremental runs may be stepping over older "
-                  "recordings; run plaud-index --all")
+                  "recordings; run plaud-sync --all")
         # Whole days, so the number printed and the decision made agree. On a
         # float comparison "30 days ago" warns about being over 30 days, which
         # reads as a contradiction to anyone looking at it.
         elif int(age) > SWEEP_STALE_DAYS:
             print(f"full sweep: {age:.0f} days ago")
-            print(f"          ⚠ over {SWEEP_STALE_DAYS} days — run plaud-index --all")
+            print(f"          ⚠ over {SWEEP_STALE_DAYS} days — run plaud-sync --all")
         else:
             print(f"full sweep: {age:.0f} days ago")
 
@@ -563,7 +563,7 @@ def _hit_source(path: pathlib.Path) -> str:
 
 def cmd_search(args) -> None:
     if not CACHE_DIR.exists() or not any(CACHE_DIR.glob("*.md")):
-        sys.exit("error: cache is empty — run the plaud-index skill first")
+        sys.exit("error: cache is empty — run the plaud-sync skill first")
 
     man = _load_manifest()["recordings"]
 
@@ -628,7 +628,7 @@ def cmd_search(args) -> None:
         # a half-fetched transcript) and already shows as "(unnamed)" above —
         # labelling it "partially indexed" would point at the wrong cause.
         if rec_id in man and man[rec_id].get("complete") is False:
-            print("   ⚠ partially indexed — more transcript may exist; re-run plaud-index")
+            print("   ⚠ partially indexed — more transcript may exist; re-run plaud-sync")
         for ln, source in lines[: args.max_lines]:
             tag = f" [{source}]" if source else ""
             print(f"   │ {ln[:200]}{tag}")
@@ -739,7 +739,7 @@ def cmd_show(args) -> None:
     subdir = {"summary": "summaries", "polish": "polish", "outline": "outline"}.get(kind)
     path = (CACHE_DIR / subdir / f"{rec_id}.md") if subdir else (CACHE_DIR / f"{rec_id}.md")
     if not path.exists():
-        sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-index skill")
+        sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-sync skill")
     sys.stdout.write(path.read_text())
 
 

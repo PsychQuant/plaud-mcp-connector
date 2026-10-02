@@ -1,5 +1,5 @@
 ---
-name: plaud-srt
+name: plaud-to-srt
 description: |
   Turn a Plaud recording into SubRip (.srt) subtitles for video editing,
   lecture captions, or class recordings. Use when the user asks for subtitles,
@@ -39,7 +39,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
 ```
 
 `search` prints the id under each hit. If the recording is not cached, run
-`plaud-index` first — this skill never fetches.
+`plaud-sync` first — this skill never fetches.
 
 ### 2. Pick the source — ask once, then remember
 
@@ -137,7 +137,7 @@ another one. What each means:
 - **`is marked incomplete — these subtitles cover only the part that was
   fetched` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
-  Tell the user to re-run `plaud-index` before using the file.
+  Tell the user to re-run `plaud-sync` before using the file.
 - **`⚠ N line(s) … were taken as the file's header and not read`** — the block
   from the first `---` to the next one was treated as the header. **The sentence
   continues past the count and the rest is the part that matters** — it says what
