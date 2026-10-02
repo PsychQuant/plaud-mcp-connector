@@ -763,11 +763,14 @@ def cmd_find(args) -> None:
     Exit 3 when nothing matches, the same convention `config.py get` uses for
     "absent", so a caller branches on it instead of parsing prose.
     """
-    needle = (args.name or "").strip().casefold()
+    # NFC on both sides, as `put` does for transcript bodies: `Café` typed as `Cafe`
+    # plus a combining accent is the same name and must match.
+    nfc = lambda t: unicodedata.normalize("NFC", str(t)).casefold()  # noqa: E731
+    needle = nfc((args.name or "").strip())
     if not needle:
         sys.exit("error: find needs a non-empty name — an empty query would match every recording")
     recs = _load_manifest().get("recordings", {})
-    hits = sorted(((k, v) for k, v in recs.items() if needle in str(v.get("name", "")).casefold()),
+    hits = sorted(((k, v) for k, v in recs.items() if needle in nfc(v.get("name", ""))),
                   key=lambda kv: str(kv[1].get("created_at", "")), reverse=True)
     if not hits:
         print(f"no cached recording is named like {args.name.strip()!r}", file=sys.stderr)

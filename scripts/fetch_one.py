@@ -29,10 +29,12 @@ Exit codes are a contract — the skill branches on them:
 Nothing is written to the cache until a non-empty transcript is in hand, so a
 failed fetch — including a failed `--force` refresh — leaves whatever was cached
 before exactly as it was. Everything is written through `cache.py put`, which
-stays the cache's one writer, with a single exception: when a refresh replaces
-the raw transcript but no new polished version can be fetched, an older polished
-copy is removed, because `to_srt` prefers a polish file whenever one exists and
-would otherwise pair stale text with the new transcript.
+stays the cache's one writer, with a single exception: an older polished copy is
+removed BEFORE a refresh rewrites anything. `to_srt` prefers a polish file whenever
+one exists, so stopping between the two writes would otherwise leave the new raw
+transcript beside the old polish — stale text, no error. Removed first, every
+stopping point holds either the old raw or the new raw, with no polish until the
+new one is written.
 
 The record is written with `--single-fetch`: it was not reached by walking the
 listing, so it must not move where an incremental `plaud-sync` may stop paging.
@@ -57,7 +59,20 @@ EXIT_NO_CLI = 3
 EXIT_NOTHING = 4
 EXIT_NOT_LOGGED_IN = 5
 
-TIMEOUT = float(os.environ.get("PLAUD_FETCH_TIMEOUT", "300"))
+def _timeout() -> float:
+    raw = os.environ.get("PLAUD_FETCH_TIMEOUT", "300")
+    try:
+        value = float(raw)
+        if value > 0:
+            return value
+    except ValueError:
+        pass
+    print(f"warning: PLAUD_FETCH_TIMEOUT={raw!r} is not a positive number of seconds — "
+          f"using 300.", file=sys.stderr)
+    return 300.0
+
+
+TIMEOUT = _timeout()
 
 # A recording id is `of_` and hex in practice. Held to a plain token that cannot
 # start with `-`: it reaches the CLI's option parser, and `-o` or `--help` must
@@ -159,7 +174,7 @@ def main() -> int:
     meta = {"name": args.name, "created_at": args.created_at, "duration": args.duration}
     if not all(meta.values()):
         frc, found, fdiag = _plaud_file(rec_id)
-        if "AUTH_FAILED" in fdiag:
+        if frc != 0 and "AUTH_FAILED" in fdiag:   # a recording may be NAMED that; only a failure counts
             print("the plaud CLI is not logged in — run `plaud login`. The CLI keeps its own "
                   "login, separate from the MCP's.", file=sys.stderr)
             return EXIT_NOT_LOGGED_IN
@@ -173,7 +188,7 @@ def main() -> int:
             meta[key] = meta[key] or found.get(key, "") or prior[key]
 
     rc, raw, diag = _plaud_transcript(rec_id, polished=False)
-    if "AUTH_FAILED" in diag:
+    if rc != 0 and "AUTH_FAILED" in diag:
         print("the plaud CLI is not logged in — run `plaud login`. The CLI keeps its own "
               "login, separate from the MCP's.", file=sys.stderr)
         return EXIT_NOT_LOGGED_IN
@@ -182,32 +197,41 @@ def main() -> int:
               f"(exit {rc}): {diag or 'empty output'}", file=sys.stderr)
         return EXIT_NOTHING
 
-    prc, perr = _put(rec_id, raw, "--name", meta["name"], "--created-at", meta["created_at"],
-                     "--duration", meta["duration"], "--complete", "true", "--pages", "1",
+    # Fetch BOTH versions before anything is written, so that nothing on disk changes
+    # unless there is a transcript to put there.
+    rc2, polished, pdiag = _plaud_transcript(rec_id, polished=True)
+    have_polish = rc2 == 0 and bool(polished.strip())
+
+    # `to_srt` prefers a polish file whenever one EXISTS. Remove an older one BEFORE
+    # the raw transcript is replaced, not after: if the process is stopped between
+    # the two writes, the cache then holds either the old raw with no polish or the
+    # new raw with no polish — never the new raw beside the old polish, which put
+    # stale text on screen with no error (verify R2). It is derived data in our own
+    # cache, and subtitles fall back to the raw transcript while it is absent.
+    stale = cache.CACHE_DIR / "polish" / f"{rec_id}.md"
+    removed = stale.is_file()
+    if removed:
+        stale.unlink()
+
+    # Free-text values as `--flag=value`, one argv item each: `--name -notes` is two
+    # items, and argparse reads the second as an option.
+    prc, perr = _put(rec_id, raw, f"--name={meta['name']}", f"--created-at={meta['created_at']}",
+                     f"--duration={meta['duration']}", "--complete", "true", "--pages", "1",
                      "--last-cursor", "", "--single-fetch")
     if prc != 0:
         print(perr or "cache.py put refused the transcript", file=sys.stderr)
         return EXIT_NOTHING
 
-    rc2, polished, pdiag = _plaud_transcript(rec_id, polished=True)
-    if rc2 == 0 and polished.strip():
+    if have_polish:
         rc3, perr2 = _put(rec_id, polished, "--kind", "polish")
         if rc3 == 0:
             print(f"cached {rec_id}: raw transcript and polished version")
             return 0
         pdiag = perr2
 
-    # `to_srt` prefers a polish file whenever one EXISTS. If this was a refresh, the
-    # raw transcript was just replaced, so an older polish no longer matches it and
-    # would put stale text on screen with no error. It is derived data in our own
-    # cache, so remove it and let subtitles fall back to the raw transcript.
-    stale = cache.CACHE_DIR / "polish" / f"{rec_id}.md"
-    removed = ""
-    if stale.is_file():
-        stale.unlink()
-        removed = " The older polished copy was removed because it no longer matched."
+    note = " The older polished copy was removed because it no longer matched." if removed else ""
     print(f"warning: no polished version cached for {rec_id} ({pdiag or 'empty'}) — "
-          f"subtitles will come from the raw transcript.{removed}", file=sys.stderr)
+          f"subtitles will come from the raw transcript.{note}", file=sys.stderr)
     print(f"cached {rec_id}: raw transcript only")
     return 0
 

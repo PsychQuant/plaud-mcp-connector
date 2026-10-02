@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import shutil
 import stat
 import subprocess
 import sys
@@ -82,7 +83,7 @@ FAKE_PLAUD = textwrap.dedent('''\
         sys.stdout.write("  id:           " + args[1] + "\\n")
         sys.stdout.write("  name:         " + os.environ.get("FAKE_PLAUD_NAME", "Named by the CLI") + "\\n")
         sys.stdout.write("  created_at:   2026-10-01T09:00:00\\n")
-        sys.stdout.write("  duration:     1h02m03s\\n")
+        sys.stdout.write("  duration:     " + os.environ.get("FAKE_PLAUD_DURATION", "1h02m03s") + "\\n")
         sys.exit(0)
     if mode == "hang" or (mode == "polish_hang" and polished):
         time.sleep(30)
@@ -93,6 +94,7 @@ FAKE_PLAUD = textwrap.dedent('''\
         sys.stderr.write("error: no polished block for this recording\\n")
         sys.exit(1)
     body = "" if mode == "empty" else ({polished!r} if polished else {raw!r})
+    body = body + os.environ.get("FAKE_PLAUD_TAIL", "")
     if out:
         open(out, "w", encoding="utf-8").write(body)
     else:
@@ -245,10 +247,9 @@ class TestFetchOneMetadata(FetchOneTestCase):
         self.assertIn("touch PWNED", self.shown())
 
     def test_explicit_flags_win_over_what_plaud_file_says(self):
-        proc = self.fetch(extra_env={"FAKE_PLAUD_NAME": "Named by the CLI"}) \
-            if False else subprocess.run(
-                [sys.executable, str(FETCH_ONE), "--id", "rec1", "--name", "Given name"],
-                capture_output=True, text=True, env=self._env(), timeout=60)
+        proc = subprocess.run(
+            [sys.executable, str(FETCH_ONE), "--id", "rec1", "--name", "Given name"],
+            capture_output=True, text=True, env=self._env(), timeout=60)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn('name: "Given name"', self.shown())
 
@@ -300,6 +301,77 @@ class TestFetchOneRobustness(FetchOneTestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("already cached", proc.stdout)
         self.assertTrue((self.cache_dir / "rec1.md").is_file())
+
+
+class TestFetchOneR2(FetchOneTestCase):
+    """What verify R2 found. Each of these was reproduced or read out of the code
+    before it was classified."""
+
+    def run_id(self, *args: str, mode: str = "ok", extra_env: dict | None = None) -> subprocess.CompletedProcess:
+        env = self._env(mode)
+        env.update(extra_env or {})
+        return subprocess.run([sys.executable, str(FETCH_ONE), "--id", "rec1", *args],
+                              capture_output=True, text=True, env=env, timeout=60)
+
+    def shown(self) -> str:
+        return self.cache_py("show", "rec1").stdout
+
+    def test_a_name_that_looks_like_an_option_can_still_be_cached(self):
+        """`--name -notes` is two argv items, and argparse reads the second as an
+        option. The transcript was already fetched, so the failure used to be
+        reported as exit 4 'nothing usable came back' — wrong on both counts."""
+        for name in ("-notes", "--x", "-"):
+            shutil.rmtree(self.cache_dir, ignore_errors=True)   # each name starts from an empty cache
+            proc = self.run_id(extra_env={"FAKE_PLAUD_NAME": name})
+            self.assertEqual(proc.returncode, 0, f"{name!r}: {proc.stderr}")
+            self.assertIn(f'name: "{name}"', self.shown(), name)
+
+    def test_a_recording_named_auth_failed_is_not_mistaken_for_a_logged_out_cli(self):
+        """The check searched all of stdout, and `plaud file` prints the name."""
+        proc = self.run_id(extra_env={"FAKE_PLAUD_NAME": "Investigating AUTH_FAILED errors"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Investigating AUTH_FAILED errors", self.shown())
+
+    def test_a_refresh_interrupted_before_the_polish_is_written_leaves_no_stale_polish(self):
+        """Raw is replaced first, polish second; a crash between them used to leave
+        the NEW raw beside the OLD polish, and `to_srt` prefers a polish file whenever
+        one exists. The old polish is now removed before anything is rewritten, so
+        every stopping point is internally consistent."""
+        self.assertEqual(self.run_id().returncode, 0)
+        self.assertIn(POLISHED_MARK, self.srt().stdout)
+        crash = (
+            "import os, sys\n"
+            f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
+            "import fetch_one\n"
+            "real = fetch_one._put\n"
+            "def patched(rec_id, body, *a):\n"
+            "    if '--kind' in a and 'polish' in a:\n"
+            "        os._exit(137)  # the process is killed right here\n"
+            "    return real(rec_id, body, *a)\n"
+            "fetch_one._put = patched\n"
+            "sys.argv = ['fetch_one.py', '--id', 'rec1', '--force']\n"
+            "sys.exit(fetch_one.main())\n")
+        env = self._env()
+        env["FAKE_PLAUD_TAIL"] = "[00:10 - 00:12] Speaker 1: refreshed content\n"
+        proc = subprocess.run([sys.executable, "-c", crash], capture_output=True, text=True,
+                              env=env, timeout=60)
+        self.assertEqual(proc.returncode, 137, proc.stderr)
+        out = self.srt()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("refreshed content", out.stdout)       # the new raw is what is read
+        self.assertNotIn(POLISHED_MARK, out.stdout)           # the old polish is gone
+
+    def test_a_malformed_timeout_setting_falls_back_with_a_warning(self):
+        proc = self.run_id(extra_env={"PLAUD_FETCH_TIMEOUT": "abc"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("PLAUD_FETCH_TIMEOUT", proc.stderr)
+
+    def test_the_duration_the_real_cli_prints_is_converted_to_milliseconds(self):
+        """Measured against the real CLI: `duration:     10m42s` for a 642000 ms
+        recording, the same value `list_files` reports."""
+        proc = self.run_id(extra_env={"FAKE_PLAUD_DURATION": "10m42s"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("duration_ms: 642000", self.shown())
 
 
 class TestFetchOneAndTheSyncCutoff(FetchOneTestCase):
