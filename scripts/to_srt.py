@@ -4,7 +4,7 @@
 The official Plaud MCP returns transcript text and nothing else — there is no
 subtitle export anywhere in its seven tools, and none in the CLI. Anyone cutting
 video, subtitling a lecture, or captioning a recorded class has to build the
-timing themselves. This does that, from the cache `plaud-index` already wrote, so
+timing themselves. This does that, from the cache `plaud-sync` already wrote, so
 it needs no network, no auth, and no re-fetch.
 
 Input is the cache's one-segment-per-line form:
@@ -1124,7 +1124,7 @@ def main() -> None:
         # line reporting it. The comment beside the drop warning named this
         # channel and only the one sentence being written at the time was fixed
         # — one root cause, three exits, two of them left open for two rounds.
-        sys.exit(f"error: {str(path)!r} not found — run the plaud-index skill first")
+        sys.exit(f"error: {str(path)!r} not found — run the plaud-sync skill first")
 
     # `utf-8-sig`, so a byte-order mark is consumed rather than left on line 1
     # where it defeats `SEGMENT`'s `^\[`. This matters most for polish files:
@@ -1350,7 +1350,7 @@ def main() -> None:
                       file=sys.stderr)
     if "complete: false" in completeness_source[:400]:
         print(f"⚠ {path.name!r} is marked incomplete — these subtitles cover only the "
-              f"part that was fetched. Re-run plaud-index first.", file=sys.stderr)
+              f"part that was fetched. Re-run plaud-sync first.", file=sys.stderr)
 
     # `build_cues` has always appended its trim corrections "when a list is
     # passed", and this call never passed one — so in the only shipped path the

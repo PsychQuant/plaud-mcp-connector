@@ -5,7 +5,7 @@ description: |
   just recording names. Use whenever the user asks which recording mentioned a
   topic, person, decision or number: "哪次會議談到 X", "which meeting did we
   discuss the budget", "找出提到 Kubernetes 的錄音", "search my transcripts for
-  X", "Plaud 全文搜尋". Runs on the transcripts `plaud-index` has already put in
+  X", "Plaud 全文搜尋". Runs on the transcripts `plaud-sync` has already put in
   the local cache, so it matches what was said rather than what a file is
   called, and it needs no network. The official Plaud MCP cannot answer these —
   its query matches recording NAMES only, over the newest 500 recordings.
@@ -16,7 +16,7 @@ argument-hint: "<search terms>"
 
 # Plaud Grep — search what was actually said
 
-Searches the local transcript cache built by `plaud-index`. Everything runs on
+Searches the local transcript cache built by `plaud-sync`. Everything runs on
 this machine: no API calls, no quota, no network.
 
 ## Steps
@@ -56,7 +56,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>"
 ```
 
 For the AI summary and action items of that recording, call the Plaud MCP's
-`get_note` tool with the same id (see `plaud-index` for tool-name resolution).
+`get_note` tool with the same id (see `plaud-sync` for tool-name resolution).
 
 ### 3. Answer with citations
 
@@ -71,11 +71,11 @@ A recording can be cached without being cached *completely* — the fetch loop h
 its page cap or was interrupted. Those hits carry:
 
 ```
-⚠ partially indexed — more transcript may exist; re-run plaud-index
+⚠ partially indexed — more transcript may exist; re-run plaud-sync
 ```
 
 Treat the result as a floor, not a total. Say the recording is only partly
-indexed and suggest re-running `plaud-index` before drawing conclusions from it.
+indexed and suggest re-running `plaud-sync` before drawing conclusions from it.
 This is not the same as "(unnamed)", which means the manifest lost the entry —
 different cause, different fix.
 
@@ -83,7 +83,7 @@ different cause, different fix.
 
 Empty results are ambiguous. Distinguish:
 
-- **Cache is empty** → `cache.py` says so; run `plaud-index` first.
+- **Cache is empty** → `cache.py` says so; run `plaud-sync` first.
 - **Cache is stale** → run `cache.py status` and compare the date range to what
   the user expects. A recording made after the last index run is not searchable.
   Say this explicitly instead of reporting "not found".
@@ -97,7 +97,7 @@ Never report "no such recording" when the real cause is an unindexed cache.
 
 ## Scope limit — be honest about it
 
-This searches **cached** transcripts only. Coverage equals whatever `plaud-index`
+This searches **cached** transcripts only. Coverage equals whatever `plaud-sync`
 last pulled. Before answering a question that depends on completeness ("did we
 *ever* discuss X?"), check `cache.py status` and state the covered date range
 alongside the answer.

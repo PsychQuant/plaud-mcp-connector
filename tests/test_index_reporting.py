@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""`plaud-index` must not report an absent transcript as a pending one (#37).
+"""`plaud-sync` must not report an absent transcript as a pending one (#37).
 
-Plaud's API cannot distinguish three states, and `plaud-index` reports all
+Plaud's API cannot distinguish three states, and `plaud-sync` reports all
 three with one phrase:
 
     never requested   → the user must press 產生 / Generate, or it never comes
@@ -29,7 +29,7 @@ import re
 import unittest
 
 SKILL = (pathlib.Path(__file__).resolve().parent.parent
-         / "skills" / "plaud-index" / "SKILL.md")
+         / "skills" / "plaud-sync" / "SKILL.md")
 
 # Phrasings that assert "it is coming" when the API cannot know that.
 PRESUMES_PENDING = (
@@ -169,7 +169,7 @@ class TestAbsentTranscriptsAreNotReportedAsPending(unittest.TestCase):
                 hits = [m.group(0) for m in pattern.finditer(text)]
                 self.assertEqual(
                     [], hits,
-                    f"plaud-index still says {hits!r} — {why}. Nine of the ten "
+                    f"plaud-sync still says {hits!r} — {why}. Nine of the ten "
                     f"most recent recordings on this account had no transcript "
                     f"because nobody asked for one (#37).",
                 )

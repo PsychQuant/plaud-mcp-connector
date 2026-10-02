@@ -1027,7 +1027,7 @@ class TestPutPolish(CacheTestCase):
 # Incremental listing: where paging is allowed to stop (issue #27)
 # ===========================================================================
 #
-# `plaud-index` used to walk every page of `list_files` on every run, even when
+# `plaud-sync` used to walk every page of `list_files` on every run, even when
 # three recordings were new. The saving is an early exit: stop paging once a
 # whole page is older than everything already cached.
 #

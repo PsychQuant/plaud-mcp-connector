@@ -20,13 +20,13 @@ that boundary is the point — the obvious "improvement" of actually executing
 them is what would make this untestable in CI.
 
 **What it does NOT cover, measured rather than assumed.** Only flags written
-inside a quoted invocation. A flag mentioned in prose — `plaud-index/SKILL.md`
+inside a quoted invocation. A flag mentioned in prose — `plaud-sync/SKILL.md`
 line 52 says "Keep the id set (`--ids-only`)" without ever quoting the command
 — is invisible here, and renaming it leaves this file green. That was checked,
 not guessed: an acid run renaming `--ids-only` did not go red.
 
 Extending to backticked flags was considered and rejected. The skills backtick
-plenty of flags that are not ours (`--days` and `--since` are plaud-index's own
+plenty of flags that are not ours (`--days` and `--since` are plaud-sync's own
 arguments; `--block` and `--polished` belong to the Plaud CLI), so the check
 would have to know which flags to claim, and getting that wrong turns a guard
 into noise. The honest scope is quoted invocations; prose stays a human
@@ -48,7 +48,7 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 # line continuations.
 #
 # Stopping at the first newline was the first draft, and it under-scanned
-# silently: the longest invocation in plaud-index/SKILL.md puts `--cutoff`,
+# silently: the longest invocation in plaud-sync/SKILL.md puts `--cutoff`,
 # `--prev-last` and `--anomaly-seen` on continuation lines, so the scan saw
 # `should-stop-paging \` and nothing else. Renaming `--anomaly-seen` left this
 # whole file green — a coverage hole in the thing built to close coverage holes.

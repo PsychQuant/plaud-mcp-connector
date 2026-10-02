@@ -211,7 +211,7 @@ class TestSegmentParsing(unittest.TestCase):
 
     # --- ranged form (#40) ---------------------------------------------
     #
-    # `plaud-index`'s CLI fast path writes `[start - end]`, and this parser
+    # `plaud-sync`'s CLI fast path writes `[start - end]`, and this parser
     # accepted only `[start]`, so every recording indexed the cheap way — the
     # way the README recommends — produced no subtitles at all. Every fixture
     # in this file used the other producer's shape, so the suite stayed green
@@ -2799,7 +2799,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("main", "config: PLAUD_SUBTITLE_SOURCE= is not one of —", "prefer"): "echoes the bad value",
         ("main", "error: no lines in looked like segments. Expec", "detail"):   "the composed diagnostic, checked by its parts",
         ("main", "error: no lines in looked like segments. Expec", "str(path)"): "a path",
-        ("main", "error: not found — run the plaud-index skill f", "str(path)"): "a path",
+        ("main", "error: not found — run the plaud-sync skill fi", "str(path)"): "a path",
         ("main", "error: refusing unsafe recording id:", "args.id"):            "echoes the rejected id",
         ("main", "note: could not read to check whether this rec", "exc.strerror"): "an OS message",
         ("main", "note: could not read to check whether this rec", "transcript.name"): "a filename",
