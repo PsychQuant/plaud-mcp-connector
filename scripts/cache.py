@@ -12,6 +12,7 @@ Subcommands
     show <id>         print one cached transcript
     should-stop-paging  may an incremental listing stop here? (page on stdin)
     mark-full-sweep   record that a listing was walked to its end, unscoped
+    find              resolve a recording by NAME (not full text) -> id, date, state
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
 
@@ -745,6 +746,40 @@ def cmd_mark_full_sweep(args) -> None:
     print(f"recorded a full listing sweep at {man['full_sweep_at']}")
 
 
+def _human_duration(raw) -> str:
+    """'642000' (ms) -> '10 min'; anything else is shown as it was stored."""
+    text = str(raw or "").strip()
+    return f"{int(text) // 60000} min" if text.isdigit() else text
+
+
+def cmd_find(args) -> None:
+    """List cached recordings whose NAME contains the query, newest first.
+
+    Names only. `search` is a full-text search in which the name is merely the
+    heading above the hits, so a recording whose talk mentions the words becomes
+    a "match" for a name it does not have — and a skill that resolves "the
+    recording the user named" from it delivers the wrong one (verify R1).
+
+    Exit 3 when nothing matches, the same convention `config.py get` uses for
+    "absent", so a caller branches on it instead of parsing prose.
+    """
+    needle = (args.name or "").strip().casefold()
+    if not needle:
+        sys.exit("error: find needs a non-empty name — an empty query would match every recording")
+    recs = _load_manifest().get("recordings", {})
+    hits = sorted(((k, v) for k, v in recs.items() if needle in str(v.get("name", "")).casefold()),
+                  key=lambda kv: str(kv[1].get("created_at", "")), reverse=True)
+    if not hits:
+        print(f"no cached recording is named like {args.name.strip()!r}", file=sys.stderr)
+        sys.exit(3)
+    print(f"{len(hits)} cached recording(s) named like {args.name.strip()!r}:")
+    for rec_id, rec in hits:
+        state = "complete" if _is_complete(rec) else "INCOMPLETE"
+        when = str(rec.get("created_at", ""))[:10] or "undated"
+        print(f"  {rec_id}  ·  {rec.get('name', '')}  ·  {when}  ·  "
+              f"{_human_duration(rec.get('duration_ms'))}  ·  {state}")
+
+
 def cmd_show(args) -> None:
     rec_id = _safe_id(args.id)
     kind = str(getattr(args, "kind", "transcript") or "transcript")
@@ -818,6 +853,10 @@ def main() -> None:
     p.add_argument("--case-sensitive", action="store_true")
     p.add_argument("--max-lines", type=int, default=5, help="context lines per recording")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser("find", help="resolve a recording by NAME; exits 3 when none matches")
+    p.add_argument("name", help="a case-insensitive substring of the recording's name")
+    p.set_defaults(func=cmd_find)
 
     p = sub.add_parser("show", help="print one cached transcript, summary, polish or outline")
     p.add_argument("id")
