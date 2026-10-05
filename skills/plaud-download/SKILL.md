@@ -1,10 +1,10 @@
 ---
-name: plaud-sync
+name: plaud-download
 description: |
   Build or refresh the local Plaud transcript cache so recordings can be searched
   by their CONTENT, not just their filename. Use when the user says "index my
   Plaud recordings", "sync Plaud transcripts", "重建 Plaud 索引", "更新逐字稿快取",
-  or when a plaud-grep search reports the cache is empty or stale. Also use before
+  or when a plaud-search search reports the cache is empty or stale. Also use before
   any question of the form "which recording mentioned X" — that question cannot be
   answered until the transcripts are on disk.
   Also triggers in the languages Plaud localises for (its own hreflang list):
@@ -16,7 +16,7 @@ argument-hint: "[--days N | --all | --since YYYY-MM-DD]"
 
 The official Plaud MCP matches `query` against **recording names only**, across the
 **newest 500 recordings**. There is no server-side full-text search. This skill
-fetches transcript bodies once and caches them so `plaud-grep` can search them
+fetches transcript bodies once and caches them so `plaud-search` can search them
 locally, forever, offline.
 
 Incremental by design: a re-run only fetches recordings that are not already
@@ -381,7 +381,7 @@ case is reading a property of an array. Treat `[]` as "not transcribed yet, skip
 
 It returns **one page of utterances** with a `next_cursor` for the rest. Calling
 it once and caching the result was the v0.1.0 bug: every recording was truncated
-to its first page, and `plaud-grep` then reported "no match" for words that were
+to its first page, and `plaud-search` then reported "no match" for words that were
 spoken — a wrong answer that looks like a correct one.
 
 Loop per recording, accumulating pages:
@@ -408,7 +408,7 @@ Each guard earns its place:
 
 - **`block="transaction"` explicitly.** It is the API default, but writing it
   down keeps the next person from swapping in `transaction_polish`, whose
-  AI-cleaned wording would break `plaud-grep`'s promise that the cache holds what
+  AI-cleaned wording would break `plaud-search`'s promise that the cache holds what
   was actually said.
 - **`limit=200`, not the 500 maximum.** 500 is legal but untested here, and the
   API's own default of 50 suggests pages are sized to bound response size. 200
@@ -449,7 +449,7 @@ warning, and resumes next run.
 
 Normalise whatever `get_transcript` returns into **one segment per line**, keeping
 the timestamp and speaker label inline, e.g. `[00:12:03] Speaker 1: ...`. One
-segment per line is what makes `plaud-grep`'s line-level hits map back to a point
+segment per line is what makes `plaud-search`'s line-level hits map back to a point
 in the audio.
 
 If a recording has no transcript, skip it and say so — `cache.py put` refuses an

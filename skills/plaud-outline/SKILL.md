@@ -10,7 +10,7 @@ description: |
   "de quoi parlait la réunion", "その会議は何の話だったか", "di cosa parlava la riunione",
   "waar ging die opname over", "sobre o que foi a reunião", "cuộc họp đó nói về gì",
   "การประชุมนั้นเกี่ยวกับอะไร", "mesyuarat itu tentang apa", "عمّ كان الاجتماع".
-  Not for finding an exact sentence — that is plaud-grep.
+  Not for finding an exact sentence — that is plaud-search.
 ---
 
 # Plaud Outline — the shape of a recording, cheaply
@@ -34,8 +34,8 @@ the cost of reading it.
 
 | The question | The tool |
 |---|---|
-| Who said what, at exactly which second | `plaud-grep` |
-| What was decided | the cached summary (`plaud-grep` finds those too, marked `[summary]`) |
+| Who said what, at exactly which second | `plaud-search` |
+| What was decided | the cached summary (`plaud-search` finds those too, marked `[summary]`) |
 | **How this recording is laid out, and where to jump** | **here** |
 
 Cached but deliberately kept out of search — see "What an outline is not" below.
@@ -83,7 +83,7 @@ reprocessed. There is no staleness check: at 2,502 B against a transcript's
 stale.
 
 Either way it is small. Reading it into the conversation is fine — that is the
-point of this skill. A full transcript is not, and `plaud-sync` exists so you
+point of this skill. A full transcript is not, and `plaud-download` exists so you
 never have to.
 
 ### 3. Report
@@ -103,7 +103,7 @@ transcript segments: the outline *skips things*. So:
 
 - "the outline does not mention X" is **not** evidence that X was not discussed.
   Say "the outline does not list it — want me to search the transcript?" and let
-  `plaud-grep` answer properly.
+  `plaud-search` answer properly.
 - Never present an outline as coverage of a whole recording.
 
 **It is cached, and it is not searched.** Cache it after fetching so the next
@@ -116,7 +116,7 @@ plaud transcript "<id>" --block outline -o "$tmp" 2>/dev/null && \
 rm -f "$tmp"
 ```
 
-It writes to `outline/`, which `plaud-grep` skips — the same treatment
+It writes to `outline/`, which `plaud-search` skips — the same treatment
 `polish/` gets, for the same reason. The rule is not "AI-written text is
 excluded": summaries are AI-written and **are** searched, because a summary is
 new content and searching it reaches things nothing else reaches. A polish is

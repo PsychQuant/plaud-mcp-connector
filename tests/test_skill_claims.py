@@ -225,7 +225,7 @@ def offending_claims(description: str) -> list[str]:
     """Clauses making an exclusivity claim without naming what it excludes.
 
     Extracted so the rule can be tested against synthetic input. The first
-    version of this file only exercised the rule through `plaud-grep`'s live
+    version of this file only exercised the rule through `plaud-search`'s live
     wording, via an `or "cannot" in sentence` branch that production never
     used — so the test named "a qualified claim is accepted" was checking a
     path the guard does not have. That is the #22 shape, inside the file
@@ -499,7 +499,7 @@ class TestSentenceSplitting(unittest.TestCase):
         loud. The dangerous direction is the reverse only if a key were a
         substring; it is not. This keeps the splitter honest either way.
         """
-        p = SKILLS_DIR / "plaud-grep" / "SKILL.md"
+        p = SKILLS_DIR / "plaud-search" / "SKILL.md"
         self.assertGreater(len(sentences(_description(p))), 3,
                            "the description came back as one blob")
 
@@ -800,7 +800,7 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
             # still an enumeration, one line away.
             #
             # Anything sentence-shaped is checked now: long enough to be a
-            # message, with a space in it. `key: value` and `plaud-sync` fall
+            # message, with a space in it. `key: value` and `plaud-download` fall
             # under that on length and shape, and erring toward checking more is
             # the right direction for a guard whose failure mode has twice been
             # "did not look".

@@ -23,8 +23,8 @@ SKILLS_DIR = REPO / "skills"
 DOC_FILES = [REPO / "README.md", *sorted((REPO / "docs").glob("*.md"))]
 
 # `plaud-<word>` in backticks — how every doc here refers to a skill. Bare
-# mentions are deliberately not matched: "the plaud-grep path" in a sentence is
-# prose, while `plaud-grep` is a claim that the thing exists.
+# mentions are deliberately not matched: "the plaud-search path" in a sentence is
+# prose, while `plaud-search` is a claim that the thing exists.
 SKILL_MENTION = re.compile(r"`(plaud-[a-z0-9-]+)`")
 
 # Skills that ship inside Plaud's own npm package, not this repo.
@@ -45,6 +45,13 @@ OFFICIAL_SKILLS = {
     "plaud-digest",
     "plaud-export",
 }
+
+# Skills for whoever maintains this repo, not for whoever installs the plugin.
+# They live under .claude/skills/ — a repo-level location the plugin install does
+# not load — so a user's `/` menu never lists them. They are still real skills, so
+# docs may name them and the directory/frontmatter rule applies to them too.
+MAINTAINER_SKILLS_DIR = REPO / ".claude" / "skills"
+MAINTAINER_SKILLS = {"plaud-repo-audit"}
 
 
 def skill_dirs():
@@ -106,7 +113,7 @@ class TestSkillNames(unittest.TestCase):
             if not doc.is_file():
                 continue
             for mention in sorted(set(SKILL_MENTION.findall(doc.read_text(encoding="utf-8")))):
-                if mention in existing or mention in OFFICIAL_SKILLS:
+                if mention in existing or mention in OFFICIAL_SKILLS or mention in MAINTAINER_SKILLS:
                     continue
                 unresolved.append(f"{doc.relative_to(REPO)} references `{mention}`")
         self.assertEqual(
@@ -115,24 +122,40 @@ class TestSkillNames(unittest.TestCase):
             "docs name skills that are neither ours nor known-official:\n  "
             + "\n  ".join(unresolved)
             + f"\n\nours: {sorted(existing)}"
+            + f"\nmaintainer-only: {sorted(MAINTAINER_SKILLS)}"
             + f"\nofficial (measured): {sorted(OFFICIAL_SKILLS)}"
             + "\n\nIf it is ours, the rename missed a file. If it is Plaud's, run"
-            " plaud-repo-audit and add it to OFFICIAL_SKILLS with the version"
-            " you measured — do not just append the name to make this pass.",
+            " plaud-repo-audit (.claude/skills/plaud-repo-audit/) and add it to"
+            " OFFICIAL_SKILLS with the version you measured — do not just append"
+            " the name to make this pass.",
         )
+
+    def test_our_skill_names_do_not_collide_with_official_ones(self):
+        """Plaud's own skills and ours share one `/` menu. A shared name makes the
+        user's command ambiguous, and which one wins is not under our control."""
+        clashes = sorted({s.name for s in skill_dirs()} & OFFICIAL_SKILLS)
+        self.assertEqual([], clashes, f"skills/ reuses official skill names: {clashes}")
 
 
 class TestIntentNames(unittest.TestCase):
-    """The two renames of #65, pinned so they cannot quietly revert.
+    """The renames of #65 and #76, pinned so they cannot quietly revert.
 
     `plaud-srt` named a file format and `plaud-index` named an internal mechanism;
-    neither is what a person types when they want something done. The names are
-    now `plaud-to-srt` ("turn a recording into SRT") and `plaud-sync` ("bring
-    transcripts down"). If either old name reappears as a directory, the old
-    muscle memory and the new docs are pointing at two different skills.
+    neither is what a person types when they want something done. #65 renamed them
+    `plaud-to-srt` ("turn a recording into SRT") and `plaud-sync`; #76 then renamed
+    `plaud-sync` to `plaud-download`, `plaud-grep` to `plaud-search` and
+    `plaud-audio` to `plaud-download-audio`, so each intent has one verb. If any old
+    name reappears as a directory, the old muscle memory and the new docs are
+    pointing at two different skills.
     """
 
-    RENAMED = {"plaud-srt": "plaud-to-srt", "plaud-index": "plaud-sync"}
+    RENAMED = {
+        "plaud-srt": "plaud-to-srt",
+        "plaud-index": "plaud-download",  # was plaud-sync between #65 and #76
+        "plaud-sync": "plaud-download",
+        "plaud-audio": "plaud-download-audio",
+        "plaud-grep": "plaud-search",
+    }
 
     def test_new_names_exist_and_old_names_are_gone(self):
         existing = {s.name for s in skill_dirs()}

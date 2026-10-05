@@ -482,7 +482,7 @@ class TestCliSmoke(unittest.TestCase):
 # ===========================================================================
 # Paging completeness (issue #8)
 #
-# `complete` decides whether plaud-grep warns that a search may have missed
+# `complete` decides whether plaud-search warns that a search may have missed
 # text. If it can be set wrongly without anything noticing, the warning never
 # fires and a truncated cache looks authoritative — the same silent-wrong-answer
 # shape as the grep BRE bug these tests exist for.
@@ -814,7 +814,7 @@ class TestRipgrepBranchGetsTheFix(CacheTestCase):
 #
 # What a person remembers is usually closer to the summary (the point) than to
 # the transcript (speech with all its filler). Summaries were never cached, so
-# plaud-grep could not reach them.
+# plaud-search could not reach them.
 #
 # A hit in a summary is AI-rewritten text, not something anybody said. It is
 # labelled for the same reason `[corrected]` is: quoting it as verbatim speech
@@ -1027,7 +1027,7 @@ class TestPutPolish(CacheTestCase):
 # Incremental listing: where paging is allowed to stop (issue #27)
 # ===========================================================================
 #
-# `plaud-sync` used to walk every page of `list_files` on every run, even when
+# `plaud-download` used to walk every page of `list_files` on every run, even when
 # three recordings were new. The saving is an early exit: stop paging once a
 # whole page is older than everything already cached.
 #

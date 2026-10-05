@@ -94,7 +94,7 @@ signal, so anything driven by the MCP alone has to fetch and find out.
 ### `plaud transcript` does not truncate
 
 This was the single unknown that could still produce a wrong answer, because
-`plaud-sync`'s CLI fast path marks what it writes as `complete` and has no
+`plaud-download`'s CLI fast path marks what it writes as `complete` and has no
 cursor to check that claim against.
 
 Measured: a recording the MCP reports as `total: 94` produced a file with

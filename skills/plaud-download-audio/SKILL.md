@@ -1,5 +1,5 @@
 ---
-name: plaud-audio
+name: plaud-download-audio
 description: |
   Get the original audio file back out of Plaud — the recording itself, not its
   transcript. Use when the user wants the audio to archive, to edit, to feed to
@@ -74,7 +74,7 @@ that, not a bug.
 
 ## Finding the recording
 
-If the user names a recording rather than an id, find it the way `plaud-grep`
+If the user names a recording rather than an id, find it the way `plaud-search`
 does — search the local cache, which matches on what was *said*, not just the
 name. Falling back to `plaud search` only matches names, and only across the
 newest 500.

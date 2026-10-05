@@ -19,7 +19,7 @@ vacuously.
 wording. The one error text it imitates (`[AUTH_FAILED] ... Run \\`plaud login\\``)
 was copied from a real unauthenticated run on 2026-10-02 with CLI 0.3.14; the
 rest of its behaviour (output format, `--polished`, `-o`) is taken from
-`skills/plaud-sync/SKILL.md`. Whether CLI 0.3.14 truncates a transcript is a
+`skills/plaud-download/SKILL.md`. Whether CLI 0.3.14 truncates a transcript is a
 measurement against a real recording, not something a fake can establish.
 
 Exit codes, as a contract (the skill branches on them):
@@ -377,7 +377,7 @@ class TestFetchOneR2(FetchOneTestCase):
 class TestFetchOneAndTheSyncCutoff(FetchOneTestCase):
     def test_fetching_one_recording_does_not_move_the_incremental_cutoff(self):
         """Found by verify R1. A cache that had a full sweep reports where an
-        incremental `plaud-sync` may stop paging. Fetching ONE newer recording used
+        incremental `plaud-download` may stop paging. Fetching ONE newer recording used
         to move that point to the new recording, so the next sync skipped every
         recording between the last real sync and it — silently."""
         self.assertEqual(self.cache_py(

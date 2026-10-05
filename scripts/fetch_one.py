@@ -37,7 +37,7 @@ stopping point holds either the old raw or the new raw, with no polish until the
 new one is written.
 
 The record is written with `--single-fetch`: it was not reached by walking the
-listing, so it must not move where an incremental `plaud-sync` may stop paging.
+listing, so it must not move where an incremental `plaud-download` may stop paging.
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def _run(cmd: list[str], **kw) -> tuple[int, str, str]:
 
 
 def _plaud_transcript(rec_id: str, *, polished: bool) -> tuple[int, str, str]:
-    """`plaud transcript` into a temp file, as `plaud-sync` does. Returns
+    """`plaud transcript` into a temp file, as `plaud-download` does. Returns
     (returncode, body, diagnostics)."""
     with tempfile.TemporaryDirectory(prefix="plaud-fetch-one-") as tmp:
         out = pathlib.Path(tmp) / "transcript.txt"

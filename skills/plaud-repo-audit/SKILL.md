@@ -172,7 +172,7 @@ A list of differences is not the deliverable. **What it means for us** is.
   - §4 sizes: CLI not authenticated this run
 
 ### What it means for us
-  - `--since` would let plaud-sync do incremental listing without paging the
+  - `--since` would let plaud-download do incremental listing without paging the
     whole library (currently an open gap)
   - `plaud-remind` overlaps nothing we ship — no action
 ```

@@ -4,7 +4,7 @@
 The official Plaud MCP returns transcript text and nothing else — there is no
 subtitle export anywhere in its seven tools, and none in the CLI. Anyone cutting
 video, subtitling a lecture, or captioning a recorded class has to build the
-timing themselves. This does that, from the cache `plaud-sync` already wrote, so
+timing themselves. This does that, from the cache `plaud-download` already wrote, so
 it needs no network, no auth, and no re-fetch.
 
 Input is the cache's one-segment-per-line form:

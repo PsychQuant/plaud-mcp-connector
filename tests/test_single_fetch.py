@@ -9,7 +9,7 @@ the assumption: it fetches one recording that is not in a walked listing at all.
 Reproduced during verify, with nothing but `cache.py`: a cache whose newest
 record is from March and which had a full sweep reports a cutoff of 2026-02-28;
 after one single-recording fetch of an October recording it reports 2026-10-01.
-The next incremental `plaud-sync` stops at the first page older than that, and
+The next incremental `plaud-download` stops at the first page older than that, and
 every recording between March and October is skipped — no error, no count.
 `list_cutoff`'s own docstring records the same trap: `complete` says one
 transcript came down whole, and says nothing about whether the listing was walked.
@@ -79,7 +79,7 @@ class TestSingleFetchDoesNotMoveTheCutoff(SingleFetchCutoffTestCase):
         the flag — and that walk really did cover everything up to its date."""
         self.swept_cache_with_old_record()
         self.put("new1", "2026-10-02T09:00:00", "--single-fetch")
-        self.put("new1", "2026-10-02T09:00:00")  # what plaud-sync's put writes
+        self.put("new1", "2026-10-02T09:00:00")  # what plaud-download's put writes
         self.assertEqual(self.cutoff(), "2026-10-01T09:00:00")
 
     def test_a_cache_holding_only_single_fetch_records_has_no_cutoff(self):

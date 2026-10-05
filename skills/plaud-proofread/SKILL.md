@@ -5,7 +5,7 @@ description: |
   searching for a term finds it even when Plaud heard it wrong. Use when the user
   says a name or technical term is transcribed incorrectly, asks to proofread or
   clean up a transcript, mentions 校對逐字稿 / 專有名詞聽錯 / 人名錯字, or when a
-  plaud-grep search for a term the user is certain was said returns nothing.
+  plaud-search search for a term the user is certain was said returns nothing.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Namen falsch transkribiert", "nombres mal transcritos", "noms mal transcrits", "固有名詞が誤って文字起こしされている", "nomi trascritti male", "namen verkeerd getranscribeerd", "nomes transcritos incorretamente", "tên bị ghi sai", "ชื่อถอดความผิด", "nama tersalah transkrip", "أسماء مكتوبة خطأ".
 argument-hint: "<recording id or name> [--context <doc path>]"
@@ -18,7 +18,7 @@ result **alongside** the original, never on top of it.
 
 ## Why this is the ceiling on search
 
-`plaud-grep` can only find words that made it into the transcript. If Plaud's ASR
+`plaud-search` can only find words that made it into the transcript. If Plaud's ASR
 heard "Iverson" as "艾佛森", searching `Iverson` returns nothing — and the answer
 "that was never discussed" is wrong. No amount of fixing the search fixes this;
 the fault is upstream in the text.
@@ -35,7 +35,7 @@ hand-rolled substitute:
 ```
 plaud-proofread needs the bestasr plugin, which supplies the proofreading
 pipeline (context-ingest → srt-proofread). Install it, or skip proofreading —
-plaud-grep still works on the raw transcripts, it just cannot find words the
+plaud-search still works on the raw transcripts, it just cannot find words the
 ASR misheard.
 ```
 
@@ -77,7 +77,7 @@ cp <proofread output> "${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/proofrea
 The raw transcript is what was actually captured; the proofread copy is a derived
 artefact built from a term list that may itself be wrong. Overwriting the original
 throws away the only record of what the ASR really produced, and there is no way
-back. Both are searched — `plaud-grep` recurses into `proofread/`.
+back. Both are searched — `plaud-search` recurses into `proofread/`.
 
 ### 4. Confirm the correction landed
 

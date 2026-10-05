@@ -53,7 +53,7 @@ tool directly. It opens a browser for OAuth and stores the token in
 Requirements: **Node.js ≥ 20** and a Plaud account with Cloud Sync (PCS) enabled.
 
 **Strongly recommended for large libraries**: `npm install -g @plaud-ai/cli`.
-With the CLI present, `plaud-sync` writes transcripts straight to disk instead of
+With the CLI present, `plaud-download` writes transcripts straight to disk instead of
 reading every one through the model context — the difference between a few minutes
 and a very expensive afternoon on a library of hundreds. Note the CLI keeps its own
 login (`plaud login`), separate from the MCP's.
@@ -64,11 +64,14 @@ login (`plaud login`), separate from the MCP's.
 
 ## Skills
 
-As of v0.11.0 two skills are renamed so the name says what you would type to get
-the thing done. plaud-index is now `plaud-sync`; plaud-srt is now `plaud-to-srt`. The old
-names no longer exist, and nothing in your cache needs migrating.
+As of v0.12.0 the skill names say what you would type to get the thing done. Old
+names are written here without backticks on purpose: a name in backticks is a claim
+that the skill exists. plaud-srt is now `plaud-to-srt`; plaud-index, which became
+plaud-sync, is now `plaud-download`; plaud-grep is now `plaud-search`; plaud-audio is
+now `plaud-download-audio`. The old names no longer exist, and nothing in your cache
+needs migrating.
 
-### `plaud-sync` — land transcripts on disk
+### `plaud-download` — land transcripts on disk
 
 Walks `list_files`, fetches `get_transcript` for anything not already cached, and
 writes one markdown file per recording to `~/.plaud-connector/cache/`. Incremental:
@@ -98,7 +101,7 @@ trade when almost nothing is new.
 index my Plaud recordings from 2026-01-01
 ```
 
-### `plaud-grep` — search what was actually said
+### `plaud-search` — search what was actually said
 
 Regex search across the cached transcripts. Runs entirely locally: no API calls,
 no quota, no network. Results group per recording, newest first, with the matching
@@ -132,7 +135,7 @@ So a subtitle from the CLI path can appear up to a second early.
 
 Where the cache keeps the ends they are used as given. The CLI path does, at that
 one-second resolution. `plaud-to-srt`'s MCP path does, in milliseconds.
-`plaud-sync`'s MCP path writes start-only lines, so for a recording synced that way
+`plaud-download`'s MCP path writes start-only lines, so for a recording synced that way
 a cue runs until the next one begins and the final cue gets a four-second guess.
 The CLI is still the cheaper way to sync, because the text never passes through
 the conversation.
@@ -226,7 +229,7 @@ first time a recording has both versions you get asked once, shown one line of
 your own recording rendered both ways, and the answer is remembered in
 `~/.plaud-connector/config.json`.
 
-Search does not follow that preference and cannot be made to. `plaud-grep` keeps
+Search does not follow that preference and cannot be made to. `plaud-search` keeps
 matching the verbatim text, because what you remember is what someone *said*,
 not what an AI tidied it into. Both versions sit in the cache; only one of them
 is searched, so a hit is never counted twice.
@@ -250,7 +253,7 @@ plugin.
 proofread the research meeting transcript against these slides
 ```
 
-### `plaud-audio` — get the original recording back
+### `plaud-download-audio` — get the original recording back
 
 Downloads the audio file itself, not its transcript. Useful for archiving, for
 editing, or for running a different ASR over it.
@@ -310,7 +313,7 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
 ```
 
 Three more commands exist for the incremental listing. They are called by
-`plaud-sync`, not by hand, but they are the answer to "why did it stop
+`plaud-download`, not by hand, but they are the answer to "why did it stop
 paging there" when a run looks wrong:
 
 | Command | Answers |
@@ -326,7 +329,7 @@ nothing else makes it visible.
 ## Limits — stated plainly
 
 - **Search covers what you indexed.** A recording made after your last
-  `plaud-sync` run is not searchable. `cache.py status` prints the covered date
+  `plaud-download` run is not searchable. `cache.py status` prints the covered date
   range; the skill is instructed to report it rather than answer "not found".
 - **An incremental run is a fast path, not a completeness guarantee.** It stops
   listing once it is past everything it holds. A recording that reaches the
