@@ -20,6 +20,9 @@ What it compares, and what it deliberately does not:
   is used.
 * Our own installed copy is skipped, by the name in `.claude-plugin/plugin.json`.
 * Also reports two of OUR skills declaring the same name.
+* NOT scanned: skills under ~/.claude/skills and any project's .claude/skills. Those
+  are not plugin installs, so they are not in the cache this reads; a name clash with
+  one of them would not be reported.
 
 Exit status: 0 clean (or nothing installed to compare against), 1 collision found,
 2 the repo has no skills/ directory to read.
