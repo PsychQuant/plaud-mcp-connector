@@ -47,8 +47,9 @@ OFFICIAL_SKILLS = {
 }
 
 # Skills for whoever maintains this repo, not for whoever installs the plugin.
-# They live under .claude/skills/ — a repo-level location the plugin install does
-# not load — so a user's `/` menu never lists them. They are still real skills, so
+# They live under .claude/skills/ — a repo-level location a plugin install is not
+# expected to load (unconfirmed until the first release that ships this) — so a user's
+# `/` menu should not list them. They are still real skills, so
 # docs may name them and the directory/frontmatter rule applies to them too.
 MAINTAINER_SKILLS_DIR = REPO / ".claude" / "skills"
 MAINTAINER_SKILLS = {"plaud-repo-audit"}

@@ -199,5 +199,120 @@ class InstalledStateNotJustCache(unittest.TestCase):
         self.assertEqual(0, r.returncode, r.stdout + r.stderr)
 
 
+class AGateThatCannotReadItsInputMustNotSayClean(unittest.TestCase):
+    """A collision check that exits 0 when it understood nothing is worse than no check:
+    it reads as "no collisions". And a crash must not look like a collision either, since
+    1 means "collision found" (#76 verify R2)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.cache = self.tmp / "cache"
+        self.cache.mkdir()
+        self.repo = self.tmp / "repo"
+        (self.repo / "skills").mkdir(parents=True)
+        write_skill(self.repo / "skills", "plaud-search")
+        self.installed_file = self.tmp / "installed_plugins.json"
+
+    def run_with_record(self, text, *extra):
+        if text is not None:
+            self.installed_file.write_text(text, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache),
+             "--installed-file", str(self.installed_file), *extra],
+            capture_output=True, text=True)
+
+    def test_a_record_with_no_plugins_key_is_not_clean(self):
+        for body in ('{"version": 3, "installed": {}}', '{}', '{"plugins": []}', '[]'):
+            with self.subTest(body=body):
+                r = self.run_with_record(body)
+                self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+                self.assertIn("install record", (r.stdout + r.stderr).lower())
+
+    def test_an_entry_that_is_not_a_list_of_objects_is_not_clean(self):
+        for body in ('{"plugins": {"a@m": {"installPath": "/x"}}}', '{"plugins": {"a@m": ["not-an-object"]}}',
+                     '{"plugins": {"a@m": [{"installPath": 7}]}}'):
+            with self.subTest(body=body):
+                r = self.run_with_record(body)
+                self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+
+    def test_an_explicit_installed_file_that_is_missing_names_the_file(self):
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache),
+             "--installed-file", str(self.tmp / "nope.json")], capture_output=True, text=True)
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+        self.assertIn("nope.json", r.stdout + r.stderr)
+
+    def test_an_explicit_installed_file_that_is_not_json_is_an_error_not_a_fallback(self):
+        r = self.run_with_record("{not json")
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("cache only", (r.stdout + r.stderr).lower())
+
+    def test_an_empty_plugins_map_is_legitimately_clean(self):
+        r = self.run_with_record('{"version": 2, "plugins": {}}')
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+
+    def test_the_clean_line_says_how_many_installed_plugins_were_compared(self):
+        make_plugin(self.cache, "mkt", "other", "1.0.0", ["unrelated"])
+        entry = {"scope": "user", "version": "1.0.0", "installPath": str(self.cache / "mkt" / "other" / "1.0.0")}
+        r = self.run_with_record(__import__("json").dumps({"version": 2, "plugins": {"other@mkt": [entry]}}))
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        self.assertRegex(r.stdout, r"compared against 1 installed plugin")
+
+    def test_an_install_path_that_does_not_exist_is_reported_not_skipped_silently(self):
+        entry = {"scope": "user", "version": "1.0.0", "installPath": str(self.tmp / "gone")}
+        r = self.run_with_record(__import__("json").dumps({"version": 2, "plugins": {"other@mkt": [entry]}}))
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+        self.assertIn("other@mkt", r.stdout + r.stderr)
+
+    def test_one_plugin_recorded_twice_is_reported_once(self):
+        make_plugin(self.cache, "mkt", "other", "1.0.0", ["plaud-search"])
+        entry = {"scope": "user", "version": "1.0.0", "installPath": str(self.cache / "mkt" / "other" / "1.0.0")}
+        project = dict(entry, scope="project", projectPath="/somewhere")
+        r = self.run_with_record(__import__("json").dumps({"version": 2, "plugins": {"other@mkt": [entry, project]}}))
+        self.assertEqual(1, r.returncode, r.stdout + r.stderr)
+        self.assertEqual(1, r.stdout.count("`plaud-search` is also shipped by"), r.stdout)
+
+    def test_the_cache_fallback_also_honours_a_disabled_plugin(self):
+        import json
+        make_plugin(self.cache, "mkt", "other", "1.0.0", ["plaud-search"])
+        settings = self.tmp / "settings.json"
+        settings.write_text(json.dumps({"enabledPlugins": {"other@mkt": False}}), encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache),
+             "--settings", str(settings)], capture_output=True, text=True)
+        self.assertEqual(0, r.returncode, r.stdout + r.stderr)
+
+    def test_a_comment_only_name_value_is_not_taken_as_the_name(self):
+        base = self.cache / "mkt" / "other" / "1.0.0" / "skills" / "plaud-search"
+        base.mkdir(parents=True)
+        (base / "SKILL.md").write_text("---\nname: # just a comment\n---\nbody\n", encoding="utf-8")
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache)],
+            capture_output=True, text=True)
+        # falls back to the DIRECTORY name, which is plaud-search -> collision, rather than
+        # treating "# just a comment" as the declared name and missing it
+        self.assertEqual(1, r.returncode, r.stdout + r.stderr)
+
+    def test_bidi_and_line_separator_characters_are_not_echoed(self):
+        make_plugin(self.cache, "mkt", "evil\u202eplugin\u2028x", "1.0.0", ["plaud-search"])
+        r = subprocess.run(
+            [sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache)],
+            capture_output=True, text=True)
+        self.assertEqual(1, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("\u202e", r.stdout)
+        self.assertNotIn("\u2028", r.stdout)
+
+    def test_an_unexpected_failure_is_exit_2_not_the_collision_code(self):
+        # --repo is a file, so reading skills/ cannot succeed in any ordinary way
+        bogus = self.tmp / "afile"
+        bogus.write_text("x", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(SCRIPT), "--repo", str(bogus), "--plugins-dir", str(self.cache)],
+                           capture_output=True, text=True)
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

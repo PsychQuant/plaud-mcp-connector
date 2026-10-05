@@ -44,9 +44,12 @@ already on disk. `plaud-search`'s description does not name `plaud-find` today; 
 | Other plugins installed on the same machine | whoever installed them | `python3 scripts/check_skill_collisions.py`, run before a release |
 
 The third row cannot be a test, because the answer depends on the machine. The
-script reads the plugin cache, compares the newest installed version of each other
-plugin against `skills/`, and exits 1 on a shared name. Run it on the machine that
-will install the release, not only on a clean one.
+script reads the install record (`installed_plugins.json`), compares each other
+installed plugin that is not switched off in the user settings against `skills/`, and
+exits 1 on a shared name. It exits 2 when it cannot read its input, so a clean result
+always means it compared something, and its clean line says how many plugins. It does
+not scan `commands/`, user-level or project-level skills (#80). Run it on the machine
+that will install the release, not only on a clean one.
 
 ## Renames
 

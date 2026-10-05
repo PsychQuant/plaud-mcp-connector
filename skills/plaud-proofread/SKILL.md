@@ -4,7 +4,7 @@ description: |
   Correct ASR mishearings in cached Plaud transcripts using bestasr, so that
   searching for a term finds it even when Plaud heard it wrong. Use when the user
   says a name or technical term is transcribed incorrectly, asks to proofread or
-  clean up a transcript, mentions 校對逐字稿 / 專有名詞聽錯 / 人名錯字, or when a
+  clean up a transcript, mentions 校對逐字稿 / 專有名詞聽錯 / 人名錯字, or when
   a plaud-search lookup for a term the user is certain was said returns nothing.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Namen falsch transkribiert", "nombres mal transcritos", "noms mal transcrits", "固有名詞が誤って文字起こしされている", "nomi trascritti male", "namen verkeerd getranscribeerd", "nomes transcritos incorretamente", "tên bị ghi sai", "ชื่อถอดความผิด", "nama tersalah transkrip", "أسماء مكتوبة خطأ".
