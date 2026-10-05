@@ -69,7 +69,8 @@ names are written here without backticks on purpose: a name in backticks is a cl
 that the skill exists. plaud-srt is now `plaud-to-srt`; plaud-index, which became
 plaud-sync, is now `plaud-download`; plaud-grep is now `plaud-search`; plaud-audio is
 now `plaud-download-audio`. The old names no longer exist, and nothing in your cache
-needs migrating.
+needs migrating. `plaud-repo-audit` moved out of the skills you install; see its section
+below.
 
 ### `plaud-download` — land transcripts on disk
 
@@ -283,6 +284,10 @@ what was that meeting about
 ```
 
 ### `plaud-repo-audit` — re-measure this repo against the official surface
+
+For whoever maintains this repo, not for whoever installs the plugin. It lives in
+`.claude/skills/`, which the plugin install does not load, so it appears only when
+you work inside a clone of this repo.
 
 `docs/official-surface.md` is a snapshot of what Plaud's CLI and MCP actually do.
 This re-measures it and reports what changed, and what that means here.

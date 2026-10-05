@@ -130,6 +130,22 @@ class TestSkillNames(unittest.TestCase):
             " the name to make this pass.",
         )
 
+    def test_maintainer_skills_live_outside_the_shipped_surface(self):
+        """A maintainer skill under skills/ is shipped to every installer; under
+        .claude/skills/ it is not. The move is the whole point, so pin it."""
+        shipped = {s.name for s in skill_dirs()}
+        for name in sorted(MAINTAINER_SKILLS):
+            self.assertNotIn(
+                name, shipped, f"skills/{name}/ would ship to every user of the plugin"
+            )
+            skill_md = MAINTAINER_SKILLS_DIR / name / "SKILL.md"
+            self.assertTrue(skill_md.is_file(), f".claude/skills/{name}/SKILL.md is missing")
+            self.assertEqual(
+                frontmatter_name(skill_md),
+                name,
+                f".claude/skills/{name}/SKILL.md declares a different name than its directory",
+            )
+
     def test_our_skill_names_do_not_collide_with_official_ones(self):
         """Plaud's own skills and ours share one `/` menu. A shared name makes the
         user's command ambiguous, and which one wins is not under our control."""
