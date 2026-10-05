@@ -341,7 +341,12 @@ def capability_mentions(description: str) -> list[tuple[str, str]]:
 
 
 def _skills() -> list[pathlib.Path]:
-    return sorted(SKILLS_DIR.glob("*/SKILL.md"))
+    """Every skill whose description is a public claim about Plaud: the ones we ship
+    plus our maintainer skills under .claude/skills/. The repo-level spectra-* skills
+    are tooling for the repo, not about Plaud, so only plaud-* is picked up there."""
+    shipped = SKILLS_DIR.glob("*/SKILL.md")
+    maintainer = (REPO_ROOT / ".claude" / "skills").glob("plaud-*/SKILL.md")
+    return sorted([*shipped, *maintainer])
 
 
 class TestTheRuleItself(unittest.TestCase):
@@ -689,6 +694,13 @@ class TestLiveDescriptions(unittest.TestCase):
                         f"verbatim to ALLOWED_SENTENCES with the reason. "
                         f"Reading it is the mechanism (#43).")
 
+
+    def test_the_maintainer_skill_is_still_scanned_after_moving_out_of_skills(self):
+        """#76 moved plaud-repo-audit to .claude/skills/. Its description makes claims
+        about Plaud like any other, and a scan that only globbed skills/ would have
+        dropped it from this check without any test noticing."""
+        scanned = {p.parent.name for p in _skills()}
+        self.assertIn("plaud-repo-audit", scanned)
 
 class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
     """A closed list of signals in the operator's instructions must stay closed.
