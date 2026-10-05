@@ -14,7 +14,7 @@ description: |
   "Originalaufnahme herunterladen", "descargar el audio original", "télécharger l'audio original", "元の音声をダウンロード", "scarica l'audio originale", "originele audio downloaden", "baixar o áudio original", "tải âm thanh gốc", "ดาวน์โหลดเสียงต้นฉบับ", "muat turun audio asal", "تنزيل الصوت الأصلي".
 ---
 
-# Plaud Audio — get the recording itself back
+# Plaud Download Audio — get the recording itself back
 
 **Correction (2026-08-07).** An earlier version of this skill said the official
 MCP "has no tool for this at all". That was wrong, and it was wrong in an

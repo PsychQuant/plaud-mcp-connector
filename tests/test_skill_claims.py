@@ -694,7 +694,6 @@ class TestLiveDescriptions(unittest.TestCase):
                         f"verbatim to ALLOWED_SENTENCES with the reason. "
                         f"Reading it is the mechanism (#43).")
 
-
     def test_the_maintainer_skill_is_still_scanned_after_moving_out_of_skills(self):
         """#76 moved plaud-repo-audit to .claude/skills/. Its description makes claims
         about Plaud like any other, and a scan that only globbed skills/ would have

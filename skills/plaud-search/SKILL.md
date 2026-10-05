@@ -14,7 +14,7 @@ description: |
 argument-hint: "<search terms>"
 ---
 
-# Plaud Grep — search what was actually said
+# Plaud Search — search what was actually said
 
 Searches the local transcript cache built by `plaud-download`. Everything runs on
 this machine: no API calls, no quota, no network.

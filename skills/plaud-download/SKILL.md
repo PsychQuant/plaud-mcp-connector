@@ -4,7 +4,7 @@ description: |
   Build or refresh the local Plaud transcript cache so recordings can be searched
   by their CONTENT, not just their filename. Use when the user says "index my
   Plaud recordings", "sync Plaud transcripts", "重建 Plaud 索引", "更新逐字稿快取",
-  or when a plaud-search search reports the cache is empty or stale. Also use before
+  or when a plaud-search lookup reports the cache is empty or stale. Also use before
   any question of the form "which recording mentioned X" — that question cannot be
   answered until the transcripts are on disk.
   Also triggers in the languages Plaud localises for (its own hreflang list):
@@ -12,7 +12,7 @@ description: |
 argument-hint: "[--days N | --all | --since YYYY-MM-DD]"
 ---
 
-# Plaud Index — land transcripts on disk
+# Plaud Download — land transcripts on disk
 
 The official Plaud MCP matches `query` against **recording names only**, across the
 **newest 500 recordings**. There is no server-side full-text search. This skill

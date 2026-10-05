@@ -286,7 +286,7 @@ what was that meeting about
 ### `plaud-repo-audit` — re-measure this repo against the official surface
 
 For whoever maintains this repo, not for whoever installs the plugin. It lives in
-`.claude/skills/`, which the plugin install does not load, so it appears only when
+`.claude/skills/`, which a plugin install is not expected to load (to be confirmed after the first release that ships this), so it appears only when
 you work inside a clone of this repo.
 
 `docs/official-surface.md` is a snapshot of what Plaud's CLI and MCP actually do.

@@ -19,7 +19,7 @@ to type, which is the problem #76 set out to remove.
 
 | What the person wants | Verb | Skill |
 |---|---|---|
-| Bring transcripts to disk, by a scope they name | `download` | `plaud-download` |
+| Bring transcripts to disk, by a scope they name (the target; until #74 lands the skill still keeps an incremental cache) | `download` | `plaud-download` |
 | Bring the original recording back | `download` + `audio` | `plaud-download-audio` |
 | Find where something was said | `search` | `plaud-search` |
 | See what a recording covers, without reading it | `outline` | `plaud-outline` |
@@ -33,13 +33,13 @@ add a row here in the same change.
 `plaud-search` and the official `plaud-find` sit next to each other on purpose, and
 the difference is what they look at: `plaud-find` locates a recording by name, date
 or topic through Plaud's own listing; `plaud-search` looks inside the transcripts
-already on disk. Their descriptions must keep saying so.
+already on disk. `plaud-search`'s description does not name `plaud-find` today; keeping that difference visible is part of rewriting the descriptions in #74, and nothing enforces it yet.
 
 ## Three things share one menu
 
 | Source | Owned by | Checked how |
 |---|---|---|
-| Plaud's own skills (`OFFICIAL_SKILLS` in `tests/test_skill_names.py`) | Plaud | Test: our names must not reuse them |
+| Plaud's own skills (`OFFICIAL_SKILLS` in `tests/test_skill_names.py`) | Plaud | Test: our names must not reuse them. The list was measured at CLI/MCP 0.3.7 and has not been re-measured since (#77), so a pass proves only that there is no clash with that list |
 | This plugin's `skills/` | this repo | Test: directory name equals frontmatter `name:`; docs may only name skills that exist |
 | Other plugins installed on the same machine | whoever installed them | `python3 scripts/check_skill_collisions.py`, run before a release |
 
@@ -58,6 +58,6 @@ history lives in `TestIntentNames.RENAMED`.
 |---|---|---|---|
 | #65 | plaud-srt | `plaud-to-srt` | named a file format |
 | #65 | plaud-index | plaud-sync, then `plaud-download` | named an internal mechanism |
-| #76 | plaud-sync | `plaud-download` | "sync" promises a standing local-remote match, which this does not keep; the skill brings down what you ask for |
+| #76 | plaud-sync | `plaud-download` | "sync" promises a standing local-remote match; the skill is meant to bring down what you ask for (behavior arrives with #74, until then it still keeps an incremental cache) |
 | #76 | plaud-audio | `plaud-download-audio` | noun-only; now the same verb as its sibling |
 | #76 | plaud-grep | `plaud-search` | the name of a tool, not what a person says |
