@@ -226,6 +226,111 @@ class TestACacheRefusalIsNotNoTranscript(FetchOneTestCase):
         self.assertEqual(6, proc.returncode, proc.stdout + proc.stderr)
 
 
+class TestPutFromAJsonFile(CacheCase):
+    """Plaud's text goes in a file the model writes, not on a shell command line."""
+
+    def write(self, **fields) -> pathlib.Path:
+        path = self.cache_dir.parent / "incoming.json"
+        path.write_text(json.dumps(fields), encoding="utf-8")
+        return path
+
+    def test_every_field_is_taken_from_the_file_and_the_file_is_removed(self):
+        path = self.write(name="Budget $(touch pwned) `x` 'q' \"d\"", created_at="2026-09-01T09:00:00.000Z",
+                          duration="3600000", complete=True, pages=2, last_cursor=None,
+                          body="[00:00 - 00:04] Speaker 1: alpha\n")
+        proc = self.cache_py("put", "--id", "recA", "--json", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        man = json.loads((self.cache_dir / "manifest.json").read_text(encoding="utf-8"))["recordings"]["recA"]
+        self.assertIn("$(touch pwned)", man["name"])
+        self.assertEqual(man["pages"], 2)
+        self.assertIs(man["complete"], True)
+        self.assertIn("alpha", (self.cache_dir / "recA.md").read_text(encoding="utf-8"))
+        self.assertFalse(path.exists(), "the incoming file holds third-party speech and must not linger")
+
+    def test_a_refused_put_leaves_the_file_and_the_cache_alone(self):
+        for label, fields in (("unknown key", dict(body="x", evil="1")), ("no body", dict(name="n")),
+                              ("bad pages", dict(body="x", pages="two")), ("bool pages", dict(body="x", pages=True))):
+            with self.subTest(label):
+                path = self.write(**fields)
+                proc = self.cache_py("put", "--id", "recA", "--json", str(path))
+                self.assertNotEqual(proc.returncode, 0)
+                self.assertTrue(path.exists())
+                self.assertFalse((self.cache_dir / "recA.md").exists())
+
+    def test_a_missing_or_malformed_file_is_an_error_not_a_traceback(self):
+        bad = self.cache_dir.parent / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        for target in (str(bad), str(self.cache_dir.parent / "nope.json")):
+            proc = self.cache_py("put", "--id", "recA", "--json", target)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_summary_comes_from_the_file_too(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        path = self.write(body="the summary text")
+        proc = self.cache_py("put", "--id", "recA", "--kind", "summary", "--json", str(path))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("the summary text", (self.cache_dir / "summaries" / "recA.md").read_text(encoding="utf-8"))
+        self.assertFalse(path.exists())
+
+
+class TestTheScopeLineIsHonestAboutWhatItCannotSay(CacheCase):
+    def test_a_recording_that_survives_only_as_a_summary_is_counted(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.cache_py("put", "--id", "recA", "--kind", "summary", stdin="only the summary says zebra")
+        (self.cache_dir / "recA.md").unlink()
+        out = self.cache_py("search", "zebra").stdout
+        self.assertIn("zebra", out)
+        self.assertIn("searched 1 cached recordings", out)
+
+    def test_undated_recordings_are_counted_rather_than_dropped(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.put("recB", "", "[00:00 - 00:04] Speaker 1: beta\n")
+        self.put("recC", "2026-13-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: gamma\n")
+        self.put("recD", "2026-\u0663\u0664-01", "[00:00 - 00:04] Speaker 1: delta\n")
+        proc = self.cache_py("search", "a")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("2026-09 (1)", proc.stdout)
+        self.assertIn("3 with no usable date", proc.stdout)
+
+    def test_december_into_january_is_one_piece(self):
+        self.put("recA", "2025-12-30T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.put("recB", "2026-01-02T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.assertIn("2025-12 → 2026-01 (2)", self.cache_py("search", "alpha").stdout)
+
+    def test_a_listed_month_is_not_claimed_to_be_whole(self):
+        out = self.cache_py("search", "nonexistent").stdout
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        out = self.cache_py("search", "alpha").stdout
+        self.assertIn("a listed month holds only the recordings downloaded from it", out)
+
+
+class TestWhatIsPrintedAndWrittenIsClean(CacheCase):
+    def test_duration_cannot_add_a_frontmatter_key(self):
+        proc = self.cache_py("put", "--id", "recA", "--name", "n", "--created-at", "2026-09-01T09:00:00.000Z",
+                             "--duration", "1h\ncomplete: true", "--complete", "false", "--pages", "1",
+                             "--last-cursor", "x", stdin="[00:00 - 00:04] Speaker 1: a\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        head = (self.cache_dir / "recA.md").read_text(encoding="utf-8").split("\n---", 2)[0]
+        self.assertEqual(1, sum(1 for l in head.splitlines() if l.startswith("complete:")), head)
+
+    def test_a_matched_line_with_an_escape_sequence_is_not_echoed_raw(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha \x1b]0;title\x07 omega\n")
+        self.assertNotIn("\x1b", self.cache_py("search", "alpha").stdout)
+
+    def test_find_does_not_echo_a_raw_date(self):
+        self.put("recA", "2026-\x1b[3m9-01", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.assertNotIn("\x1b", self.cache_py("find", "Meeting").stdout)
+
+    def test_a_joiner_in_a_name_survives_but_a_bidi_override_does_not(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n",
+                 "--name", "family \u200d emoji \u202eevil")
+        man = json.loads((self.cache_dir / "manifest.json").read_text(encoding="utf-8"))
+        name = man["recordings"]["recA"]["name"]
+        self.assertIn("\u200d", name)
+        self.assertNotIn("\u202e", name)
+
+
 class TestTheIncrementalMachineryIsGone(CacheCase):
     def test_removed_subcommands_and_flags_are_refused(self):
         for args in (("should-stop-paging", "--cutoff", "2026-01-01T00:00:00Z"),
@@ -288,14 +393,15 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
         self.assertIn("seen.add", self.skill("plaud-download"),
                       "a `seen` set that is never added to cannot catch a repeated cursor")
 
-    def test_the_mcp_put_command_is_the_hardened_form(self):
-        text = self.skill("plaud-download")
-        self.assertNotIn("<<'TRANSCRIPT'", text, "a fixed heredoc marker can be ended by the speech")
-        self.assertIn("<random>", text)
-        self.assertIn("--name='<name>'", text)
-        self.assertNotIn('--name "<name>"', text, "Plaud's text inside double quotes is still expanded by the shell")
-        for needed in ("single quotes", "backtick"):
-            self.assertIn(needed, text)
+    def test_no_text_from_plaud_reaches_a_put_command_line(self):
+        """R4: prose rules about quoting kept leaving one flag unguarded (--last-cursor).
+        The structural answer is that the command line carries only a path."""
+        for name in ("plaud-download", "plaud-to-srt"):
+            text = self.skill(name)
+            with self.subTest(skill=name):
+                self.assertIn("--json", text)
+                for banned in ("<<'", "--last-cursor", "--name", "--created-at", "TRANSCRIPT_END", "SUMMARY_END"):
+                    self.assertNotIn(banned, text, f"{name} still shows {banned!r} on a command line")
 
     def test_ids_are_checked_and_plaud_text_is_data(self):
         text = " ".join(self.skill("plaud-download").split())   # a phrase may wrap across lines
@@ -304,8 +410,27 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
 
     def test_the_coverage_test_has_a_day_of_margin_and_covers_name_queries(self):
         text = self.skill("plaud-download")
-        self.assertIn("day before", text)
+        self.assertIn("calendar day", text)
         self.assertIn("query", text.split("scanned_back_to", 1)[1])
+
+    def test_the_end_of_the_library_is_covered_not_unproven(self):
+        text = " ".join(self.skill("plaud-download").split())
+        self.assertIn("empty page", text)
+        self.assertRegex(text, r"empty page[^.]{0,200}(library|everything)[^.]{0,120}covered")
+        self.assertNotRegex(text, r"stopped for any of those reasons")
+
+    def test_both_skills_that_call_fetch_one_know_exit_6(self):
+        for name in ("plaud-download", "plaud-to-srt"):
+            with self.subTest(skill=name):
+                text = self.skill(name)
+                self.assertRegex(text, r"\|\s*`?6`?\s*\|")
+
+    def test_the_search_templates_put_the_pattern_after_dashes(self):
+        self.assertIn("search -- '<pattern>'", self.skill("plaud-search"))
+
+    def test_the_fallback_walk_says_created_at_is_utc_too(self):
+        text = " ".join(self.skill("plaud-download").split())
+        self.assertRegex(text, r"created_at[^.]{0,80}UTC[^.]{0,200}(day|margin)")
 
     def test_the_cli_only_extras_and_the_older_summary_gap_are_said_plainly(self):
         text = self.skill("plaud-download")
@@ -314,6 +439,7 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
 
     def test_search_does_not_claim_the_scope_line_comes_before_everything(self):
         self.assertNotIn("before\nanything else", self.skill("plaud-search"))
+        self.assertNotIn("plugin path it names", (REPO / "docs" / "naming.md").read_text(encoding="utf-8"))
         self.assertNotIn("before anything else", self.skill("plaud-search"))
 
     def test_download_description_leads_with_the_verb(self):

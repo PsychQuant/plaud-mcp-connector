@@ -24,7 +24,7 @@ this machine: no API calls, no quota, no network.
 ### 1. Search
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<pattern>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<pattern>'
 ```
 
 `<pattern>` is a regular expression, case-insensitive by default. Useful forms:
@@ -55,8 +55,10 @@ searched 412 cached recordings, covering 2025-03 → 2025-11 (301), 2026-09 → 
 **Quote that line in your answer, every time.** The cache holds only what the user
 chose to download, so a search result describes that part and nothing else. The
 months are listed one piece at a time on purpose: 2025-11 and 2026-09 above are not
-connected, and nothing in between was searched. Put `--` before a pattern that
-starts with a dash, so it is read as a pattern and not as an option.
+connected, and nothing in between was searched. The `--` makes a pattern that
+starts with a dash a pattern and not an option. The pattern is the user's words in single quotes; a `'`, a backtick
+or a `$` in it becomes `.`, which matches any character, so the search can only get
+broader.
 
 ### 2. Read the surrounding context
 

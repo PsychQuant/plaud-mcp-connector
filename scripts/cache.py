@@ -115,11 +115,19 @@ def _without_legacy_keys(man: dict) -> dict:
     return man
 
 
+# Bidirectional overrides and isolates: they reorder what a terminal shows without
+# changing the bytes, so a name can read as something other than what it is.
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
+                           "\u2066\u2067\u2068\u2069")
+
+
 def _clean(text) -> str:
     """Plaud's text reaches a terminal and a YAML header. Control characters (an escape
-    sequence, a newline that would start a new header key, a bidi mark) are replaced by a
-    space, the way check_skill_collisions.py does for the same reason."""
-    return "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") else ch
+    sequence, a newline that would start a new header key), line and paragraph separators
+    and bidi overrides are replaced by a space. Other format characters stay: a zero-width
+    joiner is part of how some scripts and emoji sequences are spelled, and a name that
+    lost it would no longer match what the user types."""
+    return "".join(" " if unicodedata.category(ch) in ("Cc", "Zl", "Zp") or ch in _BIDI_CONTROLS else ch
                    for ch in str(text or ""))
 
 
@@ -218,12 +226,57 @@ def cmd_status(args) -> None:
             print(f"polished  : {polished} of {len(recs)} recordings (subtitles only)")
 
 
+# What a `put --json` file may hold, and the type each field must have. The point of the
+# file is that text from Plaud never sits on a shell command line: the model writes it with
+# a file tool and the command line carries a path.
+PUT_JSON_FIELDS = {"name": str, "created_at": str, "duration": str, "complete": bool,
+                   "pages": int, "last_cursor": (str, type(None)), "body": str}
+
+
+def _read_put_json(path: str) -> dict:
+    try:
+        data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        sys.exit(f"error: --json {path}: {exc}")
+    if not isinstance(data, dict):
+        sys.exit(f"error: --json {path}: expected a JSON object")
+    unknown = sorted(set(data) - set(PUT_JSON_FIELDS))
+    if unknown:
+        sys.exit(f"error: --json {path}: unknown field(s) {', '.join(map(repr, unknown))}; "
+                 f"allowed: {', '.join(PUT_JSON_FIELDS)}")
+    for key, value in data.items():
+        wanted = PUT_JSON_FIELDS[key]
+        if not isinstance(value, wanted) or (wanted is int and isinstance(value, bool)):
+            sys.exit(f"error: --json {path}: field {key!r} has the wrong type")
+    if "body" not in data:
+        sys.exit(f"error: --json {path}: no `body`")
+    return data
+
+
 def cmd_put(args) -> None:
+    json_path = getattr(args, "json", None)
+    if not json_path:
+        _put_record(args, sys.stdin.read())
+        return
+    data = _read_put_json(json_path)
+    body = data.pop("body")
+    for key, value in data.items():
+        setattr(args, key, ("true" if value else "false") if key == "complete" else value)
+    _put_record(args, body)
+    # The file held third-party speech in the clear; once it is in the cache it has no
+    # reason to stay anywhere else. A put that failed exits above and keeps it for a retry.
+    try:
+        pathlib.Path(json_path).unlink()
+    except OSError as exc:
+        print(f"warning: could not remove {json_path}: {exc}", file=sys.stderr)
+
+
+def _put_record(args, raw_body: str) -> None:
     rec_id = _safe_id(args.id)
     # Converge new writes on one normal form so the cache stops accumulating
     # entropy. This does not make normalize_pattern redundant — entries written
     # before this existed are still whatever the API sent.
-    body = unicodedata.normalize("NFC", sys.stdin.read())
+    body = unicodedata.normalize("NFC", raw_body)
     if not body.strip():
         sys.exit(f"error: empty transcript body for {rec_id} — refusing to cache a blank entry")
 
@@ -279,13 +332,14 @@ def cmd_put(args) -> None:
         )
 
     name, created_at = _clean(args.name).strip(), _clean(args.created_at).strip()
+    duration = _clean(args.duration).strip()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     front = [
         "---",
         f"id: {rec_id}",
         f'name: "{name.replace(chr(34), chr(39)).replace(chr(92), chr(47))}"',
         f"created_at: {created_at}",
-        f"duration_ms: {args.duration or ''}",
+        f"duration_ms: {duration}",
         f"complete: {'true' if complete else 'false'}",
         f"pages: {pages}",
         f"indexed_at: {_now()}",
@@ -299,7 +353,7 @@ def cmd_put(args) -> None:
     man["recordings"][rec_id] = {
         "name": name,
         "created_at": created_at,
-        "duration_ms": args.duration or "",
+        "duration_ms": duration,
         "chars": len(body),
         "complete": complete,
         "pages": pages,
@@ -354,9 +408,14 @@ def _hit_source(path: pathlib.Path) -> str:
 
 
 def _searched(man: dict) -> dict:
-    """The recordings a search can actually reach: in the manifest AND on disk. A manifest
-    entry whose file was cleared away is not searched, and must not be counted as if it was."""
-    return {k: v for k, v in man.items() if (CACHE_DIR / f"{k}.md").is_file()}
+    """The recordings a search can actually reach: in the manifest AND with a file that
+    search reads, the transcript or the summary. A manifest entry whose files were cleared
+    away is not searched and must not be counted as if it was."""
+    return {k: v for k, v in man.items()
+            if (CACHE_DIR / f"{k}.md").is_file() or (CACHE_DIR / "summaries" / f"{k}.md").is_file()}
+
+
+_MONTH = re.compile(r"(?a)([0-9]{4})-(0[1-9]|1[0-2])")
 
 
 def _month_pieces(recs: dict) -> str:
@@ -364,25 +423,30 @@ def _month_pieces(recs: dict) -> str:
     Months that follow each other are one piece; a month nothing was downloaded for is
     simply not there. Under range download a cache is a few pieces, so a single
     first-to-last span would read as continuous coverage — and a search that never saw
-    March would look as if it had."""
+    March would look as if it had. A recording without a usable date is counted at the end
+    instead of vanishing. The month is the one in Plaud's own timestamp, which is UTC."""
     counts: dict = {}
+    undated = 0
     for r in recs.values():
-        month = _clean(r.get("created_at", ""))[:7]
-        if len(month) == 7 and month[4] == "-" and (month[:4] + month[5:]).isdigit():
-            counts[month] = counts.get(month, 0) + 1
-    if not counts:
-        return "dates unknown"
-    pieces: list = []   # [first_month, last_month, count]
-    for month in sorted(counts):
-        year, mon = int(month[:4]), int(month[5:])
-        if pieces:
-            ly, lm = int(pieces[-1][1][:4]), int(pieces[-1][1][5:])
-            if (year, mon) == (ly + (lm == 12), 1 if lm == 12 else lm + 1):
-                pieces[-1][1] = month
-                pieces[-1][2] += counts[month]
-                continue
-        pieces.append([month, month, counts[month]])
-    return ", ".join(f"{a}{'' if a == b else f' → {b}'} ({n})" for a, b, n in pieces)
+        m = _MONTH.match(_clean(r.get("created_at", "")))
+        if m:
+            key = (int(m.group(1)), int(m.group(2)))
+            counts[key] = counts.get(key, 0) + 1
+        else:
+            undated += 1
+    pieces: list = []   # [first, last, count], each a (year, month)
+    for key in sorted(counts):
+        if pieces and key == ((pieces[-1][1][0] + (pieces[-1][1][1] == 12)),
+                              1 if pieces[-1][1][1] == 12 else pieces[-1][1][1] + 1):
+            pieces[-1][1] = key
+            pieces[-1][2] += counts[key]
+        else:
+            pieces.append([key, key, counts[key]])
+    fmt = lambda k: f"{k[0]:04d}-{k[1]:02d}"  # noqa: E731
+    parts = [f"{fmt(a)}{'' if a == b else f' → {fmt(b)}'} ({n})" for a, b, n in pieces]
+    if undated:
+        parts.append(f"{undated} with no usable date")
+    return ", ".join(parts) if parts else "dates unknown"
 
 
 def _scope_lines(man: dict) -> str:
@@ -396,12 +460,13 @@ def _scope_lines(man: dict) -> str:
     partial = sum(1 for r in reach.values() if not _is_complete(r))
     extra = f", {partial} incomplete" if partial else ""
     return (f"searched {len(reach)} cached recordings, covering {_month_pieces(reach)}{extra}\n"
-            "(months not listed have nothing downloaded — the cache holds only what has been "
-            "downloaded, not necessarily everything in Plaud)")
+            "(months not listed have nothing downloaded; a listed month holds only the "
+            "recordings downloaded from it — the cache holds only what has been downloaded, "
+            "not necessarily everything in Plaud)")
 
 
 def cmd_search(args) -> None:
-    if not CACHE_DIR.exists() or not any(CACHE_DIR.glob("*.md")):
+    if not CACHE_DIR.exists() or not any(CACHE_DIR.rglob("*.md")):
         sys.exit("error: cache is empty — run the plaud-download skill first")
 
     man = _load_manifest()["recordings"]
@@ -473,7 +538,7 @@ def cmd_search(args) -> None:
             print("   ⚠ partially indexed — more transcript may exist; download this recording again")
         for ln, source in lines[: args.max_lines]:
             tag = f" [{source}]" if source else ""
-            print(f"   │ {ln[:200]}{tag}")
+            print(f"   │ {_clean(ln[:200])}{tag}")
         if len(lines) > args.max_lines:
             print(f"   │ … {len(lines) - args.max_lines} more")
         present = {src for _, src in lines if src}
@@ -518,7 +583,7 @@ def cmd_find(args) -> None:
     print(f"{len(hits)} cached recording(s) named like {args.name.strip()!r}:")
     for rec_id, rec in hits:
         state = "complete" if _is_complete(rec) else "INCOMPLETE"
-        when = str(rec.get("created_at", ""))[:10] or "undated"
+        when = _clean(rec.get("created_at", ""))[:10] or "undated"
         print(f"  {rec_id}  ·  {_clean(rec.get('name', ''))}  ·  {when}  ·  "
               f"{_human_duration(rec.get('duration_ms'))}  ·  {state}")
 
@@ -557,6 +622,10 @@ def main() -> None:
                         "the same speech reworded, an outline is AI-written structure whose "
                         "timestamps are section starts, not citations); all three leave the "
                         "transcript, chars, and completeness untouched")
+    p.add_argument("--json", default=None, metavar="FILE",
+                   help="take name, created_at, duration, complete, pages, last_cursor and body "
+                        "from this JSON file instead of the flags and stdin, then delete it; "
+                        "used so text from Plaud is never on a shell command line")
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")

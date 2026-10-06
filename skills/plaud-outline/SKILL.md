@@ -61,7 +61,7 @@ If the user gave a name rather than an id, resolve it against the local cache â€
 that matches on what was *said*, not just on the filename:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<distinctive words>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<distinctive words>'
 ```
 
 Falling back to `plaud search` matches names only, across the newest 500.

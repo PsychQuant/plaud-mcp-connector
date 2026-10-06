@@ -90,10 +90,11 @@ Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 > accounting — `scanned`, `matched`, `truncated`, `complete`, `scanned_back_to`,
 > `note` — so read it; do not guess from how many came back.
 >
-> The range is covered **if `scanned_back_to` is at least a day before your
-> `date_from`.** `scanned_back_to` is UTC (it ends in `Z`) and your date is local; in
-> UTC+8 a range that starts at midnight begins eight hours before the UTC date
-> changes, so a `scanned_back_to` on the same day does not cover it. `complete` is
+> The range is covered **if the calendar day of `scanned_back_to` is earlier than
+> the calendar day of your `date_from`.** `scanned_back_to` is UTC (it ends in `Z`)
+> and your date is local; in UTC+8 a range that starts at midnight begins eight hours
+> before the UTC date changes, so a `scanned_back_to` on the same day does not cover
+> it. `complete` is
 > *not* this test: it is false whenever older recordings exist, which includes ranges
 > that lie wholly inside the scan (measured 2026-10-06: `date_from` 2026-10-01,
 > `scanned_back_to` 2026-04-13, six matches, `complete: false`).
@@ -107,9 +108,13 @@ Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 > result proves nothing. Say how far back the scan went, then either narrow the range
 > to what it covers or list without filters: `list_files` with `page_size: 100` and no
 > `date_*`, newest first, until a page is entirely older than `date_from`, keeping the
-> entries whose `created_at` is in range. Stop also when a page is empty or repeats
-> the one before it, and after 20 pages; if you stopped for any of those reasons, the
-> range was not fully covered and you say so. Do not use the CLI's `plaud recent` or
+> entries whose `created_at` is in range. `created_at` is UTC too, so keep one calendar
+> day of margin on each side and tell the user the two boundary days are approximate.
+>
+> An **empty page** means the library is exhausted: everything was listed and the
+> range is covered (an account with nothing in it ends the same way). The walk is
+> **unproven** only when a page repeats the one before it, when you reach 20 pages, or
+> when a call fails; then say the range was not fully covered. Do not use the CLI's `plaud recent` or
 > `plaud today` for this: they list a fixed window and cap it without saying so.
 > Either way the report states the range you could and could not cover — **never
 > claim a range is complete when you could not show it.**
@@ -153,7 +158,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_one.py" --id "<id>"
 **Pass only `--id`.** The name, date and length are read from `plaud file <id>`: a
 recording's name is text from Plaud and can contain quotes, `$(...)` and backticks,
 so it must not be pasted into a shell command. It caches the raw transcript, the
-polished one and the summary, and it never leaves a half-written entry.
+polished one and the summary. It writes nothing until it holds a transcript.
 
 | Exit | Meaning | Do |
 |---|---|---|
@@ -201,36 +206,36 @@ reaching the 50th page without completing is INCOMPLETE too
   `plaud-search`'s promise that the cache holds what was said.
 - A recording with no transcript answers with a bare `[]`, not an object. Skip it.
 - Write the cache **once**, after the loop. `cache.py put` overwrites, so a call per
-  page leaves only the last page on disk:
+  page leaves only the last page on disk.
 
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --name='<name>' \
-  --created-at='<created_at>' --duration='<duration>' \
-  --complete true|false --pages <N> --last-cursor "<last next_cursor, verbatim>" <<'TRANSCRIPT_END_<random>'
-<one segment per line, e.g. [00:12:03] Speaker 1: ...>
-TRANSCRIPT_END_<random>
+**No text from Plaud goes on a command line.** Names, cursors and transcript lines can
+contain quotes, `$(...)` and backticks, and every rule about quoting them has so far
+left one place open. Write a JSON file with the Write tool instead, at the absolute
+path `$HOME/.plaud-connector/incoming/<id>.json` (`<id>` is the one value on the
+command line, which is why it is checked above):
+
+```json
+{"name": "<name>", "created_at": "<created_at>", "duration": "<duration>",
+ "complete": true, "pages": 3, "last_cursor": "<last next_cursor, verbatim>",
+ "body": "<one segment per line, e.g. [00:12:03] Speaker 1: ...>"}
 ```
 
-Three things about that command. Write `--name='…'` as one token with the `=`: a name
-that begins with `-` is otherwise read as an option. Put `name`, `created_at` and
-`duration` in single quotes, after replacing any `'`, backtick or `$` in the value
-with a space: they are text from Plaud. And end the heredoc with a marker that cannot
-occur in the text — replace `<random>` with a few random characters you have checked
-do not appear in the transcript — because a line that equals the marker ends the
-heredoc early and the rest runs as shell.
+`last_cursor` is `null` if no cursor ever came back. Then the command line carries a
+path and nothing else:
 
-Pass `--last-cursor` verbatim even when it looked empty: `cache.py` re-checks the
-`--complete` claim against it and downgrades one that does not hold. If the loop
-breaks part-way, still write what you have with `--complete false` — partial and
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --json "$HOME/.plaud-connector/incoming/<id>.json"
+```
+
+`cache.py` deletes the file once the cache holds it, and leaves it in place if the put
+was refused. Give `last_cursor` verbatim even when it looked empty: `cache.py`
+re-checks `complete` against it and downgrades a claim that does not hold. If the loop
+breaks part-way, still write what you have with `"complete": false` — partial and
 labelled beats nothing, and a later download that names it fetches it again.
 
-The summary is `get_note`, written the same way and with the same marker rule:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind summary <<'SUMMARY_END_<random>'
-<the summary text>
-SUMMARY_END_<random>
-```
+The summary is `get_note`, written the same way: a file holding only
+`{"body": "<the summary text>"}`, then
+`cache.py put --id "<id>" --kind summary --json "$HOME/.plaud-connector/incoming/<id>.json"`.
 
 ### 4. Report
 

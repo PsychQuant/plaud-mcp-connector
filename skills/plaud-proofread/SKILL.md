@@ -82,7 +82,7 @@ back. Both are searched — `plaud-search` recurses into `proofread/`.
 ### 4. Confirm the correction landed
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<the term that was missing>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<the term that was missing>'
 ```
 
 Hits from the proofread copy print with a `[corrected]` tag. That tag is the point:

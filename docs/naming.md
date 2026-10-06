@@ -46,9 +46,10 @@ already on disk. `plaud-search`'s description does not name `plaud-find`, and no
 The third row cannot be a test, because the answer depends on the machine. The
 script reads the install record (`installed_plugins.json`), compares each other
 installed plugin that is not switched off in the user settings against `skills/`, and
-exits 1 on a shared name. It exits 2 when it cannot read the install record or a plugin
-path it names, and its clean line says how many plugins it compared. It does not check
-that 0 is a plausible number, so read that line. It does
+exits 1 on a shared name. It exits 2 when it cannot read the install record or does not
+understand its layout. An install path that is gone is noted on stderr and not compared,
+and its clean line says how many plugins it compared. It does not check that 0 is a
+plausible number, so read that line. It does
 not scan `commands/`, user-level or project-level skills (#80). Run it on the machine
 that will install the release, not only on a clean one.
 
