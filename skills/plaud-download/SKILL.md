@@ -84,12 +84,24 @@ show the count in step 2. There is no whole-library mode.
 Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 `name`, `created_at`, `start_at`, `duration`, `serial_number`.
 
-> **Pagination trap**: the docs state `page` / `page_size` are **ignored when
-> filters are set**, and the cap on a filtered result is not documented. If the
-> number that comes back is round (50, 100, 200, 500) or equals the page size you
-> asked for, assume it was cut off: split the window in half, list each half, and
-> repeat until no piece looks like a cap. If you cannot get there, say so in the
-> report — **never claim a range is complete when you could not show it.**
+> **A filtered listing has a scan budget, and it says how far it got.** With
+> `date_from` / `date_to` / `query` set, `list_files` ignores `page` / `page_size`
+> and searches only the **500 most recent** recordings. The response carries its own
+> accounting — `scanned`, `matched`, `truncated`, `complete`, `scanned_back_to`,
+> `note` — so read it; do not guess from how many came back.
+>
+> The range is covered **if `scanned_back_to` is on or before your `date_from`.**
+> `complete` is *not* that test: it is false whenever older recordings exist, which
+> includes ranges that lie wholly inside the scan (measured 2026-10-06: `date_from`
+> 2026-10-01, `scanned_back_to` 2026-04-13, six matches, `complete: false`).
+>
+> If `date_from` is **older** than `scanned_back_to`, the filter cannot reach it
+> and an empty or short result proves nothing. Say how far back the scan went, then
+> either narrow the range to what it covers or list without filters: `list_files`
+> with `page_size: 100` and no `date_*`, newest first, until a page is entirely
+> older than `date_from`, keeping the entries whose `created_at` is in range.
+> Either way the report states the range you could and could not cover — **never
+> claim a range is complete when you could not show it.**
 
 Then subtract what is already cached **and whole**:
 
@@ -181,7 +193,7 @@ The summary is `get_note`, piped into `cache.py put --id "<id>" --kind summary`.
 
 ### 4. Report
 
-State the range you listed and **whether it may have been cut off** (step 2); how
+State the range you listed and **whether the scan reached its start** (step 2); how
 many were already cached, how many were downloaded now, how many were skipped for
 having no transcript, how many failed and with which exit code, and how many ended
 incomplete. Then show `cache.py status`.

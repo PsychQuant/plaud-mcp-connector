@@ -93,9 +93,10 @@ recordings **without saying so**, and it compares the API's timezone-less
 timestamps against your local clock — eight hours of drift in UTC+8. Listing here
 goes through `list_files` with explicit dates, so that question never arises.
 
-A date-filtered `list_files` ignores `page` / `page_size`, and the cap on what it
-returns is not documented. The skill splits a window that looks cut off, and says
-in its report when it could not show a range was complete.
+A filtered `list_files` ignores `page` / `page_size` and scans only the 500 most
+recent recordings, and says how far back it got (`scanned_back_to`). The skill reads
+that and says in its report when a range reaches further back than the scan did,
+instead of reporting a short list as if it were the whole range.
 
 ```
 把 9 月的錄音抓下來

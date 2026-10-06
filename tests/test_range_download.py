@@ -182,6 +182,17 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
             self.assertIn(needed, text, f"plaud-download SKILL.md never mentions {needed!r}")
         self.assertNotIn("--all", text, "there is no whole-library mode any more")
 
+    def test_download_reads_the_listing_own_accounting_not_a_guess(self):
+        """Measured 2026-10-06: a filtered list_files scans only the newest 500 and says
+        so in `scanned_back_to` / `complete` / `note`. `complete` is false whenever
+        OLDER recordings exist, even for a range that lies wholly inside the scan, so
+        the test for "is my range covered" is whether the scan reached its start."""
+        text = self.skill("plaud-download")
+        for needed in ("scanned_back_to", "date_from"):
+            self.assertIn(needed, text)
+        self.assertNotIn("looks like a cap", text, "the round-number heuristic was a guess")
+        self.assertNotIn("split the window", text, "splitting cannot beat a 500-recording scan budget")
+
     def test_download_description_leads_with_the_verb(self):
         text = self.skill("plaud-download")
         head = text.split("---", 2)[1]

@@ -339,6 +339,26 @@ for choosing a range to download, which instead goes through `list_files` with
 explicit `date_from` / `date_to` and compares API timestamps only to other API
 timestamps.
 
+### `list_files` with filters reports its own scan (measured 2026-10-06)
+
+With `date_from` / `date_to` / `query` set, the tool scans the 500 most recent
+recordings, ignores `page` / `page_size`, and answers with its own accounting
+alongside `data`:
+
+```jsonc
+{ "data": [ ... 6 recordings ... ],
+  "scanned": 500, "matched": 6, "truncated": true, "complete": false,
+  "scanned_back_to": "2026-04-13T09:33:14.000Z",
+  "note": "Only the 500 most recent recordings were searched; there are older ones this result does not cover." }
+```
+
+Request was `date_from: 2026-10-01`. `complete` is **false** although every recording
+since 2026-10-01 is inside the scan: it means "older recordings exist that were not
+searched", not "this range is incomplete". The usable test for a range is whether
+`scanned_back_to` is on or before its `date_from`. This was measured once, on one
+account, against the MCP package version the plugin declares at the time of writing;
+re-measure after an MCP upgrade.
+
 ### `get_transcript`
 
 ```jsonc
