@@ -115,20 +115,23 @@ def _without_legacy_keys(man: dict) -> dict:
     return man
 
 
-# Bidirectional overrides and isolates: they reorder what a terminal shows without
-# changing the bytes, so a name can read as something other than what it is.
-_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
-                           "\u2066\u2067\u2068\u2069")
+# The two format characters that are part of how text is SPELT: the zero-width joiner holds
+# emoji sequences and some scripts together, the non-joiner is orthography in Persian and
+# several Indic scripts. Every other format character (tag characters that spell ASCII
+# invisibly, zero-width space, word joiner, byte-order mark, soft hyphen, bidi overrides)
+# only hides or reorders what a reader or the model sees.
+_SPELLING_FORMAT_CHARS = frozenset("\u200c\u200d")
 
 
 def _clean(text) -> str:
-    """Plaud's text reaches a terminal and a YAML header. Control characters (an escape
-    sequence, a newline that would start a new header key), line and paragraph separators
-    and bidi overrides are replaced by a space. Other format characters stay: a zero-width
-    joiner is part of how some scripts and emoji sequences are spelled, and a name that
-    lost it would no longer match what the user types."""
-    return "".join(" " if unicodedata.category(ch) in ("Cc", "Zl", "Zp") or ch in _BIDI_CONTROLS else ch
-                   for ch in str(text or ""))
+    """Plaud's text reaches a terminal, a YAML header and the model. Control characters, line
+    and paragraph separators and every format character except the two that are spelling
+    are replaced by a space. The cost is that emoji flags (spelt with tag characters) lose
+    their flag; a name that carries a hidden instruction is the worse outcome."""
+    return "".join(
+        " " if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
+        or (unicodedata.category(ch) == "Cf" and ch not in _SPELLING_FORMAT_CHARS) else ch
+        for ch in str(text or ""))
 
 
 def _save_manifest(data: dict) -> None:
@@ -229,11 +232,19 @@ def cmd_status(args) -> None:
 # What a `put --json` file may hold, and the type each field must have. The point of the
 # file is that text from Plaud never sits on a shell command line: the model writes it with
 # a file tool and the command line carries a path.
-PUT_JSON_FIELDS = {"name": str, "created_at": str, "duration": str, "complete": bool,
+PUT_JSON_FIELDS = {"name": str, "created_at": str, "duration": (str, int), "complete": bool,
                    "pages": int, "last_cursor": (str, type(None)), "body": str}
+PUT_JSON_DIR = "incoming"
 
 
-def _read_put_json(path: str) -> dict:
+def _read_put_json(path: str, rec_id: str, kind: str) -> dict:
+    # Only a file named for THIS recording, in a folder named for the purpose. Without that
+    # `--json` would read and then delete any JSON file the caller can name, and a wrong
+    # file name would store one recording's text under another's id.
+    target = pathlib.Path(path)
+    if target.name != f"{rec_id}.json" or target.parent.name != PUT_JSON_DIR:
+        sys.exit(f"error: --json must be a file named {rec_id}.json inside a folder named "
+                 f"{PUT_JSON_DIR}/ (got {path})")
     try:
         data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -246,10 +257,21 @@ def _read_put_json(path: str) -> dict:
                  f"allowed: {', '.join(PUT_JSON_FIELDS)}")
     for key, value in data.items():
         wanted = PUT_JSON_FIELDS[key]
-        if not isinstance(value, wanted) or (wanted is int and isinstance(value, bool)):
+        if not isinstance(value, wanted) or (isinstance(value, bool) and bool not in
+                                             (wanted if isinstance(wanted, tuple) else (wanted,))):
             sys.exit(f"error: --json {path}: field {key!r} has the wrong type")
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")   # a lone surrogate would fail AFTER the file was opened
+            except UnicodeEncodeError:
+                sys.exit(f"error: --json {path}: field {key!r} is not valid text (a lone surrogate)")
     if "body" not in data:
         sys.exit(f"error: --json {path}: no `body`")
+    if kind == "transcript":
+        missing = [k for k in ("complete", "last_cursor") if k not in data]
+        if missing:
+            sys.exit(f"error: --json {path}: a transcript must say {' and '.join(missing)}, "
+                     f"so that completeness is checked rather than assumed (`last_cursor` may be null)")
     return data
 
 
@@ -258,10 +280,11 @@ def cmd_put(args) -> None:
     if not json_path:
         _put_record(args, sys.stdin.read())
         return
-    data = _read_put_json(json_path)
+    data = _read_put_json(json_path, _safe_id(args.id), str(getattr(args, "kind", "transcript") or "transcript"))
     body = data.pop("body")
     for key, value in data.items():
-        setattr(args, key, ("true" if value else "false") if key == "complete" else value)
+        setattr(args, key, ("true" if value else "false") if key == "complete" else
+                str(value) if key == "duration" else value)
     _put_record(args, body)
     # The file held third-party speech in the clear; once it is in the cache it has no
     # reason to stay anywhere else. A put that failed exits above and keeps it for a retry.
@@ -409,10 +432,10 @@ def _hit_source(path: pathlib.Path) -> str:
 
 def _searched(man: dict) -> dict:
     """The recordings a search can actually reach: in the manifest AND with a file that
-    search reads, the transcript or the summary. A manifest entry whose files were cleared
+    search reads (the transcript, its summary or its proofread copy). A manifest entry whose files were cleared
     away is not searched and must not be counted as if it was."""
     return {k: v for k, v in man.items()
-            if (CACHE_DIR / f"{k}.md").is_file() or (CACHE_DIR / "summaries" / f"{k}.md").is_file()}
+            if any((CACHE_DIR / sub / f"{k}.md").is_file() for sub in ("", "summaries", "proofread"))}
 
 
 _MONTH = re.compile(r"(?a)([0-9]{4})-(0[1-9]|1[0-2])")

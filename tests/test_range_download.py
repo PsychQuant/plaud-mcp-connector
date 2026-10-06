@@ -229,14 +229,16 @@ class TestACacheRefusalIsNotNoTranscript(FetchOneTestCase):
 class TestPutFromAJsonFile(CacheCase):
     """Plaud's text goes in a file the model writes, not on a shell command line."""
 
-    def write(self, **fields) -> pathlib.Path:
-        path = self.cache_dir.parent / "incoming.json"
+    def write(self, rec_id: str = "recA", **fields) -> pathlib.Path:
+        folder = self.cache_dir.parent / "incoming"
+        folder.mkdir(exist_ok=True)
+        path = folder / f"{rec_id}.json"
         path.write_text(json.dumps(fields), encoding="utf-8")
         return path
 
     def test_every_field_is_taken_from_the_file_and_the_file_is_removed(self):
         path = self.write(name="Budget $(touch pwned) `x` 'q' \"d\"", created_at="2026-09-01T09:00:00.000Z",
-                          duration="3600000", complete=True, pages=2, last_cursor=None,
+                          duration=3600000, complete=True, pages=2, last_cursor=None,
                           body="[00:00 - 00:04] Speaker 1: alpha\n")
         proc = self.cache_py("put", "--id", "recA", "--json", str(path))
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -248,8 +250,12 @@ class TestPutFromAJsonFile(CacheCase):
         self.assertFalse(path.exists(), "the incoming file holds third-party speech and must not linger")
 
     def test_a_refused_put_leaves_the_file_and_the_cache_alone(self):
-        for label, fields in (("unknown key", dict(body="x", evil="1")), ("no body", dict(name="n")),
-                              ("bad pages", dict(body="x", pages="two")), ("bool pages", dict(body="x", pages=True))):
+        full = dict(complete=True, last_cursor=None)
+        for label, fields in (("unknown key", dict(body="x", evil="1", **full)), ("no body", dict(name="n", **full)),
+                              ("bad pages", dict(body="x", pages="two", **full)),
+                              ("bool pages", dict(body="x", pages=True, **full)),
+                              ("no complete", dict(body="x", last_cursor=None)),
+                              ("no last_cursor", dict(body="x", complete=True))):
             with self.subTest(label):
                 path = self.write(**fields)
                 proc = self.cache_py("put", "--id", "recA", "--json", str(path))
@@ -257,17 +263,40 @@ class TestPutFromAJsonFile(CacheCase):
                 self.assertTrue(path.exists())
                 self.assertFalse((self.cache_dir / "recA.md").exists())
 
+    def test_the_file_must_be_named_for_the_id_and_live_in_incoming(self):
+        """Otherwise --json is a way to delete or read any JSON file, and a wrong file name
+        stores recording B's text under recording A and then deletes B's file."""
+        full = dict(body="x", complete=True, last_cursor=None)
+        other = self.write("recB", **full)
+        proc = self.cache_py("put", "--id", "recA", "--json", str(other))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertTrue(other.exists())
+        stray = self.cache_dir.parent / "recA.json"
+        stray.write_text(json.dumps(full), encoding="utf-8")
+        proc = self.cache_py("put", "--id", "recA", "--json", str(stray))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertTrue(stray.exists())
+
+    def test_a_lone_surrogate_is_refused_before_an_existing_file_is_touched(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: keep me\n")
+        path = self.write("recA", body="bad \ud800 text", complete=True, last_cursor=None)
+        proc = self.cache_py("put", "--id", "recA", "--json", str(path))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("keep me", (self.cache_dir / "recA.md").read_text(encoding="utf-8"))
+
     def test_a_missing_or_malformed_file_is_an_error_not_a_traceback(self):
-        bad = self.cache_dir.parent / "bad.json"
+        bad = self.cache_dir.parent / "incoming"
+        bad.mkdir(exist_ok=True)
+        bad = bad / "recA.json"
         bad.write_text("{not json", encoding="utf-8")
-        for target in (str(bad), str(self.cache_dir.parent / "nope.json")):
+        for target in (str(bad), str(self.cache_dir.parent / "incoming" / "recA-missing.json")):
             proc = self.cache_py("put", "--id", "recA", "--json", target)
             self.assertNotEqual(proc.returncode, 0)
             self.assertNotIn("Traceback", proc.stderr)
 
     def test_a_summary_comes_from_the_file_too(self):
         self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
-        path = self.write(body="the summary text")
+        path = self.write("recA", body="the summary text")
         proc = self.cache_py("put", "--id", "recA", "--kind", "summary", "--json", str(path))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("the summary text", (self.cache_dir / "summaries" / "recA.md").read_text(encoding="utf-8"))
@@ -329,6 +358,29 @@ class TestWhatIsPrintedAndWrittenIsClean(CacheCase):
         name = man["recordings"]["recA"]["name"]
         self.assertIn("\u200d", name)
         self.assertNotIn("\u202e", name)
+
+
+class TestCleanerKeepsOnlyWhatIsSpelling(CacheCase):
+    def test_invisible_format_characters_are_removed_but_joiners_stay(self):
+        sys.path.insert(0, str(REPO / "scripts"))
+        import cache
+        for ch in ("\U000e0041", "\u200b", "\ufeff", "\u2060", "\u00ad", "\u202e", "\x1b", "\u2028"):
+            with self.subTest(char=hex(ord(ch))):
+                self.assertNotIn(ch, cache._clean(f"a{ch}b"))
+        for ch in ("\u200d", "\u200c"):
+            with self.subTest(char=hex(ord(ch))):
+                self.assertIn(ch, cache._clean(f"a{ch}b"))
+
+
+class TestTheScopeLineCountsEverythingSearchReads(CacheCase):
+    def test_a_recording_that_survives_only_as_a_proofread_copy_is_counted(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        (self.cache_dir / "proofread").mkdir()
+        (self.cache_dir / "proofread" / "recA.md").write_text("the corrected text says yak\n", encoding="utf-8")
+        (self.cache_dir / "recA.md").unlink()
+        out = self.cache_py("search", "yak").stdout
+        self.assertIn("yak", out)
+        self.assertIn("searched 1 cached recordings", out)
 
 
 class TestTheIncrementalMachineryIsGone(CacheCase):
@@ -410,8 +462,29 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
 
     def test_the_coverage_test_has_a_day_of_margin_and_covers_name_queries(self):
         text = self.skill("plaud-download")
-        self.assertIn("calendar day", text)
+        self.assertIn("00:00 UTC", text)
         self.assertIn("query", text.split("scanned_back_to", 1)[1])
+
+    def test_coverage_is_measured_from_the_start_of_the_previous_utc_day(self):
+        text = " ".join(self.skill("plaud-download").replace("\n> ", "\n").split())   # quoted block wraps
+        self.assertIn("00:00 UTC on the day before", text)
+
+    def test_every_skill_that_searches_gives_the_same_pattern_rule(self):
+        for name in ("plaud-search", "plaud-proofread", "plaud-outline"):
+            with self.subTest(skill=name):
+                text = " ".join(self.skill(name).split())
+                self.assertIn("a `'` in the pattern becomes `.`", text)
+        self.assertNotIn("a `$`", self.skill("plaud-search"))
+
+    def test_search_examples_put_options_before_the_dashes(self):
+        text = self.skill("plaud-search")
+        self.assertIn("search --case-sensitive -- 'MCP'", text)
+        self.assertIn("search --max-lines 15 -- 'onboarding'", text)
+
+    def test_the_json_instructions_say_it_must_be_valid_json_and_forbid_the_fallback(self):
+        text = " ".join(self.skill("plaud-download").split())
+        self.assertIn("valid JSON", text)
+        self.assertRegex(text, r"(?i)cannot write the file[^.]{0,120}(stop|do not)")
 
     def test_the_end_of_the_library_is_covered_not_unproven(self):
         text = " ".join(self.skill("plaud-download").split())

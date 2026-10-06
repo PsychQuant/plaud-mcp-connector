@@ -31,16 +31,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<pattern>'
 
 ```bash
 # any of several terms
-... search "budget|預算|經費"
+... search -- 'budget|預算|經費'
 
 # a phrase, tolerant of spacing
-... search "action *item"
+... search -- 'action *item'
 
 # case-sensitive (acronyms, product names)
-... search --case-sensitive "MCP"
+... search --case-sensitive -- 'MCP'
 
 # more context lines per recording (default 5)
-... search "onboarding" --max-lines 15
+... search --max-lines 15 -- 'onboarding'
 ```
 
 Results are grouped per recording, newest first, each with the recording name,
@@ -55,10 +55,7 @@ searched 412 cached recordings, covering 2025-03 → 2025-11 (301), 2026-09 → 
 **Quote that line in your answer, every time.** The cache holds only what the user
 chose to download, so a search result describes that part and nothing else. The
 months are listed one piece at a time on purpose: 2025-11 and 2026-09 above are not
-connected, and nothing in between was searched. The `--` makes a pattern that
-starts with a dash a pattern and not an option. The pattern is the user's words in single quotes; a `'`, a backtick
-or a `$` in it becomes `.`, which matches any character, so the search can only get
-broader.
+connected, and nothing in between was searched. The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character, so the search can only get broader.
 
 ### 2. Read the surrounding context
 

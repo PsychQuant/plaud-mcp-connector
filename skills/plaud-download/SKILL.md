@@ -90,11 +90,12 @@ Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 > accounting — `scanned`, `matched`, `truncated`, `complete`, `scanned_back_to`,
 > `note` — so read it; do not guess from how many came back.
 >
-> The range is covered **if the calendar day of `scanned_back_to` is earlier than
-> the calendar day of your `date_from`.** `scanned_back_to` is UTC (it ends in `Z`)
-> and your date is local; in UTC+8 a range that starts at midnight begins eight hours
-> before the UTC date changes, so a `scanned_back_to` on the same day does not cover
-> it. `complete` is
+> The range is covered **if `scanned_back_to` is earlier than 00:00 UTC on the day
+> before your `date_from`.** `scanned_back_to` is UTC (it ends in `Z`) and your date is
+> local; in UTC+8 a range that starts at local midnight begins at 16:00 UTC the day
+> before, so comparing calendar days would call a scan covered that stopped four hours
+> short. Measuring from a full day earlier is safe for every zone up to UTC+12.
+> `complete` is
 > *not* this test: it is false whenever older recordings exist, which includes ranges
 > that lie wholly inside the scan (measured 2026-10-06: `date_from` 2026-10-01,
 > `scanned_back_to` 2026-04-13, six matches, `complete: false`).
@@ -111,8 +112,10 @@ Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 > entries whose `created_at` is in range. `created_at` is UTC too, so keep one calendar
 > day of margin on each side and tell the user the two boundary days are approximate.
 >
-> An **empty page** means the library is exhausted: everything was listed and the
-> range is covered (an account with nothing in it ends the same way). The walk is
+> An **empty page** is taken to mean the library is exhausted: everything was listed
+> and the range is covered (an account with nothing in it ends the same way). That is
+> not something this skill has measured against a long library, so name the empty page
+> as what ended the walk. The walk is
 > **unproven** only when a page repeats the one before it, when you reach 20 pages, or
 > when a call fails; then say the range was not fully covered. Do not use the CLI's `plaud recent` or
 > `plaud today` for this: they list a fixed window and cap it without saying so.
@@ -211,8 +214,11 @@ reaching the 50th page without completing is INCOMPLETE too
 **No text from Plaud goes on a command line.** Names, cursors and transcript lines can
 contain quotes, `$(...)` and backticks, and every rule about quoting them has so far
 left one place open. Write a JSON file with the Write tool instead, at the absolute
-path `$HOME/.plaud-connector/incoming/<id>.json` (`<id>` is the one value on the
-command line, which is why it is checked above):
+path `$HOME/.plaud-connector/incoming/<id>.json` (`cache.py` refuses any other
+folder or file name; `<id>` is the one value on the command line, which is why it is
+checked above). It must be valid JSON: a newline inside a string is `\n`, a quote is
+`\"`. If you cannot write the file, stop and say so — do not fall back to putting the
+text on a command line.
 
 ```json
 {"name": "<name>", "created_at": "<created_at>", "duration": "<duration>",
