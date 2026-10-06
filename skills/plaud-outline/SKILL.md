@@ -64,7 +64,7 @@ that matches on what was *said*, not just on the filename:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<distinctive words>'
 ```
 
-The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character, so the search can only get broader.
+The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character there (inside `[...]` it is a literal dot instead, so a pattern with a quote in a bracket expression needs rewording).
 
 Falling back to `plaud search` matches names only, across the newest 500.
 

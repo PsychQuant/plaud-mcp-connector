@@ -355,7 +355,9 @@ alongside `data`:
 Request was `date_from: 2026-10-01`. `complete` is **false** although every recording
 since 2026-10-01 is inside the scan: it means "older recordings exist that were not
 searched", not "this range is incomplete". The usable test for a range is whether
-`scanned_back_to` is on or before its `date_from`. This was measured once, on one
+`scanned_back_to` is earlier than 00:00 UTC on the day before its `date_from`: it is
+UTC and `date_from` is a local date, so in UTC+8 a calendar-day comparison leaves up
+to eight hours unscanned. This was measured once, on one
 account, against the MCP package version the plugin declares at the time of writing;
 re-measure after an MCP upgrade.
 

@@ -159,6 +159,10 @@ for the same step. For the raw transcript:
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --json "$HOME/.plaud-connector/incoming/<id>.json"
 ```
 
+It must be valid JSON: a newline inside a string is `\n`, a quote is `\"`. If you cannot
+write the file, stop and say so — do not fall back to putting the text on a command
+line.
+
 For the polished version the file holds only `{"body": "<the polished lines>"}`:
 
 ```bash

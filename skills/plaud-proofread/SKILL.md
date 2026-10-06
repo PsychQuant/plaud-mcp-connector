@@ -85,7 +85,7 @@ back. Both are searched — `plaud-search` recurses into `proofread/`.
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search -- '<the term that was missing>'
 ```
 
-The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character, so the search can only get broader.
+The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character there (inside `[...]` it is a literal dot instead, so a pattern with a quote in a bracket expression needs rewording).
 
 Hits from the proofread copy print with a `[corrected]` tag. That tag is the point:
 a corrected line is **not** a verbatim quote, and anything citing it should say so.

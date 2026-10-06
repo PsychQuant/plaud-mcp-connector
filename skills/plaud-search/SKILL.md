@@ -55,7 +55,7 @@ searched 412 cached recordings, covering 2025-03 → 2025-11 (301), 2026-09 → 
 **Quote that line in your answer, every time.** The cache holds only what the user
 chose to download, so a search result describes that part and nothing else. The
 months are listed one piece at a time on purpose: 2025-11 and 2026-09 above are not
-connected, and nothing in between was searched. The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character, so the search can only get broader.
+connected, and nothing in between was searched. The `--` makes a pattern that starts with a dash a pattern and not an option. The pattern goes in single quotes, and a `'` in the pattern becomes `.`, which matches any character there (inside `[...]` it is a literal dot instead, so a pattern with a quote in a bracket expression needs rewording).
 
 ### 2. Read the surrounding context
 

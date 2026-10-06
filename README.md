@@ -316,7 +316,7 @@ audio.
 ```bash
 # the engine is usable directly, if you prefer a shell
 python3 scripts/cache.py status
-python3 scripts/cache.py search "預算|budget"
+python3 scripts/cache.py search -- '預算|budget'
 python3 scripts/cache.py show <recording-id>
 python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish
 ```

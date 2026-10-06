@@ -124,10 +124,15 @@ _SPELLING_FORMAT_CHARS = frozenset("\u200c\u200d")
 
 
 def _clean(text) -> str:
-    """Plaud's text reaches a terminal, a YAML header and the model. Control characters, line
-    and paragraph separators and every format character except the two that are spelling
-    are replaced by a space. The cost is that emoji flags (spelt with tag characters) lose
-    their flag; a name that carries a hidden instruction is the worse outcome."""
+    """Plaud's text reaches a terminal and a YAML header. Control characters, line and
+    paragraph separators and every format character except the two that are spelling are
+    replaced by a space. The cost is that emoji flags (spelt with tag characters) lose their
+    flag; a name that carries a hidden instruction is the worse outcome.
+
+    This is a deny-list by Unicode category, not a full allow-list: invisible characters in
+    other categories (variation selectors, filler letters, private use) are not removed, and
+    the two joiners kept here can carry hidden bits. It is applied to name, created_at,
+    duration and printed lines, not to the transcript body or `last_cursor`."""
     return "".join(
         " " if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
         or (unicodedata.category(ch) == "Cf" and ch not in _SPELLING_FORMAT_CHARS) else ch
@@ -241,13 +246,15 @@ def _read_put_json(path: str, rec_id: str, kind: str) -> dict:
     # Only a file named for THIS recording, in a folder named for the purpose. Without that
     # `--json` would read and then delete any JSON file the caller can name, and a wrong
     # file name would store one recording's text under another's id.
-    target = pathlib.Path(path)
-    if target.name != f"{rec_id}.json" or target.parent.name != PUT_JSON_DIR:
-        sys.exit(f"error: --json must be a file named {rec_id}.json inside a folder named "
-                 f"{PUT_JSON_DIR}/ (got {path})")
+    expected = CACHE_DIR.parent / PUT_JSON_DIR / f"{rec_id}.json"
+    given = pathlib.Path(os.path.abspath(path))
+    if (given != pathlib.Path(os.path.abspath(expected)) or given.is_symlink()
+            or given.parent.is_symlink()):
+        sys.exit(f"error: --json must be exactly {expected} and neither it nor its folder may be "
+                 f"a symbolic link (got {path})")
     try:
         data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:
         sys.exit(f"error: --json {path}: {exc}")
     if not isinstance(data, dict):
         sys.exit(f"error: --json {path}: expected a JSON object")

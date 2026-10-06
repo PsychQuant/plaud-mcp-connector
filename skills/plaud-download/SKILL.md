@@ -93,8 +93,8 @@ Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
 > The range is covered **if `scanned_back_to` is earlier than 00:00 UTC on the day
 > before your `date_from`.** `scanned_back_to` is UTC (it ends in `Z`) and your date is
 > local; in UTC+8 a range that starts at local midnight begins at 16:00 UTC the day
-> before, so comparing calendar days would call a scan covered that stopped four hours
-> short. Measuring from a full day earlier is safe for every zone up to UTC+12.
+> before, so comparing calendar days would call a scan covered that stopped up to eight
+> hours short. Measuring from a full day earlier is safe for every zone up to UTC+12.
 > `complete` is
 > *not* this test: it is false whenever older recordings exist, which includes ranges
 > that lie wholly inside the scan (measured 2026-10-06: `date_from` 2026-10-01,
@@ -215,7 +215,7 @@ reaching the 50th page without completing is INCOMPLETE too
 contain quotes, `$(...)` and backticks, and every rule about quoting them has so far
 left one place open. Write a JSON file with the Write tool instead, at the absolute
 path `$HOME/.plaud-connector/incoming/<id>.json` (`cache.py` refuses any other
-folder or file name; `<id>` is the one value on the command line, which is why it is
+path, and a symbolic link in place of the file or its folder; `<id>` is the one value on the command line, which is why it is
 checked above). It must be valid JSON: a newline inside a string is `\n`, a quote is
 `\"`. If you cannot write the file, stop and say so — do not fall back to putting the
 text on a command line.

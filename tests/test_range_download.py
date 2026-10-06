@@ -277,6 +277,49 @@ class TestPutFromAJsonFile(CacheCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertTrue(stray.exists())
 
+    def test_a_missing_file_with_the_right_name_reaches_the_unreadable_branch(self):
+        (self.cache_dir.parent / "incoming").mkdir(exist_ok=True)
+        proc = self.cache_py("put", "--id", "recA", "--json", str(self.cache_dir.parent / "incoming" / "recA.json"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("No such file", proc.stderr)
+
+    def test_only_the_one_real_incoming_folder_is_accepted(self):
+        """R6: a name check alone accepted any folder called incoming and, through a symlink,
+        read and then deleted a file somewhere else."""
+        full = dict(body="x", complete=True, last_cursor=None)
+        root = self.cache_dir.parent
+        elsewhere = root / "elsewhere" / "incoming"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "recA.json").write_text(json.dumps(full), encoding="utf-8")
+        real = root / "realdir"
+        real.mkdir()
+        (real / "recA.json").write_text(json.dumps(full), encoding="utf-8")
+        (root / "incoming").symlink_to(real, target_is_directory=True)     # the right folder name, a link
+        target = root / "target.json"
+        target.write_text(json.dumps(full), encoding="utf-8")
+        for label, path, survivor in (("another incoming folder", elsewhere / "recA.json", elsewhere / "recA.json"),
+                                      ("symlinked folder", root / "incoming" / "recA.json", real / "recA.json"),
+                                      ("dotdot", root / "elsewhere" / ".." / "incoming" / "recA.json", real / "recA.json")):
+            with self.subTest(label):
+                proc = self.cache_py("put", "--id", "recA", "--json", str(path))
+                self.assertNotEqual(proc.returncode, 0, proc.stdout)
+                self.assertTrue(survivor.exists(), "a refused put must not delete anything")
+                self.assertFalse((self.cache_dir / "recA.md").exists())
+        (root / "incoming").unlink()
+        (root / "incoming").mkdir()
+        (root / "incoming" / "recA.json").symlink_to(target)               # the right name, a link
+        proc = self.cache_py("put", "--id", "recA", "--json", str(root / "incoming" / "recA.json"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertFalse((self.cache_dir / "recA.md").exists())
+
+    def test_deeply_nested_json_is_an_error_not_a_traceback(self):
+        folder = self.cache_dir.parent / "incoming"
+        folder.mkdir(exist_ok=True)
+        (folder / "recA.json").write_text("[" * 100000, encoding="utf-8")
+        proc = self.cache_py("put", "--id", "recA", "--json", str(folder / "recA.json"))
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_a_lone_surrogate_is_refused_before_an_existing_file_is_touched(self):
         self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: keep me\n")
         path = self.write("recA", body="bad \ud800 text", complete=True, last_cursor=None)
@@ -289,7 +332,7 @@ class TestPutFromAJsonFile(CacheCase):
         bad.mkdir(exist_ok=True)
         bad = bad / "recA.json"
         bad.write_text("{not json", encoding="utf-8")
-        for target in (str(bad), str(self.cache_dir.parent / "incoming" / "recA-missing.json")):
+        for target in (str(bad), str(self.cache_dir.parent / "incoming" / "recB.json")):
             proc = self.cache_py("put", "--id", "recA", "--json", target)
             self.assertNotEqual(proc.returncode, 0)
             self.assertNotIn("Traceback", proc.stderr)
@@ -485,6 +528,20 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
         text = " ".join(self.skill("plaud-download").split())
         self.assertIn("valid JSON", text)
         self.assertRegex(text, r"(?i)cannot write the file[^.]{0,120}(stop|do not)")
+
+    def test_no_document_still_offers_the_calendar_day_test(self):
+        for rel in ("docs/official-surface.md", "README.md", "skills/plaud-download/SKILL.md"):
+            text = " ".join((REPO / rel).read_text(encoding="utf-8").replace("\n> ", "\n").replace("`", "").split())
+            with self.subTest(file=rel):
+                self.assertNotIn("is on or before its date_from", text)
+                self.assertNotIn("four hours short", text)
+
+    def test_both_mcp_skills_say_valid_json_and_stop_without_the_write_tool(self):
+        for name in ("plaud-download", "plaud-to-srt"):
+            text = " ".join(self.skill(name).split())
+            with self.subTest(skill=name):
+                self.assertIn("valid JSON", text)
+                self.assertRegex(text, r"(?i)cannot write the file[^.]{0,120}(stop|do not)")
 
     def test_the_end_of_the_library_is_covered_not_unproven(self):
         text = " ".join(self.skill("plaud-download").split())
