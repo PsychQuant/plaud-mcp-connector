@@ -5,7 +5,7 @@
 
 Why this exists (#65): `plaud-to-srt` runs on the cache. Someone who wants one
 recording's subtitles should not have to sync a date range first. This is the
-one-recording fetch: the raw transcript and its polished twin.
+one-recording fetch: the raw transcript, its polished twin and its summary.
 
 CLI path only, on purpose. The MCP tools can only be called by the model, so a
 script cannot drive them; the skill covers that path in prose and says what it
@@ -36,8 +36,8 @@ transcript beside the old polish — stale text, no error. Removed first, every
 stopping point holds either the old raw or the new raw, with no polish until the
 new one is written.
 
-The record is written with `--single-fetch`: it was not reached by walking the
-listing, so it must not move where an incremental `plaud-download` may stop paging.
+The summary is cached too, best effort, because `plaud-search` searches
+`summaries/`. A recording with no summary is not an incomplete recording.
 """
 from __future__ import annotations
 
@@ -103,6 +103,18 @@ def _plaud_transcript(rec_id: str, *, polished: bool) -> tuple[int, str, str]:
         out = pathlib.Path(tmp) / "transcript.txt"
         cmd = ["plaud", "transcript", rec_id, *(["--polished"] if polished else []), "-o", str(out)]
         rc, so, se = _run(cmd)
+        try:
+            body = out.read_text(encoding="utf-8") if out.is_file() else ""
+        except UnicodeDecodeError as exc:
+            return -1, "", f"the CLI wrote something that is not UTF-8 text: {exc}"
+        return rc, body, (se + so).strip()
+
+
+def _plaud_summary(rec_id: str) -> tuple[int, str, str]:
+    """`plaud summary <id> -o <file>`, the AI-written summary. (returncode, body, diagnostics)."""
+    with tempfile.TemporaryDirectory(prefix="plaud-fetch-one-") as tmp:
+        out = pathlib.Path(tmp) / "summary.txt"
+        rc, so, se = _run(["plaud", "summary", rec_id, "-o", str(out)])
         try:
             body = out.read_text(encoding="utf-8") if out.is_file() else ""
         except UnicodeDecodeError as exc:
@@ -217,22 +229,38 @@ def main() -> int:
     # items, and argparse reads the second as an option.
     prc, perr = _put(rec_id, raw, f"--name={meta['name']}", f"--created-at={meta['created_at']}",
                      f"--duration={meta['duration']}", "--complete", "true", "--pages", "1",
-                     "--last-cursor", "", "--single-fetch")
+                     "--last-cursor", "")
     if prc != 0:
         print(perr or "cache.py put refused the transcript", file=sys.stderr)
         return EXIT_NOTHING
 
+    polish_note = ""
     if have_polish:
         rc3, perr2 = _put(rec_id, polished, "--kind", "polish")
-        if rc3 == 0:
-            print(f"cached {rec_id}: raw transcript and polished version")
-            return 0
-        pdiag = perr2
+        if rc3 != 0:
+            have_polish, pdiag = False, perr2
+    if not have_polish:
+        note = " The older polished copy was removed because it no longer matched." if removed else ""
+        print(f"warning: no polished version cached for {rec_id} ({pdiag or 'empty'}) — "
+              f"subtitles will come from the raw transcript.{note}", file=sys.stderr)
 
-    note = " The older polished copy was removed because it no longer matched." if removed else ""
-    print(f"warning: no polished version cached for {rec_id} ({pdiag or 'empty'}) — "
-          f"subtitles will come from the raw transcript.{note}", file=sys.stderr)
-    print(f"cached {rec_id}: raw transcript only")
+    # The summary is searched by `plaud-search` (summaries/), so a download that skipped
+    # it would quietly narrow what a search can find. Best effort, like the polish: a
+    # recording with no summary is not an incomplete recording.
+    have_summary = False
+    src, summary, sdiag = _plaud_summary(rec_id)
+    if src == 0 and summary.strip():
+        rc4, serr = _put(rec_id, summary, "--kind", "summary")
+        have_summary = rc4 == 0
+        sdiag = serr
+    if not have_summary:
+        print(f"warning: no summary cached for {rec_id} ({sdiag or 'empty'}) — "
+              f"the transcript is cached; only the summary source for search is missing.",
+              file=sys.stderr)
+
+    parts = ["raw transcript"] + (["polished version"] if have_polish else []) \
+        + (["summary"] if have_summary else [])
+    print(f"cached {rec_id}: " + ", ".join(parts))
     return 0
 
 

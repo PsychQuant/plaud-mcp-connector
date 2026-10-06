@@ -95,8 +95,8 @@ signal, so anything driven by the MCP alone has to fetch and find out.
 ### `plaud transcript` does not truncate
 
 This was the single unknown that could still produce a wrong answer, because
-`plaud-download`'s CLI fast path marks what it writes as `complete` and has no
-cursor to check that claim against.
+`plaud-download`'s CLI path (`fetch_one.py`) marks what it writes as `complete` and
+has no cursor to check that claim against.
 
 Measured: a recording the MCP reports as `total: 94` produced a file with
 **exactly 94** speaker-tagged segments. One call returns the whole transcript.
@@ -335,9 +335,9 @@ the probes alone will agree with whatever you already believe.
 
 None of this is a reason to avoid the CLI generally — `plaud transcript` and
 `plaud audio` remain the right tools. It is a reason not to use `recent` / `today`
-for incremental indexing, which instead walks `list_files` with its own early
-exit (`cache.py should-stop-paging`) and compares API timestamps only to other
-API timestamps.
+for choosing a range to download, which instead goes through `list_files` with
+explicit `date_from` / `date_to` and compares API timestamps only to other API
+timestamps.
 
 ### `get_transcript`
 

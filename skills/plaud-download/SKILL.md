@@ -1,32 +1,44 @@
 ---
 name: plaud-download
 description: |
-  Build or refresh the local Plaud transcript cache so recordings can be searched
-  by their CONTENT, not just their filename. Use when the user says "index my
-  Plaud recordings", "sync Plaud transcripts", "重建 Plaud 索引", "更新逐字稿快取",
-  or when a plaud-search lookup reports the cache is empty or stale. Also use before
-  any question of the form "which recording mentioned X" — that question cannot be
-  answered until the transcripts are on disk.
+  Download the transcripts of a range of Plaud recordings that YOU name — "the last
+  two weeks", "September", "these three meetings" — into the local cache, so they
+  can be searched by what was SAID (plaud-search) and turned into subtitles
+  (plaud-to-srt). Use when the user says "download my Plaud transcripts", "download
+  September's recordings", "把 9 月的錄音抓下來", "把這幾場抓下來", "下載逐字稿",
+  "抓逐字稿到本機", or when a plaud-search lookup reports that the cache is empty or
+  does not cover the period they are asking about. It always asks for a range first
+  and shows the count before fetching; it never pulls the whole library by itself,
+  and it keeps nothing up to date afterwards. To find WHICH recording to open, use
+  the official plaud-find instead.
   Also triggers in the languages Plaud localises for (its own hreflang list):
-  "Plaud-Aufnahmen indexieren", "indexar mis grabaciones de Plaud", "indexer mes enregistrements Plaud", "Plaudの録音をインデックス化", "indicizza le registrazioni Plaud", "Plaud-opnames indexeren", "indexar minhas gravações Plaud", "lập chỉ mục bản ghi Plaud", "จัดทำดัชนีการบันทึก Plaud", "indeks rakaman Plaud", "فهرسة تسجيلات بلود".
-argument-hint: "[--days N | --all | --since YYYY-MM-DD]"
+  "Plaud-Transkripte herunterladen", "descargar mis transcripciones de Plaud", "télécharger mes transcriptions Plaud", "Plaudの文字起こしをダウンロード", "scarica le trascrizioni di Plaud", "Plaud-transcripties downloaden", "baixar minhas transcrições do Plaud", "tải xuống bản ghi chép Plaud", "ดาวน์โหลดการถอดความ Plaud", "muat turun transkrip Plaud", "تنزيل نصوص تسجيلات بلود".
+argument-hint: "[--days N | --since YYYY-MM-DD [--until YYYY-MM-DD] | <recording name or id> …]"
 ---
 
 # Plaud Download — land transcripts on disk
 
 The official Plaud MCP matches `query` against **recording names only**, across the
 **newest 500 recordings**. There is no server-side full-text search. This skill
-fetches transcript bodies once and caches them so `plaud-search` can search them
-locally, forever, offline.
+downloads the transcripts of a range you name, once, into a local cache so
+`plaud-search` can search them offline and `plaud-to-srt` can turn them into
+subtitles.
 
-Incremental by design: a re-run only fetches recordings that are not already
-cached, and stops paging the listing once it is past everything it holds.
+It does **not** keep anything in sync. Nothing is fetched unless a range was named,
+nothing is refreshed afterwards, and a recording added to Plaud later is not here
+until a download names it. That is why this is called *download*: a cache that
+quietly stays current would be a promise this skill cannot keep.
 
 ## Prerequisites
 
-The Plaud MCP must be connected and authorised. If tool calls fail with an auth
-error, tell the user to run the `login` tool (it opens a browser for OAuth) — do
-not try to work around it.
+The Plaud MCP must be connected and authorised — listing goes through it. If tool
+calls fail with an auth error, tell the user to run the `login` tool (it opens a
+browser for OAuth) — do not try to work around it.
+
+The official CLI (`plaud`) is optional and makes downloading much cheaper: it writes
+transcripts straight to disk without passing them through the model. It keeps its
+own login (`plaud login`), separate from the MCP's — "the MCP works but the CLI says
+unauthorised" is that, not a bug.
 
 ## Tool naming
 
@@ -43,439 +55,139 @@ MCP — do not silently fall back to scraping.
 
 ## Steps
 
-### 1. Read what is already cached
+### 1. Get a range — never default to everything
+
+Ask for one if none was given. Do not pick a range for the user, and do not treat
+"no argument" as "all of it".
+
+| The user says | The range |
+|---|---|
+| "the last two weeks" / `--days N` | `date_from` = today − N days |
+| "September" / `--since 2026-09-01` (and `--until 2026-09-30`) | `date_from` / `date_to` |
+| specific recordings, by id or by name | each one individually (below) |
+
+A name is resolved before an id is assumed. First check what is already cached:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find "<part of the name>"
 ```
 
-Keep the id set (`--ids-only`) for the diff in step 3.
+It exits 3 when nothing matches. Then ask Plaud: `list_files` with `query` set to
+the same words. More than one match is the user's to choose between — list name,
+date and length, do not guess.
 
-### 2. List candidate recordings
+If the user wants everything, say what that means: ask for a wide date range and
+show the count in step 2. There is no whole-library mode.
 
-Call `list_files`. Honour the user's scope argument:
+### 2. List what is in the range, then confirm
 
-| Argument | `list_files` params |
-|---|---|
-| *(none)* | `page_size: 100`, walk pages — but stop early, see below |
-| `--days N` | `date_from` = today − N days |
-| `--since YYYY-MM-DD` | `date_from` = that date |
-| `--all` | walk every page, **no early exit** |
-
-`list_files` returns `id`, `name`, `created_at`, `start_at`, `duration`,
-`serial_number`.
+Call `list_files` with `date_from` / `date_to` (or `query`). It returns `id`,
+`name`, `created_at`, `start_at`, `duration`, `serial_number`.
 
 > **Pagination trap**: the docs state `page` / `page_size` are **ignored when
-> filters are set**. So when you pass `date_from` / `date_to`, do NOT assume you
-> can page through the filtered result — take what comes back and, if the count
-> looks suspiciously like a cap, narrow the date window instead of paging.
+> filters are set**, and the cap on a filtered result is not documented. If the
+> number that comes back is round (50, 100, 200, 500) or equals the page size you
+> asked for, assume it was cut off: split the window in half, list each half, and
+> repeat until no piece looks like a cap. If you cannot get there, say so in the
+> report — **never claim a range is complete when you could not show it.**
 
-#### Stop paging once a page is entirely older than what you have
-
-Walking the whole library to find three new recordings costs more every time
-the library grows. Ask where you are allowed to stop:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status --list-cutoff
-```
-
-| Exit | Meaning |
-|---|---|
-| `0` | stdout is one timestamp — the safety margin is **already applied**, do not adjust it |
-| `3` | **walk every page.** No cutoff is available |
-
-Exit 3 is the normal answer until this cache has proved its own coverage. It is
-what you get on a first index, on a cache built by `--days` / `--since`, and
-after an interrupted run — none of those has ever seen the end of the listing,
-so none of them knows what it is missing.
-
-Then, after each page, hand it the page's `created_at` values and do what it says:
+Then subtract what is already cached **and whole**:
 
 ```bash
-printf '%s\n' <created_at of every entry on this page, in the order returned> \
-  | python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" should-stop-paging \
-      --cutoff "<the cutoff>" \
-      --prev-last "<the LAST created_at of the previous page, omit on page 1>" \
-      ${ANOMALY_SEEN:+--anomaly-seen}
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" status --ids-only
 ```
 
-Carry two things between pages:
+`--ids-only` lists only recordings fetched to the end, so one that was left
+half-fetched comes back into the plan on its own.
 
-| Carry | Why |
-|---|---|
-| `--prev-last` | One page being descending says nothing about the next. Three pages can each descend internally while page 3 jumps back above page 2 — and at one entry per page the within-page check passes vacuously every time |
-| `--anomaly-seen` | Once any page has been refused for an anomaly, the early exit stays off for the **rest of the run**. Without it, one orderly-looking page after a disordered one could still end the walk |
+Show the plan and **confirm before fetching anything**:
 
-**You do not have to remember when to latch.** Every anomaly reason ends with
-`set --anomaly-seen for the rest of this run` — when you read that, set it and
-keep it set. An ordinary `continue:` (just a recording newer than the cutoff)
-does not say it, because that is normal, not an anomaly.
+```
+In range 2026-09-01 → 2026-09-30: 18 recordings
+  already cached and whole: 11
+  to download now:           7
+Continue?
+```
 
-It prints `stop: …` or `continue: …` with the reason, **and carries the same
-answer in its exit code — 0 stop, 3 continue** (3, not 1, because continuing is
-not a failure). Use whichever the surrounding script reads more clearly; do not
-assume exit 0 alone means stop.
+Each recording costs a few seconds through the CLI. Through the MCP it costs at
+least one `get_transcript` call per recording — long ones paginate — and pulls the
+whole text through the model context, so give the user the count first.
 
-**Expect at least two pages.** The cutoff sits a day behind the newest cached
-recording, and that recording is still on page one — so page one always says
-continue. Anything advertising "one page" is wrong.
-
-**Report the reason in step 4** — "stopped on page 2" and "walked 14 pages
-because the listing came back out of order" are different facts about the run,
-and only one of them is normal.
-
-The judgement lives in that command rather than in this file on purpose. Whether a
-page is "old enough to stop at" has three ways to be wrong that produce no symptom
-— an empty page (`all([])` is true), a page that is not sorted newest-first, and a
-timestamp that will not parse. Prose cannot be unit-tested; that command can, and
-is.
-
-**What the order check still cannot do.** With `--prev-last` and
-`--anomaly-seen` it now catches a violation across pages and keeps the exit off
-once one is seen. It still cannot prove the pages *after* this one stay ordered
-— nothing short of reading them can. So a run that latched is a run that walked
-everything, and that is the correct outcome, not a failure.
-
-`--all` and a re-index after clearing the cache skip this entirely and walk every
-page.
-
-#### Record the sweep — or the early exit never turns on
+### 3. Download one recording at a time
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" mark-full-sweep
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_one.py" --id "<id>"
 ```
 
-Run this **only** when all three held on the walk you just finished:
+**Pass only `--id`.** The name, date and length are read from `plaud file <id>`: a
+recording's name is text from Plaud and can contain quotes, `$(...)` and backticks,
+so it must not be pasted into a shell command. It caches the raw transcript, the
+polished one and the summary, and it never leaves a half-written entry.
 
-1. **No date scope** — no `--days`, no `--since`. A scoped walk saw a slice.
-2. **It reached the listing's natural end** — a page came back shorter than
-   `page_size`. Stopping early does not count, and neither does an error.
-3. **No page was refused** — `should-stop-paging` never answered `continue:`
-   for being out of order or unreadable.
+| Exit | Meaning | Do |
+|---|---|---|
+| `0` | cached, or already cached and whole | next recording |
+| `3` | `plaud` is not on PATH | use the MCP path below for this and the rest |
+| `4` | the CLI answered with nothing usable | nothing was cached; count it as *no transcript* (below) |
+| `5` | the CLI is not logged in | stop, tell the user `plaud login`; resume after |
+| `2` / `1` | bad arguments / a bug | stop and show the message; do not retry blindly |
 
-Any one of them missing: **do not run it**, and say in the report that the
-cutoff stays off.
+`--force` fetches again a recording that is already whole. The polish is optional
+and the summary is optional: a recording without either is not incomplete, and the
+script warns instead of failing.
 
-Recording a sweep that did not happen re-creates the exact bug this exists to
-prevent. `complete` on a recording means its transcript came down whole; it says
-nothing about whether the listing was ever walked to its end. Reading the first
-as the second is how a cache built by `--days 1` ends up stopping on the first
-old page of every run afterwards, never listing the older library, with no error
-and no count to notice it by.
+What the extra two are for. The **polished** transcript is the same speech with
+fillers thinned, identical segments and timings — subtitles want it, so
+`plaud-to-srt` prefers it, and `plaud-search` deliberately does **not** search it
+(every line would match twice). The **summary** is searched, and is often closer to
+what someone remembers than the transcript is.
 
-**Do not switch this to `plaud recent` or `plaud today`.** They look like the
-right tool and are not — both are the same `list_files` walk with a client-side
-filter, and each carries a defect this path avoids. See
-`docs/official-surface.md` for what was measured and why.
+#### The MCP path, when the CLI is not installed
 
-#### What this does not fix
-
-A recording that reaches the cloud long after it was made carries an old
-`created_at`, sits deep in the listing, and an early exit stops before reaching
-it — silently. Say so if the user expects the incremental run to be exhaustive:
-**it is a fast path, not a completeness guarantee.** A periodic `--all` is the
-only thing that finds those.
-
-### 3. Diff, then fetch only what is new
-
-Subtract the cached id set from the listed ids. `--ids-only` lists **only
-recordings fetched to the end**, so anything left half-fetched comes back here
-automatically — there is no rebuild flag to remember.
-
-**Say so before you start.** Recordings cached before paging existed carry no
-completeness marker and count as incomplete, so a first run after upgrading can
-re-fetch a lot. Print the count and let the user stop you:
+Say so once: "plaud CLI not found — downloading through the MCP, which pulls every
+transcript through the model context. `npm install -g @plaud-ai/cli` makes large
+ranges much cheaper." Then, per recording:
 
 ```
-Re-fetching N recordings that were cached without a completeness marker
-(≈N get_transcript calls). Ctrl-C now if you would rather not.
-```
-
-#### Ask what a recording HAS before fetching it — on a first index
-
-`list_files` does not say whether a recording has a transcript (measured: it
-returns `id`, `name`, `created_at`, `start_at`, `duration`, and nothing else). So
-the naive loop fetches everything and finds out the expensive way — a recording
-that was never transcribed answers with a bare `[]`.
-
-There is a better signal, on a call this skill never used to make:
-
-```bash
-plaud file "<id>"       # → audio: available / transcript: available / summary: available
-```
-
-**Through the MCP, do not do this.** `get_file` carries the same availability
-information, but its response is **140,970 characters** measured — it embeds the
-transcript source (`source_list` alone is 135,268). Pre-checking with it costs
-more than the ~53KB fetch it would avoid: you would pull three transcripts' worth
-of payload to learn you can skip one.
-
-So the pre-check is **CLI-only**. On the MCP path, fetch and treat the bare `[]`
-as the answer — that is the cheaper of the two wrong-shaped options.
-
-*(An earlier version of this section said "do both paths". That was written from
-the field list without measuring the payload — having the field you need does not
-mean it is cheap to obtain.)*
-
-**When to pre-check, and when not to.** This trades N cheap `get_file` calls for
-M avoided `get_transcript` calls, where M is however many recordings have no
-transcript. When M is near zero it is a net loss:
-
-| Situation | Do |
-|---|---|
-| First index of a library, or `--rebuild` | **Pre-check.** M is unknown and possibly large |
-| Incremental run over a handful of new ids | **Skip the pre-check.** Just fetch — N ≈ M ≈ small, and the extra round trip buys nothing |
-
-Say which one you did, and report skipped-for-no-transcript **separately** from
-skipped-for-already-cached. They are different facts about the library and
-merging them hides one of them.
-
-Why this matters beyond speed: the real rate limit is **unmeasured** (see #6 —
-normal use does not trigger throttling, but no ceiling was probed for). Not making
-a request you know will be useless is the one optimisation that is correct without
-knowing where the limit is.
-
-#### Prefer the CLI when it is installed — it keeps transcripts out of the context
-
-`get_transcript` returns the text **through the model**. Every page of every
-recording is read into context on the way to disk, which is what makes a large
-first index slow and expensive — and the whole point of this plugin is searching a
-large library.
-
-The official CLI writes straight to a file, so the text never enters context:
-
-```bash
-# Once per session, before using this path: does the CLI paginate too?
-plaud transcript --help
-```
-
-The docs give `plaud transcript <id>` exactly two forms — bare, and `-o <file>` —
-with **no cursor, page, or limit flag**, while `plaud files` and `plaud search` do
-document theirs (`-p/--page`, `--max`). Paging is spelled out where it exists, so
-its absence here reads as "one call returns the whole transcript". **That is an
-inference from silence, not a guarantee** — hence checking `--help` first. If it
-does list a paging flag, this fast path is unsafe: use the MCP loop below instead.
-
-**Measured, not inferred (2026-08-07, CLI 0.3.7, authenticated account).** A
-94-segment recording was fetched both ways: the MCP reported `total: 94`, and
-`plaud transcript <id> -o file` produced a file with exactly 94 speaker-tagged
-segments. **The CLI does not truncate** — one call returns the whole transcript.
-
-That closes the risk this section was written to flag: if the CLI *had* truncated,
-this fast path would have written truncated transcripts to disk marked
-`--complete true`, and the completeness check could not have caught it (there is no
-cursor on this path to check against). The premise is now verified for 0.3.7 rather
-than inferred from the absence of a flag — re-run `plaud transcript --help` after a
-CLI upgrade, because a later version could still start paginating.
-
-```bash
-tmp=$(mktemp)
-plaud transcript "<id>" -o "$tmp"          # never touches the model context
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put \
-  --id "<id>" --name "<name>" --created-at "<created_at>" --duration "<duration>" \
-  --complete true --pages 1 --last-cursor "" < "$tmp"
-rm -f "$tmp"
-```
-
-`--complete true` here rests on the CLI fetching everything. If a recording indexed
-this way later looks truncated, that assumption is where to look first.
-
-**The CLI and the MCP hold separate logins.** Tokens live in `~/.plaud/tokens.json`
-and `~/.plaud/tokens-mcp.json` respectively, so `plaud login` and the MCP's `login`
-tool are two different acts. "The MCP works but the CLI says unauthorised" is this,
-not a bug — run `plaud login`.
-
-Not installed? Say so once and use the MCP loop:
-
-```
-plaud CLI not found — indexing through the MCP instead, which pulls every
-transcript through the model context. `npm install -g @plaud-ai/cli` makes
-large libraries much cheaper to index.
-```
-
-#### Cache the polished transcript too — subtitles want it, search must not
-
-Plaud returns the same speech twice: raw, and a filler-thinned **polish** with
-**identical segments and identical timings** (measured 2026-08-07 — 94 segments
-either way, filler roughly halved). Subtitles want the tidy one; nobody reads
-"呃" on screen.
-
-```bash
-tmp=$(mktemp)
-plaud transcript "<id>" --polished -o "$tmp" 2>/dev/null && \
-  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind polish < "$tmp"
-rm -f "$tmp"
-```
-
-Through the MCP: `get_transcript` with `block="transaction_polish"`, same paging
-loop as the raw transcript, piped into the same `--kind polish` call.
-
-**`polish/` is deliberately excluded from search.** It is the same sentence said
-more tidily, so including it would return every line twice — raw and cleaned —
-which is not extra reach, it is halved signal. Contrast `summaries/`, which IS
-searched: a summary is *new* content, so searching it finds things findable
-nowhere else. That difference is the whole rule.
-
-Two things polish does **not** do, both measured — say them if the user expects
-otherwise:
-
-- **It does not fix mishearings.** In one recording a speaker's surname appears
-  one way four times and another way once; the polished copy keeps both. For that,
-  `plaud-proofread`.
-- **It normalises script** — simplified characters came back traditional. Good for
-  most readers here, a surprise for anyone expecting the bytes as transcribed.
-
-Polish is optional. A recording without one falls back to the raw transcript for
-subtitles, which is the pre-existing behaviour.
-
-#### Cache the summary too — it is often what the person remembers
-
-What someone recalls is usually closer to the **summary** (the point that was
-made) than to the transcript (the same point buried in filler). Both are worth
-searching, so index both.
-
-```bash
-# CLI path — stays out of the model context, same as the transcript
-tmp=$(mktemp)
-plaud summary "<id>" -o "$tmp" 2>/dev/null && \
-  python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind summary < "$tmp"
-rm -f "$tmp"
-```
-
-Through the MCP instead, `get_note` returns the same content; pipe it into the
-same `--kind summary` call.
-
-`--kind summary` writes to `summaries/` and **does not touch** the transcript,
-its `chars`, or its `complete` flag — those describe the transcript and would
-stop meaning anything if a summary could move them. A summary for a recording
-with no cached transcript is refused rather than written as an orphan.
-
-Summaries are optional. A recording with no summary is not incomplete — skip it
-quietly and carry on.
-
-#### `get_transcript` is paginated — one call is not the whole transcript
-
-**Response shape, measured 2026-08-07 (authenticated):**
-
-```jsonc
-{ "file_id": "...", "block": "transaction",
-  "total": 94,          // ← total segment count, present on every page
-  "offset": 92, "limit": 200, "returned": 2,
-  "next_cursor": null,  // ← JSON null when exhausted (base64 `{"o":N}` otherwise)
-  "segments": [ { "start_time": ..., "content": "...", "speaker": "..." } ] }
-```
-
-Three things this settles:
-
-- `next_cursor` is a **top-level key**, and exhaustion is a JSON **`null`** — not a
-  missing key, not an empty string.
-- `limit` is **not silently downgraded**: a request for 200 comes back echoing 200
-  (the schema caps it at 500).
-- **`total` exists.** That is a stronger completeness test than any cursor
-  heuristic: `offset + returned >= total` is arithmetic, while "does this cursor
-  look empty" is a judgement. Prefer the arithmetic.
-
-**A recording with no transcript returns a bare `[]`, not an object.** The two
-shapes are not interchangeable — code that reaches for `.next_cursor` on the empty
-case is reading a property of an array. Treat `[]` as "not transcribed yet, skip".
-
-It returns **one page of utterances** with a `next_cursor` for the rest. Calling
-it once and caching the result was the v0.1.0 bug: every recording was truncated
-to its first page, and `plaud-search` then reported "no match" for words that were
-spoken — a wrong answer that looks like a correct one.
-
-Loop per recording, accumulating pages:
-
-```
-cursor    = resume cursor from the manifest if this id was left incomplete, else none
-seen      = {}                      # cursors already followed
-segments  = []
-pages     = 0
-
+cursor = none; seen = {}; segments = []; pages = 0
 repeat up to 50 times:
     resp = get_transcript(file_id=<id>, block="transaction", limit=200, cursor=cursor)
-    pages += 1
-    append resp segments to segments
-    nxt = resp next_cursor
-
-    if nxt is absent / null / "" / whitespace        → complete, stop
-    if nxt already in seen, or this page had 0 segments → stuck, stop INCOMPLETE
-    seen.add(nxt); cursor = nxt
-else (hit the 50-page cap)                            → stop INCOMPLETE
+    pages += 1; append resp's segments
+    complete when  offset + returned >= total
+    stop INCOMPLETE if next_cursor is already in seen, or the page had 0 segments
+    cursor = next_cursor
 ```
 
-Each guard earns its place:
-
-- **`block="transaction"` explicitly.** It is the API default, but writing it
-  down keeps the next person from swapping in `transaction_polish`, whose
-  AI-cleaned wording would break `plaud-search`'s promise that the cache holds what
-  was actually said.
-- **`limit=200`, not the 500 maximum.** 500 is legal but untested here, and the
-  API's own default of 50 suggests pages are sized to bound response size. 200
-  cuts round trips without betting the whole recording on an unverified value.
-- **Stop on a repeated cursor or an empty page.** A cursor that stops advancing
-  otherwise burns all 50 pages before anyone notices. These catch it on page 2.
-- **The 50-page cap is a backstop, not the plan.** Hitting it means incomplete,
-  never "close enough".
-
-#### Write the cache **once**, after the loop
-
-`cache.py put` **overwrites**. Calling it per page leaves only the last page on
-disk — a cache that looks populated and is 1/N complete. Concatenate every page
-first, normalise, then write one entry:
+- `block="transaction"` explicitly — the polished block's reworded text would break
+  `plaud-search`'s promise that the cache holds what was said.
+- A recording with no transcript answers with a bare `[]`, not an object. Skip it.
+- Write the cache **once**, after the loop. `cache.py put` overwrites, so a call per
+  page leaves only the last page on disk:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put \
-  --id "<id>" \
-  --name "<name>" \
-  --created-at "<created_at>" \
-  --duration "<duration>" \
-  --complete true|false \
-  --pages <N> \
-  --last-cursor "<the last next_cursor you saw, verbatim>" <<'TRANSCRIPT'
-<the transcript text, one segment per line>
+  --id "<id>" --name "<name>" --created-at "<created_at>" --duration "<duration>" \
+  --complete true|false --pages <N> --last-cursor "<last next_cursor, verbatim>" <<'TRANSCRIPT'
+<one segment per line, e.g. [00:12:03] Speaker 1: ...>
 TRANSCRIPT
 ```
 
-**Pass `--last-cursor` verbatim even when it looked empty.** `cache.py` re-checks
-it against its own rule and downgrades a `--complete true` claim that does not
-hold up. That check is the only thing standing between "the loop ended early" and
-a truncated cache that reports itself as whole — this file's instructions are
-prose, and prose cannot be unit-tested.
+Pass `--last-cursor` verbatim even when it looked empty: `cache.py` re-checks the
+`--complete` claim against it and downgrades one that does not hold. If the loop
+breaks part-way, still write what you have with `--complete false` — partial and
+labelled beats nothing, and a later download that names it fetches it again.
 
-If the loop breaks part-way (network error, page cap), still write what you have
-with `--complete false`. Partial beats nothing: it is searchable now, carries a
-warning, and resumes next run.
-
-Normalise whatever `get_transcript` returns into **one segment per line**, keeping
-the timestamp and speaker label inline, e.g. `[00:12:03] Speaker 1: ...`. One
-segment per line is what makes `plaud-search`'s line-level hits map back to a point
-in the audio.
-
-If a recording has no transcript, skip it and say so — `cache.py put` refuses an
-empty body rather than caching a blank entry that would look indexed but match
-nothing.
-
-**Do not call it "still processing".** Plaud's API cannot say which of three
-things it is: nobody ever asked for a transcript, one is being made, or one
-failed. The official CLI's own test is `sourceList.some(s => s.data_type ===
-"transaction")` — an existence check, and `list_files` returns six fields, none
-of them about transcription. Measured across this account's ten most recent
-recordings: nine had no transcript, because Plaud only transcribes when someone
-presses 產生 / Generate and then confirms with 立即產生 / Generate now. **The
-state that needs an action is the common one**, and calling it "processing"
-turns it into a wait that never ends and produces no error to notice it by.
+The summary is `get_note`, piped into `cache.py put --id "<id>" --kind summary`.
 
 ### 4. Report
 
-State how many were already cached, how many were newly fetched, how many were
-skipped for having no transcript, and **how many finished incomplete** (page
-cap, stuck cursor, or an interrupted loop). Incomplete ones resume on the next
-run — say that, so nobody goes hunting for a rebuild flag. Then show
-`cache.py status`, which prints the same count.
+State the range you listed and **whether it may have been cut off** (step 2); how
+many were already cached, how many were downloaded now, how many were skipped for
+having no transcript, how many failed and with which exit code, and how many ended
+incomplete. Then show `cache.py status`.
 
-The no-transcript count needs its ambiguity said out loud, because the reader
-will otherwise supply the harmless reading. Say it in this shape:
+The no-transcript count needs its ambiguity said out loud, because the reader will
+otherwise supply the harmless reading. Say it in this shape:
 
 ```
 skipped 9 — no transcript
@@ -487,27 +199,17 @@ skipped 9 — no transcript
 ```
 
 **Do not try to guess which one it is.** There is no field to read, and any
-heuristic (age, say) is a proxy that will tell a user to press Generate on a
-recording that was merely slow. Naming the ambiguity and the one action that
-can help is the whole of what is available here.
+heuristic (age, say) will tell a user to press Generate on a recording that was
+merely slow. Naming the ambiguity and the one action that can help is all there is.
 
-Also say **how many pages of `list_files` you walked and why you stopped** —
-quote the `stop:` / `continue:` reason verbatim. One page is the normal
-incremental case. Many pages means either a first index, `--all`, or that
-`should-stop-paging` refused to stop (out-of-order listing, unreadable
-timestamp) — and that last one is worth knowing about, because it is the
-listing behaving differently from how this skill assumes it behaves.
+Finish by saying what the cache now is: **it holds only what has been downloaded.**
+A search over it covers that, not everything in Plaud.
 
 ## Cost warning
 
-Each uncached recording costs **at least one** `get_transcript` call — long
-recordings paginate and may need several. A first run over hundreds of recordings
-is slow and pulls a lot of text through the model context. For a large library,
-**tell the user the count first and let them scope it** with `--days` / `--since`
-rather than silently pulling everything.
-
-The same applies to the first run after upgrading from a pre-paging cache: every
-old entry is re-fetched. Step 3 tells you to announce that count before starting.
+Through the MCP, each uncached recording costs at least one `get_transcript` call
+and pulls its text through the model context. For a wide range, **tell the user the
+count first** (step 2) and let them narrow it.
 
 ## Where the cache lives
 

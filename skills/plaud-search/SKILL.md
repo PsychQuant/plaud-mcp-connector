@@ -44,7 +44,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<pattern>"
 ```
 
 Results are grouped per recording, newest first, each with the recording name,
-id, date and the matching lines.
+id, date and the matching lines. Every run — hit or miss — also prints, before
+anything else, what it searched:
+
+```
+searched 412 cached recordings, covering 2025-03-02 → 2026-10-04, 3 incomplete
+(the cache holds only what has been downloaded — not necessarily everything in Plaud)
+```
+
+**Quote that line in your answer, every time.** The cache holds only what the user
+chose to download, so a search result describes that part and nothing else.
 
 ### 2. Read the surrounding context
 
@@ -71,34 +80,40 @@ A recording can be cached without being cached *completely* — the fetch loop h
 its page cap or was interrupted. Those hits carry:
 
 ```
-⚠ partially indexed — more transcript may exist; re-run plaud-download
+⚠ partially indexed — more transcript may exist; download this recording again
 ```
 
 Treat the result as a floor, not a total. Say the recording is only partly
-indexed and suggest re-running `plaud-download` before drawing conclusions from it.
+indexed and suggest downloading it again with `plaud-download` before drawing
+conclusions from it.
 This is not the same as "(unnamed)", which means the manifest lost the entry —
 different cause, different fix.
 
 ## When there are no matches
 
-Empty results are ambiguous. Distinguish:
+Empty results are ambiguous. **Never answer with a bare "no match"** — always say
+what was searched, using the `searched …` line, and what that does not cover.
+Then distinguish:
 
-- **Cache is empty** → `cache.py` says so; run `plaud-download` first.
-- **Cache is stale** → run `cache.py status` and compare the date range to what
-  the user expects. A recording made after the last index run is not searchable.
-  Say this explicitly instead of reporting "not found".
+- **Cache is empty** → `cache.py` says so; ask the user which range to download
+  with `plaud-download`.
+- **Cache does not cover the period** → compare the `covering A → B` dates to what
+  the user is asking about. A recording outside that span, or made after the last
+  download, is not searchable. Say this explicitly instead of reporting "not found",
+  and offer to download that period.
 - **Genuinely absent** → the term really was not spoken (or ASR heard it
   differently — suggest a looser pattern, e.g. a distinctive substring or an
   alternation with likely mishearings). **Check `cache.py status` for an
   `incomplete:` count first** — you cannot conclude "never said" while any
   recording in the relevant period is only partly indexed.
 
-Never report "no such recording" when the real cause is an unindexed cache.
+Never report "no such recording" when the real cause is that it was never
+downloaded.
 
 ## Scope limit — be honest about it
 
-This searches **cached** transcripts only. Coverage equals whatever `plaud-download`
-last pulled. Before answering a question that depends on completeness ("did we
+This searches **cached** transcripts only. Coverage equals whatever the user has
+downloaded with `plaud-download`, which is not kept up to date. Before answering a question that depends on completeness ("did we
 *ever* discuss X?"), check `cache.py status` and state the covered date range
 alongside the answer.
 
