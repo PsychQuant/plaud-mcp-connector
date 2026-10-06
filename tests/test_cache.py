@@ -235,7 +235,7 @@ class TestCmdStatus(CacheTestCase):
         self._put("rec2", name="Two", body="foo bar baz\n", created_at="2026-03-01T00:00:00+00:00")
         out = self._capture_stdout(cache.cmd_status, argparse.Namespace(ids_only=False))
         self.assertIn("cached    : 2 recordings", out)
-        self.assertIn("2026-01-01 → 2026-03-01", out)
+        self.assertIn("2026-01 (1), 2026-03 (1)", out)
         self.assertIn("characters indexed", out)
 
     def test_entry_missing_chars_field_silently_undercounts(self):
@@ -1022,27 +1022,6 @@ class TestPutPolish(CacheTestCase):
         with self.assertRaises(SystemExit):
             self._put_kind("rec_ghost", "tidy with no transcript", "polish")
 
-
-# ===========================================================================
-# Incremental listing: where paging is allowed to stop (issue #27)
-# ===========================================================================
-#
-# `plaud-download` used to walk every page of `list_files` on every run, even when
-# three recordings were new. The saving is an early exit: stop paging once a
-# whole page is older than everything already cached.
-#
-# The official CLI's `plaud recent` does exactly this internally — and gets it
-# wrong in a way worth not copying. It compares an API timestamp
-# (`created_at`, which carries no timezone suffix) against the local clock
-# (`Date.now()`), so on UTC+8 every recording reads as eight hours older than
-# it is. Both sides of OUR comparison come from the API, so no timezone
-# question ever arises. `test_cutoff_comparison_never_reads_the_local_clock`
-# is what keeps it that way.
-#
-# The asymmetry that shapes every choice below: reading one page too many
-# costs one API call, and missing a recording costs silence — it is not
-# reported, does not appear in any count, and is simply never findable again.
-# Every uncertain case therefore resolves toward paging more.
 
 
 class TestOutlineCaching(CacheTestCase):

@@ -44,16 +44,19 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" search "<pattern>"
 ```
 
 Results are grouped per recording, newest first, each with the recording name,
-id, date and the matching lines. Every run — hit or miss — also prints, before
-anything else, what it searched:
+id, date and the matching lines. Every run — hit or miss — also prints what it
+searched: how many recordings, and which months they fall in.
 
 ```
-searched 412 cached recordings, covering 2025-03-02 → 2026-10-04, 3 incomplete
-(the cache holds only what has been downloaded — not necessarily everything in Plaud)
+searched 412 cached recordings, covering 2025-03 → 2025-11 (301), 2026-09 → 2026-10 (111), 3 incomplete
+(months not listed have nothing downloaded — the cache holds only what has been downloaded, not necessarily everything in Plaud)
 ```
 
 **Quote that line in your answer, every time.** The cache holds only what the user
-chose to download, so a search result describes that part and nothing else.
+chose to download, so a search result describes that part and nothing else. The
+months are listed one piece at a time on purpose: 2025-11 and 2026-09 above are not
+connected, and nothing in between was searched. Put `--` before a pattern that
+starts with a dash, so it is read as a pattern and not as an option.
 
 ### 2. Read the surrounding context
 
@@ -97,10 +100,10 @@ Then distinguish:
 
 - **Cache is empty** → `cache.py` says so; ask the user which range to download
   with `plaud-download`.
-- **Cache does not cover the period** → compare the `covering A → B` dates to what
-  the user is asking about. A recording outside that span, or made after the last
-  download, is not searchable. Say this explicitly instead of reporting "not found",
-  and offer to download that period.
+- **Cache does not cover the period** → check each month the user is asking about
+  against the pieces in the `covering …` list. A month that is not listed was never
+  downloaded, even when it falls between two listed ones. Say this explicitly instead
+  of reporting "not found", and offer to download that period.
 - **Genuinely absent** → the term really was not spoken (or ASR heard it
   differently — suggest a looser pattern, e.g. a distinctive substring or an
   alternation with likely mishearings). **Check `cache.py status` for an
@@ -113,9 +116,9 @@ downloaded.
 ## Scope limit — be honest about it
 
 This searches **cached** transcripts only. Coverage equals whatever the user has
-downloaded with `plaud-download`, which is not kept up to date. Before answering a question that depends on completeness ("did we
-*ever* discuss X?"), check `cache.py status` and state the covered date range
-alongside the answer.
+downloaded with `plaud-download`, which is not kept up to date. Before answering a
+question that depends on completeness ("did we *ever* discuss X?"), check
+`cache.py status` and state the months it covers alongside the answer.
 
 ## Some hits are not what was said
 

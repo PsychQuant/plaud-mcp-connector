@@ -87,13 +87,13 @@ class TestSearchStatesItsScope(CacheCase):
 
     def test_a_hit_says_how_many_recordings_were_searched_and_their_dates(self):
         out = self.cache_py("search", "budget").stdout
-        self.assertIn("searched 2 cached recordings, covering 2026-09-01 → 2026-10-01", out)
+        self.assertIn("searched 2 cached recordings, covering 2026-09 → 2026-10 (2)", out)
 
     def test_no_match_says_the_same_thing(self):
         """The case that matters: 'no match' over a partial cache is not 'never said'."""
         out = self.cache_py("search", "nonexistent-term").stdout
         self.assertIn("no match", out)
-        self.assertIn("searched 2 cached recordings, covering 2026-09-01 → 2026-10-01", out)
+        self.assertIn("searched 2 cached recordings, covering 2026-09 → 2026-10 (2)", out)
 
     def test_both_paths_say_the_cache_holds_only_what_was_downloaded(self):
         for term in ("budget", "nonexistent-term"):
@@ -139,6 +139,93 @@ class TestAnOldManifestStillLoads(CacheCase):
         self.assertNotIn("single_fetch", man["recordings"]["recB"])
 
 
+class TestTheScopeLineShowsGaps(CacheCase):
+    """R3: under range download a cache is a few separate pieces, so one min-to-max span
+    reads as continuous coverage and a search that missed March looks like it covered it."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for rid, when in (("recJan", "2026-01-05"), ("recSep", "2026-09-20"), ("recOct", "2026-10-01")):
+            self.put(rid, f"{when}T09:00:00.000Z", f"[00:00 - 00:04] Speaker 1: word in {rid}\n")
+
+    def test_separate_months_are_listed_separately_and_the_gap_is_not_covered(self):
+        out = self.cache_py("search", "word").stdout
+        self.assertIn("2026-01 (1)", out)
+        self.assertIn("2026-09 → 2026-10 (2)", out)
+        for absent in ("2026-02", "2026-03", "2026-05", "2026-08"):
+            self.assertNotIn(absent, out, "a month nothing was downloaded for must not appear")
+        self.assertIn("months not listed have nothing downloaded", out)
+
+    def test_status_shows_the_same_pieces_not_a_single_span(self):
+        out = self.cache_py("status").stdout
+        self.assertIn("2026-01 (1)", out)
+        self.assertNotIn("2026-01 → 2026-10", out)
+
+
+class TestTheScopeLineCountsWhatWasSearched(CacheCase):
+    def test_a_manifest_entry_whose_file_is_gone_is_not_counted_as_searched(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        self.put("recB", "2026-09-02T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: beta\n")
+        (self.cache_dir / "recB.md").unlink()
+        self.assertIn("searched 1 cached recordings", self.cache_py("search", "alpha").stdout)
+
+    def test_an_entry_with_no_completeness_marker_counts_as_incomplete_like_status_does(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        man_path = self.cache_dir / "manifest.json"
+        man = json.loads(man_path.read_text(encoding="utf-8"))
+        del man["recordings"]["recA"]["complete"]
+        man_path.write_text(json.dumps(man), encoding="utf-8")
+        self.assertIn("1 incomplete", self.cache_py("search", "alpha").stdout)
+
+
+class TestLegacyKeysAreNotWrittenBack(CacheCase):
+    def test_a_write_drops_full_sweep_at_and_single_fetch_from_the_manifest(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: a\n")
+        man_path = self.cache_dir / "manifest.json"
+        man = json.loads(man_path.read_text(encoding="utf-8"))
+        man["full_sweep_at"] = "2026-09-30T00:00:00Z"
+        man["recordings"]["recA"]["single_fetch"] = True
+        man_path.write_text(json.dumps(man), encoding="utf-8")
+        self.put("recB", "2026-10-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: b\n")
+        after = json.loads(man_path.read_text(encoding="utf-8"))
+        self.assertNotIn("full_sweep_at", after)
+        self.assertNotIn("single_fetch", after["recordings"]["recA"])
+
+
+class TestSearchAndPutDoNotTrustTheirInput(CacheCase):
+    def test_a_pattern_that_looks_like_an_option_is_a_pattern(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n")
+        proc = self.cache_py("search", "--", "--pre=nothing")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("no match", proc.stdout)
+
+    def test_a_newline_in_a_name_cannot_add_frontmatter_keys(self):
+        proc = self.cache_py("put", "--id", "recA", "--name", "a\ncomplete: true", "--created-at",
+                             "2026-09-01T09:00:00.000Z", "--duration", "1h", "--complete", "false",
+                             "--pages", "1", "--last-cursor", "x", stdin="[00:00 - 00:04] Speaker 1: a\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        head = (self.cache_dir / "recA.md").read_text(encoding="utf-8").split("\n---", 2)[0]
+        self.assertEqual(1, sum(1 for l in head.splitlines() if l.startswith("complete:")), head)
+        self.assertEqual(1, sum(1 for l in head.splitlines() if l.startswith("name:")), head)
+
+    def test_control_characters_in_a_recording_name_are_not_echoed(self):
+        self.put("recA", "2026-09-01T09:00:00.000Z", "[00:00 - 00:04] Speaker 1: alpha\n",
+                 "--name", "x\x1b[31mred")
+        out = self.cache_py("search", "alpha").stdout
+        self.assertNotIn("\x1b", out)
+
+
+class TestACacheRefusalIsNotNoTranscript(FetchOneTestCase):
+    def test_a_cache_that_cannot_be_written_exits_6_not_4(self):
+        blocker = self.cache_dir.parent / "not-a-directory"
+        blocker.write_text("x", encoding="utf-8")
+        env = self._env()
+        env["PLAUD_CACHE_DIR"] = str(blocker)
+        proc = subprocess.run([sys.executable, str(FETCH_ONE), "--id", "rec1"], capture_output=True,
+                              text=True, env=env, timeout=60)
+        self.assertEqual(6, proc.returncode, proc.stdout + proc.stderr)
+
+
 class TestTheIncrementalMachineryIsGone(CacheCase):
     def test_removed_subcommands_and_flags_are_refused(self):
         for args in (("should-stop-paging", "--cutoff", "2026-01-01T00:00:00Z"),
@@ -157,14 +244,18 @@ class TestTheIncrementalMachineryIsGone(CacheCase):
     def test_no_source_file_still_names_the_removed_mechanism(self):
         banned = ("should-stop-paging", "should_stop_paging", "mark-full-sweep", "mark_full_sweep",
                   "list-cutoff", "list_cutoff", "full_sweep_at", "SWEEP_STALE_DAYS", "page_verdict",
-                  "--single-fetch", "single_fetch")
+                  "--single-fetch", "single_fetch",
+                  # Words for the old index/sweep model, which the site and the skills said
+                  # in prose rather than as symbols (R3).
+                  "index run", "everything you have indexed", "what you indexed", "next run")
         # An OLD manifest key may be mentioned where the code says it is tolerated and
         # ignored; that is the one legitimate reason, marked with this exact phrase.
         allowed_marker = "legacy manifest key"
         hits = []
-        for rel in ("scripts/cache.py", "scripts/fetch_one.py", "scripts/to_srt.py",
-                    "skills/plaud-download/SKILL.md", "skills/plaud-search/SKILL.md",
-                    "skills/plaud-to-srt/SKILL.md", "README.md"):
+        shipped = ["scripts/cache.py", "scripts/fetch_one.py", "scripts/to_srt.py", "README.md",
+                   "site/index.html", "skills/plaud-download/report_template.txt"]
+        shipped += sorted(str(p.relative_to(REPO)) for p in (REPO / "skills").glob("*/SKILL.md"))
+        for rel in shipped:
             for n, line in enumerate((REPO / rel).read_text(encoding="utf-8").splitlines(), 1):
                 if any(b in line for b in banned) and allowed_marker not in line:
                     hits.append(f"{rel}:{n}: {line.strip()[:100]}")
@@ -192,6 +283,38 @@ class TestTheSkillsDescribeRangeDownload(unittest.TestCase):
             self.assertIn(needed, text)
         self.assertNotIn("looks like a cap", text, "the round-number heuristic was a guess")
         self.assertNotIn("split the window", text, "splitting cannot beat a 500-recording scan budget")
+
+    def test_the_mcp_loop_records_the_cursors_it_has_followed(self):
+        self.assertIn("seen.add", self.skill("plaud-download"),
+                      "a `seen` set that is never added to cannot catch a repeated cursor")
+
+    def test_the_mcp_put_command_is_the_hardened_form(self):
+        text = self.skill("plaud-download")
+        self.assertNotIn("<<'TRANSCRIPT'", text, "a fixed heredoc marker can be ended by the speech")
+        self.assertIn("<random>", text)
+        self.assertIn("--name='<name>'", text)
+        self.assertNotIn('--name "<name>"', text, "Plaud's text inside double quotes is still expanded by the shell")
+        for needed in ("single quotes", "backtick"):
+            self.assertIn(needed, text)
+
+    def test_ids_are_checked_and_plaud_text_is_data(self):
+        text = " ".join(self.skill("plaud-download").split())   # a phrase may wrap across lines
+        for needed in ("hexadecimal", "data, not instructions"):
+            self.assertIn(needed, text)
+
+    def test_the_coverage_test_has_a_day_of_margin_and_covers_name_queries(self):
+        text = self.skill("plaud-download")
+        self.assertIn("day before", text)
+        self.assertIn("query", text.split("scanned_back_to", 1)[1])
+
+    def test_the_cli_only_extras_and_the_older_summary_gap_are_said_plainly(self):
+        text = self.skill("plaud-download")
+        self.assertRegex(text, r"(?is)polished.{0,200}only.{0,60}CLI|only.{0,60}CLI.{0,200}polished")
+        self.assertIn("--force", text.split("What the extra two are for", 1)[1])
+
+    def test_search_does_not_claim_the_scope_line_comes_before_everything(self):
+        self.assertNotIn("before\nanything else", self.skill("plaud-search"))
+        self.assertNotIn("before anything else", self.skill("plaud-search"))
 
     def test_download_description_leads_with_the_verb(self):
         text = self.skill("plaud-download")

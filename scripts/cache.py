@@ -96,10 +96,31 @@ def _now() -> str:
 def _load_manifest() -> dict:
     if MANIFEST.exists():
         try:
-            return json.loads(MANIFEST.read_text())
+            return _without_legacy_keys(json.loads(MANIFEST.read_text()))
         except json.JSONDecodeError:
             print(f"warn: {MANIFEST} is corrupt — starting a fresh manifest", file=sys.stderr)
     return {"version": "1", "recordings": {}}
+
+
+LEGACY_TOP_KEY, LEGACY_RECORD_KEY = "full_sweep_at", "single_fetch"   # legacy manifest keys, 0.11
+
+
+def _without_legacy_keys(man: dict) -> dict:
+    """What 0.11 wrote and nothing reads now. A manifest that carries them loads without
+    complaint and is not written back with them, so it sheds them the first time it is saved."""
+    man.pop(LEGACY_TOP_KEY, None)
+    for rec in (man.get("recordings") or {}).values():
+        if isinstance(rec, dict):
+            rec.pop(LEGACY_RECORD_KEY, None)
+    return man
+
+
+def _clean(text) -> str:
+    """Plaud's text reaches a terminal and a YAML header. Control characters (an escape
+    sequence, a newline that would start a new header key, a bidi mark) are replaced by a
+    space, the way check_skill_collisions.py does for the same reason."""
+    return "".join(" " if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") else ch
+                   for ch in str(text or ""))
 
 
 def _save_manifest(data: dict) -> None:
@@ -185,9 +206,8 @@ def cmd_status(args) -> None:
     if incomplete:
         print(f"incomplete: {len(incomplete)} (a download that covers them fetches them again)")
     if recs:
-        dates = sorted(r.get("created_at", "") for r in recs.values() if r.get("created_at"))
-        if dates:
-            print(f"range     : {dates[0][:10]} → {dates[-1][:10]}")
+        if any(r.get("created_at") for r in recs.values()):
+            print(f"months    : {_month_pieces(recs)}")
         total = sum(r.get("chars", 0) for r in recs.values())
         print(f"transcript: {total:,} characters indexed")
         summarised = sum(1 for r in recs.values() if r.get("has_summary"))
@@ -224,7 +244,7 @@ def cmd_put(args) -> None:
         man = _load_manifest()
         if rec_id not in man["recordings"]:
             sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
-                     f"orphan {kind} the manifest would never mention. Index it first.")
+                     f"orphan {kind} the manifest would never mention. Download it first.")
         subdir, flag = {
             "summary": ("summaries", "has_summary"),
             "polish": ("polish", "has_polish"),
@@ -247,7 +267,7 @@ def cmd_put(args) -> None:
     # Verify the completeness claim instead of taking it on faith. If the caller
     # says "done" but hands back a cursor that is still live, the loop stopped
     # early — downgrade rather than error, so the transcript we did fetch is kept
-    # and the next index run picks it up.
+    # and a later download that names it fetches it again.
     complete = claimed
     warning = ""
     if claimed and last_cursor is not None and not _is_cursor_exhausted(last_cursor):
@@ -255,15 +275,16 @@ def cmd_put(args) -> None:
         warning = (
             f"\n⚠ {rec_id}: caller claimed --complete true but --last-cursor "
             f"{last_cursor!r} is not exhausted — recorded as INCOMPLETE. "
-            f"The fetch loop stopped early; the next index run will resume it."
+            f"The fetch loop stopped early; a later download that names it fetches it again."
         )
 
+    name, created_at = _clean(args.name).strip(), _clean(args.created_at).strip()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     front = [
         "---",
         f"id: {rec_id}",
-        f'name: "{(args.name or "").replace(chr(34), chr(39))}"',
-        f"created_at: {args.created_at or ''}",
+        f'name: "{name.replace(chr(34), chr(39)).replace(chr(92), chr(47))}"',
+        f"created_at: {created_at}",
         f"duration_ms: {args.duration or ''}",
         f"complete: {'true' if complete else 'false'}",
         f"pages: {pages}",
@@ -276,8 +297,8 @@ def cmd_put(args) -> None:
 
     man = _load_manifest()
     man["recordings"][rec_id] = {
-        "name": args.name or "",
-        "created_at": args.created_at or "",
+        "name": name,
+        "created_at": created_at,
         "duration_ms": args.duration or "",
         "chars": len(body),
         "complete": complete,
@@ -332,6 +353,38 @@ def _hit_source(path: pathlib.Path) -> str:
     return ""
 
 
+def _searched(man: dict) -> dict:
+    """The recordings a search can actually reach: in the manifest AND on disk. A manifest
+    entry whose file was cleared away is not searched, and must not be counted as if it was."""
+    return {k: v for k, v in man.items() if (CACHE_DIR / f"{k}.md").is_file()}
+
+
+def _month_pieces(recs: dict) -> str:
+    """Which months have downloads, as separate pieces: `2026-01 (1), 2026-09 → 2026-10 (2)`.
+    Months that follow each other are one piece; a month nothing was downloaded for is
+    simply not there. Under range download a cache is a few pieces, so a single
+    first-to-last span would read as continuous coverage — and a search that never saw
+    March would look as if it had."""
+    counts: dict = {}
+    for r in recs.values():
+        month = _clean(r.get("created_at", ""))[:7]
+        if len(month) == 7 and month[4] == "-" and (month[:4] + month[5:]).isdigit():
+            counts[month] = counts.get(month, 0) + 1
+    if not counts:
+        return "dates unknown"
+    pieces: list = []   # [first_month, last_month, count]
+    for month in sorted(counts):
+        year, mon = int(month[:4]), int(month[5:])
+        if pieces:
+            ly, lm = int(pieces[-1][1][:4]), int(pieces[-1][1][5:])
+            if (year, mon) == (ly + (lm == 12), 1 if lm == 12 else lm + 1):
+                pieces[-1][1] = month
+                pieces[-1][2] += counts[month]
+                continue
+        pieces.append([month, month, counts[month]])
+    return ", ".join(f"{a}{'' if a == b else f' → {b}'} ({n})" for a, b, n in pieces)
+
+
 def _scope_lines(man: dict) -> str:
     """What a search covered, so "no match" cannot be read as "never said".
 
@@ -339,12 +392,12 @@ def _scope_lines(man: dict) -> str:
     search over that part, and a bare "no match" is a wrong answer that looks like a
     correct one. These lines go out on EVERY path — hit or miss — because the miss is
     where the difference matters."""
-    dates = sorted(r.get("created_at", "")[:10] for r in man.values() if r.get("created_at"))
-    span = f"{dates[0]} → {dates[-1]}" if dates else "dates unknown"
-    partial = sum(1 for r in man.values() if r.get("complete") is False)
+    reach = _searched(man)
+    partial = sum(1 for r in reach.values() if not _is_complete(r))
     extra = f", {partial} incomplete" if partial else ""
-    return (f"searched {len(man)} cached recordings, covering {span}{extra}\n"
-            "(the cache holds only what has been downloaded — not necessarily everything in Plaud)")
+    return (f"searched {len(reach)} cached recordings, covering {_month_pieces(reach)}{extra}\n"
+            "(months not listed have nothing downloaded — the cache holds only what has been "
+            "downloaded, not necessarily everything in Plaud)")
 
 
 def cmd_search(args) -> None:
@@ -357,7 +410,7 @@ def cmd_search(args) -> None:
         cmd = ["rg", "--line-number", "--no-heading", "--color=never"]
         if not args.case_sensitive:
             cmd.append("--ignore-case")
-        cmd += [normalize_pattern(args.pattern), str(CACHE_DIR)]
+        cmd += ["--", normalize_pattern(args.pattern), str(CACHE_DIR)]
     else:
         # grep -r is POSIX-ubiquitous; ripgrep is only a speed upgrade here.
         # -E is REQUIRED, not cosmetic: BSD grep (macOS) defaults to basic regex,
@@ -368,7 +421,7 @@ def cmd_search(args) -> None:
         cmd = ["grep", "-rnE"]
         if not args.case_sensitive:
             cmd.append("-i")
-        cmd += ["--include=*.md", normalize_pattern(args.pattern), str(CACHE_DIR)]
+        cmd += ["--include=*.md", "--", normalize_pattern(args.pattern), str(CACHE_DIR)]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
@@ -398,7 +451,7 @@ def cmd_search(args) -> None:
         hits.setdefault(rec_id, []).append((parts[2].strip(), source))
 
     if not hits:
-        print(f"no match for {args.pattern!r} across {len(man)} cached recordings")
+        print(f"no match for {args.pattern!r} across {len(_searched(man))} cached recordings")
         print(_scope_lines(man))
         return
 
@@ -410,8 +463,8 @@ def cmd_search(args) -> None:
     print()
     for rec_id, lines in ordered:
         meta = man.get(rec_id, {})
-        print(f"── {meta.get('name') or '(unnamed)'}")
-        print(f"   id {rec_id}  ·  {(meta.get('created_at') or '?')[:10]}  ·  {len(lines)} hit(s)")
+        print(f"── {_clean(meta.get('name')) or '(unnamed)'}")
+        print(f"   id {rec_id}  ·  {_clean(meta.get('created_at') or '?')[:10]}  ·  {len(lines)} hit(s)")
         # Only for records the manifest knows about and marks incomplete. An .md
         # with no manifest entry at all is a different problem (lost manifest, not
         # a half-fetched transcript) and already shows as "(unnamed)" above —
@@ -466,7 +519,7 @@ def cmd_find(args) -> None:
     for rec_id, rec in hits:
         state = "complete" if _is_complete(rec) else "INCOMPLETE"
         when = str(rec.get("created_at", ""))[:10] or "undated"
-        print(f"  {rec_id}  ·  {rec.get('name', '')}  ·  {when}  ·  "
+        print(f"  {rec_id}  ·  {_clean(rec.get('name', ''))}  ·  {when}  ·  "
               f"{_human_duration(rec.get('duration_ms'))}  ·  {state}")
 
 

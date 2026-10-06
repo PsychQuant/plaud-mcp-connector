@@ -25,6 +25,9 @@ Exit codes are a contract — the skill branches on them:
     4  nothing usable came back: the CLI answered with nothing, failed, or hung
        past PLAUD_FETCH_TIMEOUT seconds (default 300)   -> nothing was cached
     5  the CLI is not logged in             -> tell the user to run `plaud login`
+    6  the transcript was in hand but the cache would not take it (full disk, a
+       cache path that is not a directory, a refusal from cache.py)
+                                            -> a local problem; show the message
 
 Nothing is written to the cache until a non-empty transcript is in hand, so a
 failed fetch — including a failed `--force` refresh — leaves whatever was cached
@@ -58,6 +61,7 @@ EXIT_BAD_ARGS = 2
 EXIT_NO_CLI = 3
 EXIT_NOTHING = 4
 EXIT_NOT_LOGGED_IN = 5
+EXIT_CACHE = 6
 
 def _timeout() -> float:
     raw = os.environ.get("PLAUD_FETCH_TIMEOUT", "300")
@@ -232,9 +236,8 @@ def main() -> int:
                      "--last-cursor", "")
     if prc != 0:
         print(perr or "cache.py put refused the transcript", file=sys.stderr)
-        return EXIT_NOTHING
+        return EXIT_CACHE
 
-    polish_note = ""
     if have_polish:
         rc3, perr2 = _put(rec_id, polished, "--kind", "polish")
         if rc3 != 0:

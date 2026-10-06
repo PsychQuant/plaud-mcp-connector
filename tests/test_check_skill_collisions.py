@@ -314,5 +314,28 @@ class AGateThatCannotReadItsInputMustNotSayClean(unittest.TestCase):
         self.assertNotIn("Traceback", r.stderr)
 
 
+class TestMoreWaysAnInputCanBeUnusable(AGateThatCannotReadItsInputMustNotSayClean):
+    def test_an_install_record_that_is_json_null_is_an_error_not_no_record(self):
+        r = self.run_with_record("null")
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("cache only", (r.stdout + r.stderr).lower())
+
+    def test_an_empty_install_path_is_an_error_not_the_current_directory(self):
+        r = self.run_with_record('{"plugins": {"a@m": [{"installPath": ""}]}}')
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+        r = self.run_with_record('{"plugins": {"a@m": [{"installPath": "   "}]}}')
+        self.assertEqual(2, r.returncode, r.stdout + r.stderr)
+
+    def test_one_skill_file_that_is_not_utf8_does_not_abort_the_whole_check(self):
+        base = self.cache / "mkt" / "odd" / "1.0.0" / "skills" / "broken"
+        base.mkdir(parents=True)
+        (base / "SKILL.md").write_bytes(b"---\nname: \xff\xfe\n---\n")
+        make_plugin(self.cache, "mkt", "good", "1.0.0", ["plaud-search"])
+        r = subprocess.run([sys.executable, str(SCRIPT), "--repo", str(self.repo), "--plugins-dir", str(self.cache)],
+                           capture_output=True, text=True)
+        self.assertEqual(1, r.returncode, r.stdout + r.stderr)
+        self.assertNotIn("unexpected failure", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

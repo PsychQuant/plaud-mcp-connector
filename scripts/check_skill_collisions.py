@@ -40,6 +40,10 @@ Known limits (each makes the result over-report or under-cover, never silently c
 * NOT scanned: `commands/` of other plugins, skill paths a plugin redirects with a
   custom manifest, and skills under ~/.claude/skills or any project's .claude/skills.
   A clash with one of those would not be reported (#80).
+* Our own plugin is skipped by NAME only, whatever marketplace it came from, so a
+  same-named plugin from another marketplace is not compared.
+* A run that compared 0 plugins (every recorded install path gone, or all switched off)
+  still exits 0. The count is in the clean line; the exit status does not carry it.
 
 Names read from the install record or cache are printed with control, format and
 line-separator characters replaced, because they are chosen by other plugins' authors
@@ -99,7 +103,9 @@ def frontmatter_name(skill_md: pathlib.Path) -> str | None:
     """`name:` from the YAML frontmatter only — it also appears in prose further down."""
     try:
         text = skill_md.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # One unreadable file in somebody else's plugin must not end the whole check;
+        # without a parsable name the skill is known by its directory name.
         return None
     if not text.startswith("---"):
         return None
@@ -162,8 +168,11 @@ def default_claude_paths(plugins_dir: pathlib.Path):
     return None, None
 
 
+ABSENT = object()   # a default file that is not there; distinct from a file whose JSON is `null`
+
+
 def load_json(path: pathlib.Path, what: str, *, explicit: bool):
-    """Parsed JSON, or None when a DEFAULT file simply is not there.
+    """Parsed JSON, or ABSENT when a DEFAULT file simply is not there.
 
     A file that was named explicitly, or that exists but is unreadable or not JSON, is an
     InputError: guessing past it would turn "could not read" into "nothing to report"."""
@@ -172,7 +181,7 @@ def load_json(path: pathlib.Path, what: str, *, explicit: bool):
     except FileNotFoundError:
         if explicit:
             raise InputError(f"{what} {path} does not exist")
-        return None
+        return ABSENT
     except OSError as exc:
         raise InputError(f"{what} {path} could not be read: {exc.strerror or exc}")
     try:
@@ -191,10 +200,11 @@ def validate_install_record(record, source: pathlib.Path) -> dict:
         raise InputError(f"install record {source} has no `plugins` map; its layout is not one this check understands")
     for key, entries in plugins.items():
         if not isinstance(entries, list) or not all(
-            isinstance(e, dict) and isinstance(e.get("installPath"), str) for e in entries
+            isinstance(e, dict) and isinstance(e.get("installPath"), str) and e["installPath"].strip()
+            for e in entries
         ):
             raise InputError(
-                f"install record {source}: entry `{printable(str(key))}` is not a list of objects with a string installPath"
+                f"install record {source}: entry `{printable(str(key))}` is not a list of objects with a non-empty string installPath"
             )
     return plugins
 
@@ -270,17 +280,19 @@ def run(args) -> int:
 
     record = (
         load_json(installed_path, "install record", explicit=args.installed_file is not None)
-        if installed_path else None
+        if installed_path else ABSENT
     )
     settings = (
         load_json(settings_path, "settings file", explicit=args.settings is not None)
-        if settings_path else None
-    ) or {}
+        if settings_path else ABSENT
+    )
+    if settings is ABSENT or settings is None:
+        settings = {}
     disabled = disabled_plugins(settings)
     own = own_plugin_name(args.repo)
     stats = {"compared": 0, "missing": []}
 
-    if record is not None:
+    if record is not ABSENT:
         found = installed_skills(validate_install_record(record, installed_path), disabled, own, stats)
         basis = "installed"
     elif args.plugins_dir.is_dir():

@@ -21,7 +21,7 @@ runs it unmodified. But its surface is deliberately narrow:
 | | Official Plaud MCP | This plugin adds |
 |---|---|---|
 | Tools | 7, all read-only: `login`, `logout`, `get_current_user`, `list_files`, `get_file`, `get_note`, `get_transcript` | — |
-| Search | `query` matches **recording names only**, across the **newest 500** recordings | Full-text search over transcript **bodies**, across everything you have indexed |
+| Search | `query` matches **recording names only**, across the **newest 500** recordings | Full-text search over transcript **bodies**, across the recordings you have downloaded |
 
 So the official server can tell you a recording is called *"Weekly sync"*. It
 cannot tell you **which** recording is the one where somebody actually said
@@ -78,8 +78,9 @@ Downloads the transcripts of **a range you name** — the last two weeks, Septem
 these three meetings — and writes one markdown file per recording to
 `~/.plaud-connector/cache/`. It lists the range, shows how many are already cached
 and how many it would fetch, **asks you to confirm**, then downloads them one at a
-time. Each recording also gets its polished transcript (for subtitles) and its
-summary (searched by `plaud-search`).
+time. Through the official CLI each recording also gets its polished transcript (for
+subtitles) and its summary (searched by `plaud-search`); without the CLI, the MCP path
+caches the raw transcript and the summary, and subtitles come from the raw one.
 
 It does not keep anything in sync, and that is why it is called *download*. There
 is no whole-library mode, nothing is fetched unless you named a range, and a
@@ -91,7 +92,9 @@ The official CLI has a `plaud recent` that looks like the tool for listing. It i
 not: it is the same `list_files` walk with a local filter, capped at 300
 recordings **without saying so**, and it compares the API's timezone-less
 timestamps against your local clock — eight hours of drift in UTC+8. Listing here
-goes through `list_files` with explicit dates, so that question never arises.
+goes through `list_files` with explicit dates. The timezone question moves rather
+than disappearing: `scanned_back_to` is UTC and your `date_from` is a local date, so
+the skill asks for a day of margin instead of comparing them to the hour.
 
 A filtered `list_files` ignores `page` / `page_size` and scans only the 500 most
 recent recordings, and says how far back it got (`scanned_back_to`). The skill reads
