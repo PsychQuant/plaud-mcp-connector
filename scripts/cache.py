@@ -6,12 +6,10 @@ newest 500 recordings. This cache lands transcript BODIES on disk so they can be
 searched in full, with no embedding service and no extra dependencies.
 
 Subcommands
-    status            what is already cached (so indexing only fetches new ids)
+    status            what is already cached (so a download can skip whole recordings)
     put               write one recording's transcript (body on stdin)
     search <pattern>  full-text search across cached transcripts
     show <id>         print one cached transcript
-    should-stop-paging  may an incremental listing stop here? (page on stdin)
-    mark-full-sweep   record that a listing was walked to its end, unscoped
     find              resolve a recording by NAME (not full text) -> id, date, state
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
@@ -77,29 +75,13 @@ known is the mistake #36 was about.
 """
 import argparse
 import json
-import math
 import os
 import pathlib
 import re
 import subprocess
 import sys
 import unicodedata
-from datetime import datetime, timedelta, timezone
-
-# How far back a listing keeps paging past everything already cached. A
-# recording can reach the cloud later than the one before it, so "newer than
-# the newest we hold" is not the same as "not yet seen". The two costs are not
-# comparable: one extra page is one API call, while a missed recording is
-# never reported, never counted, and never findable again — so this is a day
-# rather than an hour, and it is subtracted, never added.
-LIST_SAFETY_MARGIN = timedelta(days=1)
-
-# How long a full listing sweep stays trustworthy before `status` says so. Not
-# a preference: applying the test in config.py — can you say who picks the
-# other value, in what situation, and why they are right? — nobody has an
-# answer for "my blind spot should be allowed to grow for 60 days instead of
-# 30". It is a decision, and decisions belong in the code.
-SWEEP_STALE_DAYS = 30
+from datetime import datetime, timezone
 
 CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
@@ -114,10 +96,47 @@ def _now() -> str:
 def _load_manifest() -> dict:
     if MANIFEST.exists():
         try:
-            return json.loads(MANIFEST.read_text())
+            return _without_legacy_keys(json.loads(MANIFEST.read_text()))
         except json.JSONDecodeError:
             print(f"warn: {MANIFEST} is corrupt — starting a fresh manifest", file=sys.stderr)
     return {"version": "1", "recordings": {}}
+
+
+LEGACY_TOP_KEY, LEGACY_RECORD_KEY = "full_sweep_at", "single_fetch"   # legacy manifest keys, 0.11
+
+
+def _without_legacy_keys(man: dict) -> dict:
+    """What 0.11 wrote and nothing reads now. A manifest that carries them loads without
+    complaint and is not written back with them, so it sheds them the first time it is saved."""
+    man.pop(LEGACY_TOP_KEY, None)
+    for rec in (man.get("recordings") or {}).values():
+        if isinstance(rec, dict):
+            rec.pop(LEGACY_RECORD_KEY, None)
+    return man
+
+
+# The two format characters that are part of how text is SPELT: the zero-width joiner holds
+# emoji sequences and some scripts together, the non-joiner is orthography in Persian and
+# several Indic scripts. Every other format character (tag characters that spell ASCII
+# invisibly, zero-width space, word joiner, byte-order mark, soft hyphen, bidi overrides)
+# only hides or reorders what a reader or the model sees.
+_SPELLING_FORMAT_CHARS = frozenset("\u200c\u200d")
+
+
+def _clean(text) -> str:
+    """Plaud's text reaches a terminal and a YAML header. Control characters, line and
+    paragraph separators and every format character except the two that are spelling are
+    replaced by a space. The cost is that emoji flags (spelt with tag characters) lose their
+    flag; a name that carries a hidden instruction is the worse outcome.
+
+    This is a deny-list by Unicode category, not a full allow-list: invisible characters in
+    other categories (variation selectors, filler letters, private use) are not removed, and
+    the two joiners kept here can carry hidden bits. It is applied to name, created_at,
+    duration and printed lines, not to the transcript body or `last_cursor`."""
+    return "".join(
+        " " if unicodedata.category(ch) in ("Cc", "Zl", "Zp")
+        or (unicodedata.category(ch) == "Cf" and ch not in _SPELLING_FORMAT_CHARS) else ch
+        for ch in str(text or ""))
 
 
 def _save_manifest(data: dict) -> None:
@@ -188,203 +207,9 @@ def _is_complete(rec: dict) -> bool:
     return rec.get("complete", False) is True
 
 
-def _parse_api_time(raw) -> datetime | None:
-    """One `created_at` as the API wrote it, or None if it cannot be read.
-
-    Every timestamp compared here comes from `list_files` on both sides — the
-    one stored in the manifest and the one on the page being walked. That is
-    the whole reason no timezone handling appears in this module: the API's
-    timestamps carry no offset, and the moment one side of the comparison is a
-    local clock instead, a UTC+8 reader silently shifts every recording eight
-    hours older. The official CLI's `plaud recent` does exactly that
-    (`new Date(created_at)` against `Date.now()`), which is the defect this
-    code exists to not inherit.
-
-    A timestamp with no offset is read as **UTC**, not as local time. That is
-    measured rather than assumed: one recording's `start_at` reads
-    `...T02:01:34` while the name Plaud generated for it reads `10:01:34`, an
-    eight-hour offset on a UTC+8 machine. Reading it as local time instead is
-    the official CLI's bug — and leaving it naive would make a `Z`-suffixed
-    timestamp incomparable with a bare one, since Python refuses to order
-    offset-aware against offset-naive and the run would die rather than answer.
-    """
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    text = raw.strip()
-    # A date with no time is not a timestamp. `fromisoformat("2026-08-05")`
-    # succeeds and silently means midnight — inventing precision that was not
-    # there, and landing on the side that pages LESS. Nothing in `created_at`
-    # is ever date-only, so that shape means a hand-edited manifest or a
-    # changed API: unknown, and the rule for unknown is "page more".
-    if "T" not in text and " " not in text:
-        return None
-    try:
-        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        # TypeError as well as ValueError: this function's whole promise is
-        # "None if it cannot be read", and an exception escaping it would take
-        # down an indexing run over one bad manifest entry. The isinstance
-        # check above covers the known route in; this is the backstop for the
-        # ones nobody thought of.
-        return None
-    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
-
-
-def list_cutoff(man: dict) -> str | None:
-    """Where a fresh listing may stop paging, or None when it may not.
-
-    None is the honest answer for a first index and for a cache whose every
-    entry is half-fetched: there is no point to stop at, so the caller walks
-    the whole library. Returning some default timestamp instead would turn a
-    first index into "the most recent page only", which looks like success.
-
-    Only `complete` records count. A half-fetched one is the weakest possible
-    evidence that everything up to its date was listed, and excluding it moves
-    the cutoff older — which pages more, at a cost of one page.
-
-    And none of them count at all without `full_sweep_at`. `complete` says one
-    recording's transcript came down whole; it says nothing about whether the
-    listing was ever walked to its end. Reading the first as the second was a
-    CRITICAL found in verify, with three silent ways to lose recordings for
-    good — a cache built by `--days 1`, a first index interrupted after one
-    write, and a library that simply never had `--all` run over it. In each,
-    a cutoff existed, the next run stopped on the first old page, and every
-    run after that stopped in the same place.
-    """
-    if not sweep_recorded(man):
-        return None
-    # A record fetched on its own (`put --single-fetch`, written by fetch_one.py)
-    # says one transcript came down whole and nothing at all about the listing.
-    # Counting it moved the cutoff to the newest such recording, and the next
-    # incremental sync stopped there, skipping everything in between (verify R1).
-    # A later `put` WITHOUT the flag — a sync that listed its way to the recording —
-    # replaces the record and counts again, which is right: that walk covered it.
-    times = [
-        t for rec in man.get("recordings", {}).values()
-        if _is_complete(rec) and rec.get("single_fetch") is not True
-        and (t := _parse_api_time(rec.get("created_at"))) is not None
-    ]
-    if not times:
-        return None
-    # Emitted without the offset, matching the shape `list_files` sends. The
-    # cutoff crosses a shell boundary as a string and comes back through
-    # `--cutoff`, so its shape is part of the contract — and anything read back
-    # in with no offset is treated as UTC, which is what it is.
-    edge = (max(times) - LIST_SAFETY_MARGIN).astimezone(timezone.utc)
-    return edge.replace(tzinfo=None).isoformat()
-
-
-LATCH = "set --anomaly-seen for the rest of this run"
-
-
-def page_verdict(dates: list, cutoff: str | None,
-                 prev_last: str | None = None, anomaly_seen: bool = False) -> tuple:
-    """Does this page of `list_files` end the walk? Returns (stop, reason).
-
-    Ways to answer "keep going", each covering a case where stopping would be
-    wrong in a way nobody would notice:
-
-    - **An empty page.** `all([])` is True, so the naive test reads no results
-      as "everything here is old".
-    - **A page that is not sorted newest-first.** The early exit only works
-      because `list_files` returns descending `created_at`. That is observed,
-      not promised — if it ever sorted by `start_at` (a recording's own time
-      rather than its upload time) the walk would stop short in silence.
-    - **A page starting newer than the previous one ended.** One page being
-      descending says nothing about the sequence. Three pages can each descend
-      internally while page 3 jumps back above page 2 — and with one entry per
-      page the within-page check passes vacuously every time. So `prev_last`
-      carries the boundary forward.
-    - **A timestamp that will not parse.** Unknown is not old.
-
-    Every uncertain case here resolves to "keep paging": slower, and correct.
-
-    That is a claim about THIS function, not about the walk. An early exit
-    cannot be made lossless: a recording that reached the cloud late carries an
-    old `created_at`, sits below the cutoff, and is stepped over by a listing
-    that is perfectly ordered and perfectly parseable. No check here reaches
-    it. The remedy is a periodic full sweep, which is why `status` says how
-    long since the last one.
-
-    **`anomaly_seen` latches the whole run.** Before it existed, a page that
-    came back out of order only stopped *that* page from ending the walk; the
-    next orderly-looking page could still stop it. The latch state belongs to
-    the caller — one run, many invocations — so it arrives as a flag. What is
-    NOT left to the caller is remembering to set it: every anomaly reason
-    carries the instruction in its own text, so the next thing that has to
-    happen is in the output rather than in prose somewhere else.
-
-    What this cannot do: prove the pages after this one stay ordered. It
-    detects a violation once seen. Nothing short of reading them does better.
-    """
-    if cutoff is None:
-        return False, "continue: no cutoff — nothing cached to stop at, walk the whole library"
-    if anomaly_seen:
-        return False, ("continue: an earlier page in this run was refused — the early exit "
-                       "is off for the rest of it, so this walk runs to the end")
-    if not dates:
-        # Latched, because this function cannot tell a terminal empty page from
-        # an anomalous one — it never sees the cursor. If it was terminal the
-        # walk is ending anyway and the latch costs nothing; if it was not, the
-        # latch is the only thing standing between here and a silent stop.
-        return False, ("continue: empty page — no entries to judge, and nothing here "
-                       f"says whether the listing ended or hiccuped; {LATCH}")
-
-    parsed = []
-    for raw in dates:
-        when = _parse_api_time(raw)
-        if when is None:
-            return False, (f"continue: cannot read the timestamp {raw!r} — unknown is not "
-                           f"old; {LATCH}")
-        parsed.append(when)
-
-    if any(a < b for a, b in zip(parsed, parsed[1:])):
-        return False, ("continue: this page is not descending — list_files is expected to "
-                       f"return newest-first, and an early exit is only safe if it does; {LATCH}")
-
-    boundary = None
-    if prev_last:
-        boundary = _parse_api_time(prev_last)
-        if boundary is None:
-            # Given but unreadable is not the same as not given. Skipping the
-            # boundary check on a value the caller DID supply is how a stop
-            # happens with the guard silently switched off.
-            return False, (f"continue: --prev-last {prev_last!r} cannot be read, so the "
-                           f"page boundary went unchecked; {LATCH}")
-    if boundary is not None and parsed[0] > boundary:
-        return False, (f"continue: this page starts at {dates[0]}, newer than {prev_last} "
-                       f"where the previous page ended — the listing is not descending "
-                       f"across pages; {LATCH}")
-
-    edge = _parse_api_time(cutoff)
-    if edge is None:
-        return False, f"continue: cannot read the cutoff {cutoff!r}"
-
-    newer = [raw for raw, when in zip(dates, parsed) if when >= edge]
-    if newer:
-        return False, f"continue: {newer[0]} is not older than {cutoff}"
-    return True, f"stop: all {len(dates)} entries on this page are older than {cutoff}"
-
-
 def cmd_status(args) -> None:
     man = _load_manifest()
     recs = man["recordings"]
-    # getattr, not args.list_cutoff: cmd_status has callers that build a
-    # Namespace by hand and predate this flag (the test helpers do, and so
-    # would any older caller). Reading the attribute directly would turn an
-    # unrelated status call into an AttributeError.
-    if getattr(args, "list_cutoff", False):
-        if getattr(args, "ids_only", False):
-            sys.exit("error: --ids-only and --list-cutoff answer different questions "
-                     "— pass one or the other, not both")
-        cutoff = list_cutoff(man)
-        if cutoff is None:
-            # Exit 3, not an empty line: "nothing to stop at" has to be
-            # distinguishable from "stop at the start of time", and a caller
-            # reading stdout cannot tell those apart.
-            sys.exit(3)
-        print(cutoff)
-        return
     incomplete = [k for k, v in recs.items() if not _is_complete(v)]
     if args.ids_only:
         # Only fully-fetched ids count as "already cached". Anything partial is
@@ -395,11 +220,10 @@ def cmd_status(args) -> None:
     print(f"cache dir : {CACHE_DIR}")
     print(f"cached    : {len(recs)} recordings")
     if incomplete:
-        print(f"incomplete: {len(incomplete)} (will be re-fetched on the next plaud-sync run)")
+        print(f"incomplete: {len(incomplete)} (a download that covers them fetches them again)")
     if recs:
-        dates = sorted(r.get("created_at", "") for r in recs.values() if r.get("created_at"))
-        if dates:
-            print(f"range     : {dates[0][:10]} → {dates[-1][:10]}")
+        if any(r.get("created_at") for r in recs.values()):
+            print(f"months    : {_month_pieces(recs)}")
         total = sum(r.get("chars", 0) for r in recs.values())
         print(f"transcript: {total:,} characters indexed")
         summarised = sum(1 for r in recs.values() if r.get("has_summary"))
@@ -408,39 +232,81 @@ def cmd_status(args) -> None:
         polished = sum(1 for r in recs.values() if r.get("has_polish"))
         if polished:
             print(f"polished  : {polished} of {len(recs)} recordings (subtitles only)")
-        # `range` above is the span of what is CACHED. This is the span of what
-        # was SCANNED. They look alike and differ by exactly the blind spot the
-        # early exit creates: a recording that reached the cloud late carries an
-        # old created_at, sits deep in the listing, and gets stepped over with
-        # no error and no count. A periodic --all is the only remedy, and a
-        # remedy nobody is reminded of is not a remedy.
-        age = sweep_age_days(man)
-        if age is None and sweep_recorded(man):
-            # Readable, but dated in the future — a wrong clock, a hand-edited
-            # manifest, or a cache copied from another machine. Not evidence of
-            # a recent sweep, and saying "never" would hide which of the two
-            # problems this is.
-            print("full sweep: recorded, but its timestamp is in the future — check "
-                  "the clock; treat the coverage claim as unverified")
-        elif age is None:
-            print("full sweep: never — incremental runs may be stepping over older "
-                  "recordings; run plaud-sync --all")
-        # Whole days, so the number printed and the decision made agree. On a
-        # float comparison "30 days ago" warns about being over 30 days, which
-        # reads as a contradiction to anyone looking at it.
-        elif int(age) > SWEEP_STALE_DAYS:
-            print(f"full sweep: {age:.0f} days ago")
-            print(f"          ⚠ over {SWEEP_STALE_DAYS} days — run plaud-sync --all")
-        else:
-            print(f"full sweep: {age:.0f} days ago")
+
+
+# What a `put --json` file may hold, and the type each field must have. The point of the
+# file is that text from Plaud never sits on a shell command line: the model writes it with
+# a file tool and the command line carries a path.
+PUT_JSON_FIELDS = {"name": str, "created_at": str, "duration": (str, int), "complete": bool,
+                   "pages": int, "last_cursor": (str, type(None)), "body": str}
+PUT_JSON_DIR = "incoming"
+
+
+def _read_put_json(path: str, rec_id: str, kind: str) -> dict:
+    # Only a file named for THIS recording, in a folder named for the purpose. Without that
+    # `--json` would read and then delete any JSON file the caller can name, and a wrong
+    # file name would store one recording's text under another's id.
+    expected = CACHE_DIR.parent / PUT_JSON_DIR / f"{rec_id}.json"
+    given = pathlib.Path(os.path.abspath(path))
+    if (given != pathlib.Path(os.path.abspath(expected)) or given.is_symlink()
+            or given.parent.is_symlink()):
+        sys.exit(f"error: --json must be exactly {expected} and neither it nor its folder may be "
+                 f"a symbolic link (got {path})")
+    try:
+        data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError) as exc:
+        sys.exit(f"error: --json {path}: {exc}")
+    if not isinstance(data, dict):
+        sys.exit(f"error: --json {path}: expected a JSON object")
+    unknown = sorted(set(data) - set(PUT_JSON_FIELDS))
+    if unknown:
+        sys.exit(f"error: --json {path}: unknown field(s) {', '.join(map(repr, unknown))}; "
+                 f"allowed: {', '.join(PUT_JSON_FIELDS)}")
+    for key, value in data.items():
+        wanted = PUT_JSON_FIELDS[key]
+        if not isinstance(value, wanted) or (isinstance(value, bool) and bool not in
+                                             (wanted if isinstance(wanted, tuple) else (wanted,))):
+            sys.exit(f"error: --json {path}: field {key!r} has the wrong type")
+        if isinstance(value, str):
+            try:
+                value.encode("utf-8")   # a lone surrogate would fail AFTER the file was opened
+            except UnicodeEncodeError:
+                sys.exit(f"error: --json {path}: field {key!r} is not valid text (a lone surrogate)")
+    if "body" not in data:
+        sys.exit(f"error: --json {path}: no `body`")
+    if kind == "transcript":
+        missing = [k for k in ("complete", "last_cursor") if k not in data]
+        if missing:
+            sys.exit(f"error: --json {path}: a transcript must say {' and '.join(missing)}, "
+                     f"so that completeness is checked rather than assumed (`last_cursor` may be null)")
+    return data
 
 
 def cmd_put(args) -> None:
+    json_path = getattr(args, "json", None)
+    if not json_path:
+        _put_record(args, sys.stdin.read())
+        return
+    data = _read_put_json(json_path, _safe_id(args.id), str(getattr(args, "kind", "transcript") or "transcript"))
+    body = data.pop("body")
+    for key, value in data.items():
+        setattr(args, key, ("true" if value else "false") if key == "complete" else
+                str(value) if key == "duration" else value)
+    _put_record(args, body)
+    # The file held third-party speech in the clear; once it is in the cache it has no
+    # reason to stay anywhere else. A put that failed exits above and keeps it for a retry.
+    try:
+        pathlib.Path(json_path).unlink()
+    except OSError as exc:
+        print(f"warning: could not remove {json_path}: {exc}", file=sys.stderr)
+
+
+def _put_record(args, raw_body: str) -> None:
     rec_id = _safe_id(args.id)
     # Converge new writes on one normal form so the cache stops accumulating
     # entropy. This does not make normalize_pattern redundant — entries written
     # before this existed are still whatever the API sent.
-    body = unicodedata.normalize("NFC", sys.stdin.read())
+    body = unicodedata.normalize("NFC", raw_body)
     if not body.strip():
         sys.exit(f"error: empty transcript body for {rec_id} — refusing to cache a blank entry")
 
@@ -461,7 +327,7 @@ def cmd_put(args) -> None:
         man = _load_manifest()
         if rec_id not in man["recordings"]:
             sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
-                     f"orphan {kind} the manifest would never mention. Index it first.")
+                     f"orphan {kind} the manifest would never mention. Download it first.")
         subdir, flag = {
             "summary": ("summaries", "has_summary"),
             "polish": ("polish", "has_polish"),
@@ -484,7 +350,7 @@ def cmd_put(args) -> None:
     # Verify the completeness claim instead of taking it on faith. If the caller
     # says "done" but hands back a cursor that is still live, the loop stopped
     # early — downgrade rather than error, so the transcript we did fetch is kept
-    # and the next index run picks it up.
+    # and a later download that names it fetches it again.
     complete = claimed
     warning = ""
     if claimed and last_cursor is not None and not _is_cursor_exhausted(last_cursor):
@@ -492,16 +358,18 @@ def cmd_put(args) -> None:
         warning = (
             f"\n⚠ {rec_id}: caller claimed --complete true but --last-cursor "
             f"{last_cursor!r} is not exhausted — recorded as INCOMPLETE. "
-            f"The fetch loop stopped early; the next index run will resume it."
+            f"The fetch loop stopped early; a later download that names it fetches it again."
         )
 
+    name, created_at = _clean(args.name).strip(), _clean(args.created_at).strip()
+    duration = _clean(args.duration).strip()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     front = [
         "---",
         f"id: {rec_id}",
-        f'name: "{(args.name or "").replace(chr(34), chr(39))}"',
-        f"created_at: {args.created_at or ''}",
-        f"duration_ms: {args.duration or ''}",
+        f'name: "{name.replace(chr(34), chr(39)).replace(chr(92), chr(47))}"',
+        f"created_at: {created_at}",
+        f"duration_ms: {duration}",
         f"complete: {'true' if complete else 'false'}",
         f"pages: {pages}",
         f"indexed_at: {_now()}",
@@ -513,9 +381,9 @@ def cmd_put(args) -> None:
 
     man = _load_manifest()
     man["recordings"][rec_id] = {
-        "name": args.name or "",
-        "created_at": args.created_at or "",
-        "duration_ms": args.duration or "",
+        "name": name,
+        "created_at": created_at,
+        "duration_ms": duration,
         "chars": len(body),
         "complete": complete,
         "pages": pages,
@@ -525,11 +393,6 @@ def cmd_put(args) -> None:
         "last_cursor": None if complete else last_cursor,
         "indexed_at": _now(),
     }
-    # Written only when set, so every existing record and every record a listing
-    # walk writes keeps its exact shape. getattr for the same reason as `complete`
-    # above: hand-built Namespaces never pass through parse_args.
-    if getattr(args, "single_fetch", False):
-        man["recordings"][rec_id]["single_fetch"] = True
     _save_manifest(man)
     state = "complete" if complete else "INCOMPLETE"
     print(f"cached {rec_id} ({len(body):,} chars, {pages} page(s), {state}) → {path}{warning}")
@@ -574,9 +437,67 @@ def _hit_source(path: pathlib.Path) -> str:
     return ""
 
 
+def _searched(man: dict) -> dict:
+    """The recordings a search can actually reach: in the manifest AND with a file that
+    search reads (the transcript, its summary or its proofread copy). A manifest entry whose files were cleared
+    away is not searched and must not be counted as if it was."""
+    return {k: v for k, v in man.items()
+            if any((CACHE_DIR / sub / f"{k}.md").is_file() for sub in ("", "summaries", "proofread"))}
+
+
+_MONTH = re.compile(r"(?a)([0-9]{4})-(0[1-9]|1[0-2])")
+
+
+def _month_pieces(recs: dict) -> str:
+    """Which months have downloads, as separate pieces: `2026-01 (1), 2026-09 → 2026-10 (2)`.
+    Months that follow each other are one piece; a month nothing was downloaded for is
+    simply not there. Under range download a cache is a few pieces, so a single
+    first-to-last span would read as continuous coverage — and a search that never saw
+    March would look as if it had. A recording without a usable date is counted at the end
+    instead of vanishing. The month is the one in Plaud's own timestamp, which is UTC."""
+    counts: dict = {}
+    undated = 0
+    for r in recs.values():
+        m = _MONTH.match(_clean(r.get("created_at", "")))
+        if m:
+            key = (int(m.group(1)), int(m.group(2)))
+            counts[key] = counts.get(key, 0) + 1
+        else:
+            undated += 1
+    pieces: list = []   # [first, last, count], each a (year, month)
+    for key in sorted(counts):
+        if pieces and key == ((pieces[-1][1][0] + (pieces[-1][1][1] == 12)),
+                              1 if pieces[-1][1][1] == 12 else pieces[-1][1][1] + 1):
+            pieces[-1][1] = key
+            pieces[-1][2] += counts[key]
+        else:
+            pieces.append([key, key, counts[key]])
+    fmt = lambda k: f"{k[0]:04d}-{k[1]:02d}"  # noqa: E731
+    parts = [f"{fmt(a)}{'' if a == b else f' → {fmt(b)}'} ({n})" for a, b, n in pieces]
+    if undated:
+        parts.append(f"{undated} with no usable date")
+    return ", ".join(parts) if parts else "dates unknown"
+
+
+def _scope_lines(man: dict) -> str:
+    """What a search covered, so "no match" cannot be read as "never said".
+
+    The cache holds only what the user chose to download. A search over it is a
+    search over that part, and a bare "no match" is a wrong answer that looks like a
+    correct one. These lines go out on EVERY path — hit or miss — because the miss is
+    where the difference matters."""
+    reach = _searched(man)
+    partial = sum(1 for r in reach.values() if not _is_complete(r))
+    extra = f", {partial} incomplete" if partial else ""
+    return (f"searched {len(reach)} cached recordings, covering {_month_pieces(reach)}{extra}\n"
+            "(months not listed have nothing downloaded; a listed month holds only the "
+            "recordings downloaded from it — the cache holds only what has been downloaded, "
+            "not necessarily everything in Plaud)")
+
+
 def cmd_search(args) -> None:
-    if not CACHE_DIR.exists() or not any(CACHE_DIR.glob("*.md")):
-        sys.exit("error: cache is empty — run the plaud-sync skill first")
+    if not CACHE_DIR.exists() or not any(CACHE_DIR.rglob("*.md")):
+        sys.exit("error: cache is empty — run the plaud-download skill first")
 
     man = _load_manifest()["recordings"]
 
@@ -584,7 +505,7 @@ def cmd_search(args) -> None:
         cmd = ["rg", "--line-number", "--no-heading", "--color=never"]
         if not args.case_sensitive:
             cmd.append("--ignore-case")
-        cmd += [normalize_pattern(args.pattern), str(CACHE_DIR)]
+        cmd += ["--", normalize_pattern(args.pattern), str(CACHE_DIR)]
     else:
         # grep -r is POSIX-ubiquitous; ripgrep is only a speed upgrade here.
         # -E is REQUIRED, not cosmetic: BSD grep (macOS) defaults to basic regex,
@@ -595,7 +516,7 @@ def cmd_search(args) -> None:
         cmd = ["grep", "-rnE"]
         if not args.case_sensitive:
             cmd.append("-i")
-        cmd += ["--include=*.md", normalize_pattern(args.pattern), str(CACHE_DIR)]
+        cmd += ["--include=*.md", "--", normalize_pattern(args.pattern), str(CACHE_DIR)]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode not in (0, 1):
@@ -625,26 +546,29 @@ def cmd_search(args) -> None:
         hits.setdefault(rec_id, []).append((parts[2].strip(), source))
 
     if not hits:
-        print(f"no match for {args.pattern!r} across {len(man)} cached recordings")
+        print(f"no match for {args.pattern!r} across {len(_searched(man))} cached recordings")
+        print(_scope_lines(man))
         return
 
     ordered = sorted(
         hits.items(), key=lambda kv: man.get(kv[0], {}).get("created_at", ""), reverse=True
     )
-    print(f"{sum(len(v) for v in hits.values())} matches in {len(hits)} recordings\n")
+    print(f"{sum(len(v) for v in hits.values())} matches in {len(hits)} recordings")
+    print(_scope_lines(man))
+    print()
     for rec_id, lines in ordered:
         meta = man.get(rec_id, {})
-        print(f"── {meta.get('name') or '(unnamed)'}")
-        print(f"   id {rec_id}  ·  {(meta.get('created_at') or '?')[:10]}  ·  {len(lines)} hit(s)")
+        print(f"── {_clean(meta.get('name')) or '(unnamed)'}")
+        print(f"   id {rec_id}  ·  {_clean(meta.get('created_at') or '?')[:10]}  ·  {len(lines)} hit(s)")
         # Only for records the manifest knows about and marks incomplete. An .md
         # with no manifest entry at all is a different problem (lost manifest, not
         # a half-fetched transcript) and already shows as "(unnamed)" above —
         # labelling it "partially indexed" would point at the wrong cause.
         if rec_id in man and man[rec_id].get("complete") is False:
-            print("   ⚠ partially indexed — more transcript may exist; re-run plaud-sync")
+            print("   ⚠ partially indexed — more transcript may exist; download this recording again")
         for ln, source in lines[: args.max_lines]:
             tag = f" [{source}]" if source else ""
-            print(f"   │ {ln[:200]}{tag}")
+            print(f"   │ {_clean(ln[:200])}{tag}")
         if len(lines) > args.max_lines:
             print(f"   │ … {len(lines) - args.max_lines} more")
         present = {src for _, src in lines if src}
@@ -655,95 +579,6 @@ def cmd_search(args) -> None:
             print("   ℹ [summary] lines come from an AI-written summary — nobody said "
                   "these words; open the transcript for the actual wording")
         print()
-
-
-def cmd_should_stop_paging(args) -> None:
-    """Answer for one page of `list_files`, read from stdin, one date per line.
-
-    A page is a list, so it arrives on stdin rather than as arguments. The
-    verdict is a word on stdout rather than an exit code because the reason
-    matters as much as the answer — a run that stopped early should be able to
-    say why, and a run that kept going should be able to say what it saw.
-    """
-    # Blank lines are kept, not filtered. A page entry whose `created_at` is
-    # empty arrives as a blank line, and dropping it would shorten the page —
-    # turning "one entry we cannot read" into "an entry that was never there",
-    # which is exactly how a page becomes wrongly all-old. An unreadable entry
-    # must reach page_verdict so it can say "continue".
-    dates = [ln.strip() for ln in sys.stdin.read().splitlines()]
-    stop, reason = page_verdict(dates, args.cutoff,
-                                prev_last=getattr(args, "prev_last", None),
-                                anomaly_seen=getattr(args, "anomaly_seen", False))
-    print(reason)
-    # The answer is carried by BOTH the word and the exit code. Anyone wiring
-    # this into a shell reaches for `if cmd; then` — that is the idiom — and
-    # with exit 0 on both branches it would read as "stop" every time, which is
-    # the single failure this whole change exists to prevent. Exit 3 rather
-    # than 1 for "keep paging": 1 is what a crash looks like, and continuing to
-    # page is not a failure.
-    if not stop:
-        sys.exit(3)
-
-
-def sweep_age_days(man: dict) -> float | None:
-    """Whole days since the listing was last walked to its end, or None.
-
-    None covers three cases that are all "no usable evidence of a sweep": never
-    marked, a marker that cannot be read, and a marker in the future. The last
-    one matters because a wrong clock, a hand-edited manifest or a cache copied
-    between machines all produce a future timestamp, and a future timestamp is
-    not evidence of a recent sweep — it is evidence of something wrong.
-
-    Whole days, floored, so the number shown and the decision made are the same
-    number. Truncating one and rounding the other prints "31 days ago" beside
-    "not over 30 days", which reads as a contradiction to whoever is looking at
-    it. (`int()` against `:.0f` did exactly that at 30.6.)
-
-    This is the ONE place a local clock is legitimate: it answers "how long ago
-    was this", never "should paging stop here". The listing cutoff never sees
-    it.
-    """
-    when = _parse_api_time(man.get("full_sweep_at"))
-    if when is None:
-        return None
-    age = (datetime.now(timezone.utc) - when).total_seconds() / 86400
-    if age < 0:
-        return None
-    return math.floor(age)
-
-
-def sweep_recorded(man: dict) -> bool:
-    """Is there a readable full-sweep marker? **Reads no clock.**
-
-    Deliberately weaker than `sweep_age_days`, which also rejects a timestamp
-    in the future — that rejection needs the current time, and the cutoff path
-    must never touch it. Gating the cutoff on freshness was tried and the clock
-    guards caught it immediately, which is what they are for.
-
-    The trade-off, stated rather than hidden: a marker with a future timestamp
-    still enables the cutoff. That is defensible — a future timestamp means a
-    sweep WAS recorded, just stamped by a wrong clock, so the coverage claim
-    holds even though its age does not. `status` says so out loud.
-
-    It replaces a plain truthiness check, which disagreed with `status`: a
-    marker reading `"garbage"` had `status` printing "never" while the cutoff
-    quietly switched on.
-    """
-    return _parse_api_time(man.get("full_sweep_at")) is not None
-
-
-def cmd_mark_full_sweep(args) -> None:
-    """Record that a listing was walked all the way to the end, unscoped.
-
-    This is the ONLY thing that lets `--list-cutoff` answer at all, so write it
-    only when every one of these held: no date scope, the walk reached the
-    listing's natural end, and no page came back out of order or unreadable.
-    Writing it optimistically re-creates exactly the bug it exists to prevent.
-    """
-    man = _load_manifest()
-    man["full_sweep_at"] = _now()
-    _save_manifest(man)
-    print(f"recorded a full listing sweep at {man['full_sweep_at']}")
 
 
 def _human_duration(raw) -> str:
@@ -778,8 +613,8 @@ def cmd_find(args) -> None:
     print(f"{len(hits)} cached recording(s) named like {args.name.strip()!r}:")
     for rec_id, rec in hits:
         state = "complete" if _is_complete(rec) else "INCOMPLETE"
-        when = str(rec.get("created_at", ""))[:10] or "undated"
-        print(f"  {rec_id}  ·  {rec.get('name', '')}  ·  {when}  ·  "
+        when = _clean(rec.get("created_at", ""))[:10] or "undated"
+        print(f"  {rec_id}  ·  {_clean(rec.get('name', ''))}  ·  {when}  ·  "
               f"{_human_duration(rec.get('duration_ms'))}  ·  {state}")
 
 
@@ -789,7 +624,7 @@ def cmd_show(args) -> None:
     subdir = {"summary": "summaries", "polish": "polish", "outline": "outline"}.get(kind)
     path = (CACHE_DIR / subdir / f"{rec_id}.md") if subdir else (CACHE_DIR / f"{rec_id}.md")
     if not path.exists():
-        sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-sync skill")
+        sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-download skill")
     sys.stdout.write(path.read_text())
 
 
@@ -799,10 +634,6 @@ def main() -> None:
 
     p = sub.add_parser("status", help="show what is cached")
     p.add_argument("--ids-only", action="store_true", help="print cached ids, one per line")
-    p.add_argument("--list-cutoff", action="store_true", dest="list_cutoff",
-                   help="print the timestamp a fresh listing may stop paging at, safety "
-                        "margin already applied; exit 3 when there is nothing to stop at "
-                        "(first index) and the whole library must be walked")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("put", help="cache one transcript (body on stdin)")
@@ -821,35 +652,14 @@ def main() -> None:
                         "the same speech reworded, an outline is AI-written structure whose "
                         "timestamps are section starts, not citations); all three leave the "
                         "transcript, chars, and completeness untouched")
+    p.add_argument("--json", default=None, metavar="FILE",
+                   help="take name, created_at, duration, complete, pages, last_cursor and body "
+                        "from this JSON file instead of the flags and stdin, then delete it; "
+                        "used so text from Plaud is never on a shell command line")
     p.add_argument("--last-cursor", dest="last_cursor", default=None,
                    help="the last next_cursor seen, verbatim, even when it looked empty — "
                         "lets this tool check the --complete claim and resume later")
-    p.add_argument("--single-fetch", action="store_true", dest="single_fetch",
-                   help="this recording was fetched on its own, NOT reached by walking the "
-                        "listing. It is cached normally but is ignored when working out where "
-                        "an incremental listing may stop paging (list_cutoff); without that, "
-                        "one fetch of a newer recording makes the next sync skip everything "
-                        "between the last real sync and that recording")
     p.set_defaults(func=cmd_put)
-
-    p = sub.add_parser("mark-full-sweep",
-                       help="record that a listing was walked to its end, unscoped — "
-                            "the only thing that enables `status --list-cutoff`")
-    p.set_defaults(func=cmd_mark_full_sweep)
-
-    p = sub.add_parser("should-stop-paging",
-                       help="does this page of list_files end the walk? page on stdin, "
-                            "one created_at per line")
-    p.add_argument("--cutoff", required=True,
-                   help="the value from `status --list-cutoff`")
-    p.add_argument("--prev-last", dest="prev_last", default=None,
-                   help="the LAST created_at of the previous page — catches a listing "
-                        "that is not descending ACROSS pages, which the within-page "
-                        "check cannot see (and never sees at one entry per page)")
-    p.add_argument("--anomaly-seen", dest="anomaly_seen", action="store_true",
-                   help="an earlier page in this run was refused; keep the early exit "
-                        "off for the rest of it")
-    p.set_defaults(func=cmd_should_stop_paging)
 
     p = sub.add_parser("search", help="full-text search cached transcripts")
     p.add_argument("pattern")

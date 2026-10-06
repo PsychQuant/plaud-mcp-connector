@@ -19,7 +19,7 @@ vacuously.
 wording. The one error text it imitates (`[AUTH_FAILED] ... Run \\`plaud login\\``)
 was copied from a real unauthenticated run on 2026-10-02 with CLI 0.3.14; the
 rest of its behaviour (output format, `--polished`, `-o`) is taken from
-`skills/plaud-sync/SKILL.md`. Whether CLI 0.3.14 truncates a transcript is a
+`skills/plaud-download/SKILL.md`. Whether CLI 0.3.14 truncates a transcript is a
 measurement against a real recording, not something a fake can establish.
 
 Exit codes, as a contract (the skill branches on them):
@@ -55,6 +55,8 @@ POLISHED = (
     "[00:00 - 00:04] Speaker 1: the budget is split in two\n"
     "[00:04 - 00:09] Speaker 2: the first half lands in March\n"
 )
+SUMMARY = "Decision: the first half of the budget is released in March."
+SUMMARY_MARK = "first half of the budget is released"
 
 # Short, wrap-proof fragments. `to_srt` folds cue lines at 42 characters, so a whole
 # sentence can be split across lines; these cannot. The polished fragment is not a
@@ -85,6 +87,16 @@ FAKE_PLAUD = textwrap.dedent('''\
         sys.stdout.write("  created_at:   2026-10-01T09:00:00\\n")
         sys.stdout.write("  duration:     " + os.environ.get("FAKE_PLAUD_DURATION", "1h02m03s") + "\\n")
         sys.exit(0)
+    if args and args[0] == "summary":
+        # `plaud summary <id> -o <file>`: the AI-written summary, a separate block
+        if mode == "summary_fail":
+            sys.stderr.write("error: no summary for this recording\\n")
+            sys.exit(1)
+        if out:
+            open(out, "w", encoding="utf-8").write({summary!r})
+        else:
+            sys.stdout.write({summary!r})
+        sys.exit(0)
     if mode == "hang" or (mode == "polish_hang" and polished):
         time.sleep(30)
     if mode == "auth_fail":
@@ -113,7 +125,7 @@ class FetchOneTestCase(unittest.TestCase):
         self.bin_dir.mkdir()
         self.empty_dir.mkdir()
         fake = self.bin_dir / "plaud"
-        fake.write_text(FAKE_PLAUD.format(python=sys.executable, raw=RAW, polished=POLISHED),
+        fake.write_text(FAKE_PLAUD.format(python=sys.executable, raw=RAW, polished=POLISHED, summary=SUMMARY),
                         encoding="utf-8")
         fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
@@ -372,25 +384,6 @@ class TestFetchOneR2(FetchOneTestCase):
         proc = self.run_id(extra_env={"FAKE_PLAUD_DURATION": "10m42s"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("duration_ms: 642000", self.shown())
-
-
-class TestFetchOneAndTheSyncCutoff(FetchOneTestCase):
-    def test_fetching_one_recording_does_not_move_the_incremental_cutoff(self):
-        """Found by verify R1. A cache that had a full sweep reports where an
-        incremental `plaud-sync` may stop paging. Fetching ONE newer recording used
-        to move that point to the new recording, so the next sync skipped every
-        recording between the last real sync and it — silently."""
-        self.assertEqual(self.cache_py(
-            "put", "--id", "old1", "--created-at", "2026-03-01T09:00:00",
-            "--complete", "true", "--last-cursor", "",
-            stdin="[00:00:01] Speaker 1: hi\n").returncode, 0)
-        self.assertEqual(self.cache_py("mark-full-sweep").returncode, 0)
-        before = self.cache_py("status", "--list-cutoff").stdout.strip()
-        self.assertEqual(before, "2026-02-28T09:00:00")
-
-        proc = self.fetch()  # created-at 2026-10-01 — far newer than the March record
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertEqual(self.cache_py("status", "--list-cutoff").stdout.strip(), before)
 
 
 class TestFetchOneIdempotence(FetchOneTestCase):

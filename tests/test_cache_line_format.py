@@ -5,8 +5,8 @@
 normalisation. That is deliberate (any source can land content), and it is why
 the shape was never written down anywhere and drifted without anyone noticing:
 
-    plaud-sync, MCP path   →  [00:12:03] Speaker 1: …      point
-    plaud-sync, CLI path   →  [01:01 - 01:55] Speaker 1: … range
+    plaud-download, MCP path   →  [00:12:03] Speaker 1: …      point
+    plaud-download, CLI path   →  [01:01 - 01:55] Speaker 1: … range
 
 `to_srt` accepted only the first. So every recording indexed through the CLI —
 the path the README calls "strongly recommended for large libraries" — silently
@@ -50,7 +50,7 @@ def _load_to_srt():
     the production parser as the judge makes this file blind in the other
     direction. If a producer starts writing a third shape and the parser is
     widened to accept it, both sides are self-consistent and every assertion
-    here still passes. That is #40's own shape — `plaud-sync`'s CLI path
+    here still passes. That is #40's own shape — `plaud-download`'s CLI path
     wrote ranges, `to_srt` read points, and the suite was green for months.
 
     So this file checks that the parser honours the two measured forms. It

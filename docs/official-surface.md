@@ -12,7 +12,8 @@ Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
 published.
 
-**To re-measure, run `plaud-repo-audit`.** It exists because "re-measure after a
+**To re-measure, run `plaud-repo-audit`** (a maintainer skill under `.claude/skills/`,
+meant to be available when you work inside a clone of this repo). It exists because "re-measure after a
 version bump" as a sentence in a file has never once caused anyone to re-measure —
 and because the *checklist* matters more than the reminder: that skill encodes the
 specific ways this repo has been wrong about someone else's software (reading a
@@ -94,8 +95,8 @@ signal, so anything driven by the MCP alone has to fetch and find out.
 ### `plaud transcript` does not truncate
 
 This was the single unknown that could still produce a wrong answer, because
-`plaud-sync`'s CLI fast path marks what it writes as `complete` and has no
-cursor to check that claim against.
+`plaud-download`'s CLI path (`fetch_one.py`) marks what it writes as `complete` and
+has no cursor to check that claim against.
 
 Measured: a recording the MCP reports as `total: 94` produced a file with
 **exactly 94** speaker-tagged segments. One call returns the whole transcript.
@@ -334,9 +335,31 @@ the probes alone will agree with whatever you already believe.
 
 None of this is a reason to avoid the CLI generally — `plaud transcript` and
 `plaud audio` remain the right tools. It is a reason not to use `recent` / `today`
-for incremental indexing, which instead walks `list_files` with its own early
-exit (`cache.py should-stop-paging`) and compares API timestamps only to other
-API timestamps.
+for choosing a range to download, which instead goes through `list_files` with
+explicit `date_from` / `date_to` and compares API timestamps only to other API
+timestamps.
+
+### `list_files` with filters reports its own scan (measured 2026-10-06)
+
+With `date_from` / `date_to` / `query` set, the tool scans the 500 most recent
+recordings, ignores `page` / `page_size`, and answers with its own accounting
+alongside `data`:
+
+```jsonc
+{ "data": [ ... 6 recordings ... ],
+  "scanned": 500, "matched": 6, "truncated": true, "complete": false,
+  "scanned_back_to": "2026-04-13T09:33:14.000Z",
+  "note": "Only the 500 most recent recordings were searched; there are older ones this result does not cover." }
+```
+
+Request was `date_from: 2026-10-01`. `complete` is **false** although every recording
+since 2026-10-01 is inside the scan: it means "older recordings exist that were not
+searched", not "this range is incomplete". The usable test for a range is whether
+`scanned_back_to` is earlier than 00:00 UTC on the day before its `date_from`: it is
+UTC and `date_from` is a local date, so in UTC+8 a calendar-day comparison leaves up
+to eight hours unscanned. This was measured once, on one
+account, against the MCP package version the plugin declares at the time of writing;
+re-measure after an MCP upgrade.
 
 ### `get_transcript`
 

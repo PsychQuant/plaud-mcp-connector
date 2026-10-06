@@ -172,13 +172,13 @@ A list of differences is not the deliverable. **What it means for us** is.
   - §4 sizes: CLI not authenticated this run
 
 ### What it means for us
-  - `--since` would let plaud-sync do incremental listing without paging the
-    whole library (currently an open gap)
+  - `--since` would let plaud-download list a date range without the date-filter
+    caveat that `list_files` ignores paging (currently an open gap)
   - `plaud-remind` overlaps nothing we ship — no action
 ```
 
 The "what it means" section is the point. `plaud files` gaining a flag is a fact;
-"this closes the incremental-indexing gap" is a decision someone can act on.
+"this closes the date-range listing gap" is a decision someone can act on.
 
 ### 6. Do not update the doc automatically
 
