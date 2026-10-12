@@ -312,6 +312,30 @@ class TestPutFromAJsonFile(CacheCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertFalse((self.cache_dir / "recA.md").exists())
 
+    def test_a_symlinked_directory_followed_by_dotdot_cannot_reach_another_incoming(self):
+        """R7: the check compared a lexically normalised path but the read and the delete used the
+        raw string, so <link>/../incoming/<id>.json passed and then opened another folder's file."""
+        full = dict(body="stolen", complete=True, last_cursor=None)
+        root = self.cache_dir.parent
+        victim = root / "x" / "y" / "incoming"
+        victim.mkdir(parents=True)
+        (victim / "recA.json").write_text(json.dumps(full), encoding="utf-8")
+        (root / "x" / "y" / "z").mkdir()
+        (root / "lk").symlink_to(root / "x" / "y" / "z", target_is_directory=True)
+        (root / "incoming").mkdir()
+        proc = self.cache_py("put", "--id", "recA", "--json", str(root / "lk" / ".." / "incoming" / "recA.json"))
+        self.assertTrue((victim / "recA.json").exists(), "the file outside incoming must survive")
+        self.assertFalse((self.cache_dir / "recA.md").exists(), "and must not have been read into the cache")
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_a_relative_path_to_the_real_file_still_works(self):
+        full = dict(body="[00:00 - 00:04] Speaker 1: ok\n", complete=True, last_cursor=None)
+        path = self.write("recA", **full)
+        proc = subprocess.run([sys.executable, str(CACHE_PY), "put", "--id", "recA", "--json", "incoming/recA.json"],
+                              capture_output=True, text=True, env=self.env, cwd=str(path.parent.parent), timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(path.exists())
+
     def test_deeply_nested_json_is_an_error_not_a_traceback(self):
         folder = self.cache_dir.parent / "incoming"
         folder.mkdir(exist_ok=True)

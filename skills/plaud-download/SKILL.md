@@ -214,8 +214,9 @@ reaching the 50th page without completing is INCOMPLETE too
 **No text from Plaud goes on a command line.** Names, cursors and transcript lines can
 contain quotes, `$(...)` and backticks, and every rule about quoting them has so far
 left one place open. Write a JSON file with the Write tool instead, at the absolute
-path `$HOME/.plaud-connector/incoming/<id>.json` (`cache.py` refuses any other
-path, and a symbolic link in place of the file or its folder; `<id>` is the one value on the command line, which is why it is
+path `$HOME/.plaud-connector/incoming/<id>.json` (if `PLAUD_CACHE_DIR` is set, the
+`incoming` folder next to that cache folder instead; the error message of `cache.py`
+names the exact path) (`cache.py` refuses any other path, and a symbolic link in place of the file or its folder; `<id>` is the one value on the command line, which is why it is
 checked above). It must be valid JSON: a newline inside a string is `\n`, a quote is
 `\"`. If you cannot write the file, stop and say so — do not fall back to putting the
 text on a command line.

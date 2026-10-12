@@ -247,13 +247,17 @@ def _read_put_json(path: str, rec_id: str, kind: str) -> dict:
     # `--json` would read and then delete any JSON file the caller can name, and a wrong
     # file name would store one recording's text under another's id.
     expected = CACHE_DIR.parent / PUT_JSON_DIR / f"{rec_id}.json"
-    given = pathlib.Path(os.path.abspath(path))
-    if (given != pathlib.Path(os.path.abspath(expected)) or given.is_symlink()
-            or given.parent.is_symlink()):
+    # `realpath` on BOTH sides: it resolves `link/..` the way the kernel does, where `abspath`
+    # collapses it by text and so approved a path that opened some other folder's file. The file
+    # and its folder must also not themselves be links. From here on only `expected`, which this
+    # function derived, is read and later removed; the string the caller typed is never opened.
+    if (os.path.realpath(path) != os.path.realpath(expected) or os.path.islink(expected)
+            or os.path.islink(expected.parent)):
         sys.exit(f"error: --json must be exactly {expected} and neither it nor its folder may be "
                  f"a symbolic link (got {path})")
+    path = str(expected)
     try:
-        data = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+        data = json.loads(expected.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as exc:
         sys.exit(f"error: --json {path}: {exc}")
     if not isinstance(data, dict):
@@ -287,7 +291,9 @@ def cmd_put(args) -> None:
     if not json_path:
         _put_record(args, sys.stdin.read())
         return
-    data = _read_put_json(json_path, _safe_id(args.id), str(getattr(args, "kind", "transcript") or "transcript"))
+    rec = _safe_id(args.id)
+    data = _read_put_json(json_path, rec, str(getattr(args, "kind", "transcript") or "transcript"))
+    json_path = str(CACHE_DIR.parent / PUT_JSON_DIR / f"{rec}.json")
     body = data.pop("body")
     for key, value in data.items():
         setattr(args, key, ("true" if value else "false") if key == "complete" else
