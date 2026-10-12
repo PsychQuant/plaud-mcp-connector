@@ -21,7 +21,7 @@ runs it unmodified. But its surface is deliberately narrow:
 | | Official Plaud MCP | This plugin adds |
 |---|---|---|
 | Tools | 7, all read-only: `login`, `logout`, `get_current_user`, `list_files`, `get_file`, `get_note`, `get_transcript` | — |
-| Search | `query` matches **recording names only**, across the **newest 500** recordings | Full-text search over transcript **bodies**, across everything you have indexed |
+| Search | `query` matches **recording names only**, across the **newest 500** recordings | Full-text search over transcript **bodies**, across the recordings you have downloaded |
 
 So the official server can tell you a recording is called *"Weekly sync"*. It
 cannot tell you **which** recording is the one where somebody actually said
@@ -53,9 +53,9 @@ tool directly. It opens a browser for OAuth and stores the token in
 Requirements: **Node.js ≥ 20** and a Plaud account with Cloud Sync (PCS) enabled.
 
 **Strongly recommended for large libraries**: `npm install -g @plaud-ai/cli`.
-With the CLI present, `plaud-sync` writes transcripts straight to disk instead of
+With the CLI present, `plaud-download` writes transcripts straight to disk instead of
 reading every one through the model context — the difference between a few minutes
-and a very expensive afternoon on a library of hundreds. Note the CLI keeps its own
+and a very expensive afternoon on a range of hundreds. Note the CLI keeps its own
 login (`plaud login`), separate from the MCP's.
 
 > Already ran Plaud's own installer? You do not need both. This plugin declares
@@ -64,41 +64,49 @@ login (`plaud login`), separate from the MCP's.
 
 ## Skills
 
-As of v0.11.0 two skills are renamed so the name says what you would type to get
-the thing done. plaud-index is now `plaud-sync`; plaud-srt is now `plaud-to-srt`. The old
-names no longer exist, and nothing in your cache needs migrating.
+As of v0.12.0 the skill names say what you would type to get the thing done. Old
+names are written here without backticks on purpose: a name in backticks is a claim
+that the skill exists. plaud-srt is now `plaud-to-srt`; plaud-index, which became
+plaud-sync, is now `plaud-download`; plaud-grep is now `plaud-search`; plaud-audio is
+now `plaud-download-audio`. The old names no longer exist, and nothing in your cache
+needs migrating. `plaud-repo-audit` moved out of the skills you install; see its section
+below.
 
-### `plaud-sync` — land transcripts on disk
+### `plaud-download` — land transcripts on disk
 
-Walks `list_files`, fetches `get_transcript` for anything not already cached, and
-writes one markdown file per recording to `~/.plaud-connector/cache/`. Incremental:
-a re-run only fetches what is new.
+Downloads the transcripts of **a range you name** — the last two weeks, September,
+these three meetings — and writes one markdown file per recording to
+`~/.plaud-connector/cache/`. It lists the range, shows how many are already cached
+and how many it would fetch, **asks you to confirm**, then downloads them one at a
+time. Through the official CLI each recording also gets its polished transcript (for
+subtitles) and its summary (searched by `plaud-search`); without the CLI, the MCP path
+caches the raw transcript and the summary, and subtitles come from the raw one.
 
-It also stops **listing** early. Walking every page to find three new recordings
-costs more each time the library grows, so a re-run pages until it is past
-everything it already holds and then stops. The saving is bounded below by two
-pages, not one: the cutoff sits a day behind the newest cached recording, and
-that recording is still on page one — so page one always says keep going. A
-first index, or `--all`, still walks the lot.
+It does not keep anything in sync, and that is why it is called *download*. There
+is no whole-library mode, nothing is fetched unless you named a range, and a
+recording added to Plaud later is not in the cache until a download names it. The
+cache is whatever you chose to download — and `plaud-search` says so every time it
+answers.
 
-The official CLI has a `plaud recent` that looks like the tool for this. It is
+The official CLI has a `plaud recent` that looks like the tool for listing. It is
 not: it is the same `list_files` walk with a local filter, capped at 300
 recordings **without saying so**, and it compares the API's timezone-less
-timestamps against your local clock — eight hours of drift in UTC+8. Both sides
-of the comparison here come from the API, so that question never arises.
+timestamps against your local clock — eight hours of drift in UTC+8. Listing here
+goes through `list_files` with explicit dates. The timezone question moves rather
+than disappearing: `scanned_back_to` is UTC and your `date_from` is a local date, so
+the skill asks for a day of margin instead of comparing them to the hour.
 
-On a first index it asks `plaud file` whether a recording has a transcript at all
-and skips the ones that do not — a recording can sit there with audio and no
-transcript for as long as it likes, and fetching it is a guaranteed wasted call.
-Incremental runs skip the check: paying one call to maybe save one is a losing
-trade when almost nothing is new.
+A filtered `list_files` ignores `page` / `page_size` and scans only the 500 most
+recent recordings, and says how far back it got (`scanned_back_to`). The skill reads
+that and says in its report when a range reaches further back than the scan did,
+instead of reporting a short list as if it were the whole range.
 
 ```
-索引最近 90 天的 Plaud 錄音
-index my Plaud recordings from 2026-01-01
+把 9 月的錄音抓下來
+download my Plaud transcripts from the last two weeks
 ```
 
-### `plaud-grep` — search what was actually said
+### `plaud-search` — search what was actually said
 
 Regex search across the cached transcripts. Runs entirely locally: no API calls,
 no quota, no network. Results group per recording, newest first, with the matching
@@ -132,9 +140,9 @@ So a subtitle from the CLI path can appear up to a second early.
 
 Where the cache keeps the ends they are used as given. The CLI path does, at that
 one-second resolution. `plaud-to-srt`'s MCP path does, in milliseconds.
-`plaud-sync`'s MCP path writes start-only lines, so for a recording synced that way
-a cue runs until the next one begins and the final cue gets a four-second guess.
-The CLI is still the cheaper way to sync, because the text never passes through
+`plaud-download`'s MCP path writes start-only lines, so for a recording downloaded that
+way a cue runs until the next one begins and the final cue gets a four-second guess.
+The CLI is still the cheaper way to download, because the text never passes through
 the conversation.
 
 **Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
@@ -226,7 +234,7 @@ first time a recording has both versions you get asked once, shown one line of
 your own recording rendered both ways, and the answer is remembered in
 `~/.plaud-connector/config.json`.
 
-Search does not follow that preference and cannot be made to. `plaud-grep` keeps
+Search does not follow that preference and cannot be made to. `plaud-search` keeps
 matching the verbatim text, because what you remember is what someone *said*,
 not what an AI tidied it into. Both versions sit in the cache; only one of them
 is searched, so a hit is never counted twice.
@@ -250,7 +258,7 @@ plugin.
 proofread the research meeting transcript against these slides
 ```
 
-### `plaud-audio` — get the original recording back
+### `plaud-download-audio` — get the original recording back
 
 Downloads the audio file itself, not its transcript. Useful for archiving, for
 editing, or for running a different ASR over it.
@@ -281,6 +289,10 @@ what was that meeting about
 
 ### `plaud-repo-audit` — re-measure this repo against the official surface
 
+For whoever maintains this repo, not for whoever installs the plugin. It lives in
+`.claude/skills/`, which a plugin install is not expected to load (to be confirmed after the first release that ships this), so it appears only when
+you work inside a clone of this repo.
+
 `docs/official-surface.md` is a snapshot of what Plaud's CLI and MCP actually do.
 This re-measures it and reports what changed, and what that means here.
 
@@ -304,41 +316,22 @@ audio.
 ```bash
 # the engine is usable directly, if you prefer a shell
 python3 scripts/cache.py status
-python3 scripts/cache.py search "預算|budget"
+python3 scripts/cache.py search -- '預算|budget'
 python3 scripts/cache.py show <recording-id>
 python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish
 ```
 
-Three more commands exist for the incremental listing. They are called by
-`plaud-sync`, not by hand, but they are the answer to "why did it stop
-paging there" when a run looks wrong:
-
-| Command | Answers |
-|---|---|
-| `status --list-cutoff` | how far back a listing may stop. Exit 3 means no cutoff is available — walk everything |
-| `should-stop-paging --cutoff X` | does this page end the walk? Page on stdin, one `created_at` per line. Exit 0 stop, 3 continue, always with the reason |
-| `mark-full-sweep` | records that a listing was walked to its end, unscoped. **The only thing that turns the cutoff on** |
-
-`status` also reports how long since that last full sweep, and says so when it
-is over 30 days — the early exit's blind spot grows with that number, and
-nothing else makes it visible.
-
 ## Limits — stated plainly
 
-- **Search covers what you indexed.** A recording made after your last
-  `plaud-sync` run is not searchable. `cache.py status` prints the covered date
-  range; the skill is instructed to report it rather than answer "not found".
-- **An incremental run is a fast path, not a completeness guarantee.** It stops
-  listing once it is past everything it holds. A recording that reaches the
-  cloud long after it was made carries an old timestamp, sits deep in the
-  listing, and is stepped over — with no error and no count to notice it by.
-  Nothing in the API offers a change feed to fix this; run `--all` periodically.
-- **First index of a large library is slow.** Transcripts are paginated, so a long
-  recording takes several fetches. Without the CLI installed, every page also
-  passes through the model context. Install `@plaud-ai/cli` (above) and scope with
-  `--days` / `--since`.
+- **Search covers what you downloaded.** A recording you never named in a download
+  is not searchable, however recent. Every search prints how many recordings it
+  searched and the date span they cover; the skill is instructed to quote that
+  line, and never to answer a bare "no match".
+- **A big range is slow.** Transcripts are paginated, so a long recording takes
+  several fetches. Without the CLI installed, every page also passes through the
+  model context. Install `@plaud-ai/cli` (above) and name a narrower range.
 - **Completeness is tracked, not assumed.** A recording whose fetch was cut short
-  is marked incomplete, re-fetched on the next run, and flagged in search results
+  is marked incomplete, fetched again by a download that covers it, and flagged in search results
   as `⚠ partially indexed`. `cache.py status` shows the count. This exists because
   v0.1.0 silently kept only each transcript's first page and reported "no match"
   for words that were spoken.

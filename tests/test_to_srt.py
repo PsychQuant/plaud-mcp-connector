@@ -211,7 +211,7 @@ class TestSegmentParsing(unittest.TestCase):
 
     # --- ranged form (#40) ---------------------------------------------
     #
-    # `plaud-sync`'s CLI fast path writes `[start - end]`, and this parser
+    # `plaud-download`'s CLI fast path writes `[start - end]`, and this parser
     # accepted only `[start]`, so every recording indexed the cheap way — the
     # way the README recommends — produced no subtitles at all. Every fixture
     # in this file used the other producer's shape, so the suite stayed green

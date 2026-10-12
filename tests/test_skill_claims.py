@@ -225,7 +225,7 @@ def offending_claims(description: str) -> list[str]:
     """Clauses making an exclusivity claim without naming what it excludes.
 
     Extracted so the rule can be tested against synthetic input. The first
-    version of this file only exercised the rule through `plaud-grep`'s live
+    version of this file only exercised the rule through `plaud-search`'s live
     wording, via an `or "cannot" in sentence` branch that production never
     used — so the test named "a qualified claim is accepted" was checking a
     path the guard does not have. That is the #22 shape, inside the file
@@ -341,7 +341,12 @@ def capability_mentions(description: str) -> list[tuple[str, str]]:
 
 
 def _skills() -> list[pathlib.Path]:
-    return sorted(SKILLS_DIR.glob("*/SKILL.md"))
+    """Every skill whose description is a public claim about Plaud: the ones we ship
+    plus our maintainer skills under .claude/skills/. The repo-level spectra-* skills
+    are tooling for the repo, not about Plaud, so only plaud-* is picked up there."""
+    shipped = SKILLS_DIR.glob("*/SKILL.md")
+    maintainer = (REPO_ROOT / ".claude" / "skills").glob("plaud-*/SKILL.md")
+    return sorted([*shipped, *maintainer])
 
 
 class TestTheRuleItself(unittest.TestCase):
@@ -499,7 +504,7 @@ class TestSentenceSplitting(unittest.TestCase):
         loud. The dangerous direction is the reverse only if a key were a
         substring; it is not. This keeps the splitter honest either way.
         """
-        p = SKILLS_DIR / "plaud-grep" / "SKILL.md"
+        p = SKILLS_DIR / "plaud-search" / "SKILL.md"
         self.assertGreater(len(sentences(_description(p))), 3,
                            "the description came back as one blob")
 
@@ -689,6 +694,12 @@ class TestLiveDescriptions(unittest.TestCase):
                         f"verbatim to ALLOWED_SENTENCES with the reason. "
                         f"Reading it is the mechanism (#43).")
 
+    def test_the_maintainer_skill_is_still_scanned_after_moving_out_of_skills(self):
+        """#76 moved plaud-repo-audit to .claude/skills/. Its description makes claims
+        about Plaud like any other, and a scan that only globbed skills/ would have
+        dropped it from this check without any test noticing."""
+        scanned = {p.parent.name for p in _skills()}
+        self.assertIn("plaud-repo-audit", scanned)
 
 class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
     """A closed list of signals in the operator's instructions must stay closed.
@@ -800,7 +811,7 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
             # still an enumeration, one line away.
             #
             # Anything sentence-shaped is checked now: long enough to be a
-            # message, with a space in it. `key: value` and `plaud-sync` fall
+            # message, with a space in it. `key: value` and `plaud-download` fall
             # under that on length and shape, and erring toward checking more is
             # the right direction for a guard whose failure mode has twice been
             # "did not look".

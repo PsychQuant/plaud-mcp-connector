@@ -6,7 +6,7 @@ parser. That catches the parser drifting away from the contract on its own.
 It cannot catch the case where a producer starts writing a third shape and
 the parser is widened to match — both sides self-consistent, suite green.
 
-That second case is #40 exactly: `plaud-sync`'s CLI path wrote ranges, the
+That second case is #40 exactly: `plaud-download`'s CLI path wrote ranges, the
 parser accepted points, every fixture in the suite used points, and the
 recommended path produced no subtitles for as long as both existed. The only
 thing that found it was running the real chain by hand.

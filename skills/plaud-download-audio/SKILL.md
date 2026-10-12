@@ -1,5 +1,5 @@
 ---
-name: plaud-audio
+name: plaud-download-audio
 description: |
   Get the original audio file back out of Plaud — the recording itself, not its
   transcript. Use when the user wants the audio to archive, to edit, to feed to
@@ -14,7 +14,7 @@ description: |
   "Originalaufnahme herunterladen", "descargar el audio original", "télécharger l'audio original", "元の音声をダウンロード", "scarica l'audio originale", "originele audio downloaden", "baixar o áudio original", "tải âm thanh gốc", "ดาวน์โหลดเสียงต้นฉบับ", "muat turun audio asal", "تنزيل الصوت الأصلي".
 ---
 
-# Plaud Audio — get the recording itself back
+# Plaud Download Audio — get the recording itself back
 
 **Correction (2026-08-07).** An earlier version of this skill said the official
 MCP "has no tool for this at all". That was wrong, and it was wrong in an
@@ -74,7 +74,7 @@ that, not a bug.
 
 ## Finding the recording
 
-If the user names a recording rather than an id, find it the way `plaud-grep`
+If the user names a recording rather than an id, find it the way `plaud-search`
 does — search the local cache, which matches on what was *said*, not just the
 name. Falling back to `plaud search` only matches names, and only across the
 newest 500.
