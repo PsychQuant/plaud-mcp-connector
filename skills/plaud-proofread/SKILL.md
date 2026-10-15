@@ -59,11 +59,19 @@ proofreading will be weak and let them decide whether to continue.
 
 ### 2. Proofread against that term list
 
+Check the id before it goes into a command: an id is `of_` followed by hexadecimal
+characters. Anything else, do not put it in a command; tell the user which recording was
+skipped and why.
+
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > /tmp/plaud-<id>.txt
+tmp=$(mktemp)
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > "$tmp"
 ```
 
-Then run `/bestasr:srt-proofread` on it with the `context.json` from step 1.
+`mktemp` and not a fixed `/tmp` path: a name that contains the id is predictable, and
+another process could be waiting at it.
+
+Then run `/bestasr:srt-proofread` on `$tmp` with the `context.json` from step 1.
 Its discipline matters here and should not be relaxed: **timestamps are never
 altered**, and a word is only changed when the context file supports it.
 

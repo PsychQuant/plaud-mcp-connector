@@ -264,8 +264,11 @@ Downloads the audio file itself, not its transcript. Useful for archiving, for
 editing, or for running a different ASR over it.
 
 The official CLI returns the link in one call; the MCP's `get_file` carries the
-same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link
-**expires in 24 hours**, so this downloads rather than handing you a URL to keep.
+same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link is
+short-lived (Plaud's tools say 24 hours, the signed URL itself says one hour, and the
+URL's value is the one that is enforced), so this downloads rather than handing you a
+URL to keep. The file is saved with the extension the URL gives it: most recordings are
+Ogg, some are MP3.
 
 ```
 把那次會議的音檔抓下來

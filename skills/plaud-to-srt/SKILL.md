@@ -38,8 +38,11 @@ The user will normally give a name, not an id.
 **1a. Look in the cache, by name.**
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find "<words from the recording's name>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find '<words from the name>'
 ```
+
+The words are the user's own. Put them in single quotes; if they contain a single
+quote, leave that word out and search on the rest.
 
 `find` matches recording **names** and nothing else; it exits 3 when none matches.
 Do not use `cache.py search` for this. It is a full-text search, so a recording
@@ -83,17 +86,18 @@ date is given.
 | none, `complete: false` | **do not say it does not exist.** Say how far back the search reached (`scanned_back_to`) and offer to look further back. That means paging `list_files` without filters (`page`, `page_size`) and matching names yourself, and it costs more the further back the recording is — ask before doing it. `date_from` / `date_to` do not help: they filter inside the same 500-recording window |
 
 **1c. Fetch it if it needs fetching.** Once you have the recording's id, from the
-cache or from Plaud, run this. It does nothing when a complete copy is already
-cached, and fetches when none is, when the cached copy is incomplete, or when the
-cache entry has lost its file:
+cache or from Plaud, check it before it goes into a command: an id is `of_` followed
+by hexadecimal characters. Anything else, do not put it in a command; tell the user
+which recording was skipped and why. Then run this. It does nothing when a complete
+copy is already cached, and fetches when none is, when the cached copy is incomplete,
+or when the cache entry has lost its file:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_one.py" --id "<id>"
 ```
 
 Run it with a tool timeout of at least five minutes: the script allows each CLI call
-300 seconds, longer than a default shell timeout. Check the id first: it is `of_` followed by hexadecimal characters. Anything else,
-do not put in a command. **Pass only the id.** The script reads the name, date and
+300 seconds, longer than a default shell timeout. **Pass only the id.** The script reads the name, date and
 length from Plaud itself. A recording's name is text from Plaud and can contain
 quotes, `$(...)` or backticks, so it must never be pasted into a command line.
 
@@ -227,21 +231,29 @@ normalises simplified characters to traditional. Say so if it matters to them.
 ### 3. Convert
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> -o "<name>.srt"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" "<id>" --out-dir "<folder>"
 ```
+
+`<folder>` is where the user wants the file (the working directory if they have no
+preference); it must exist. The script names the file after the recording, from the name
+in the cache, and makes the name safe itself: you never type the recording's name, which
+is text from Plaud and must not go on a command line. It does not overwrite: a second
+recording with the same name becomes `name-2.srt`. The line it prints says which path it
+chose.
 
 Useful flags:
 
 | Flag | Effect |
 |---|---|
+| `-o <path>` | write to exactly this path instead of `--out-dir`; only a path you chose, never one built from the recording's name |
 | `--no-speaker` | drop the `Speaker 1: ` prefix from every cue |
 | `--tail-seconds N` | duration for the final cue (default 4) |
 | `--file <path>` | convert a transcript file directly, bypassing the cache |
 | `--source polished\|verbatim` | override the stored preference, this once |
 | `--preview-sources` | print one line both ways; exit 3 when there is no choice |
 
-Without `-o` it writes to stdout, which is handy for piping but **do not paste a
-long transcript into the conversation** — write the file and report the path.
+Without `--out-dir` or `-o` it writes to stdout, which is handy for piping but **do not
+paste a long transcript into the conversation** — write the file and report the path.
 
 ### 4. Report honestly
 

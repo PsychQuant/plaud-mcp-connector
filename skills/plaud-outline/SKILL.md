@@ -70,6 +70,10 @@ Falling back to `plaud search` matches names only, across the newest 500.
 
 ### 2. Read the cached one, or fetch
 
+Check the id before it goes into a command: an id is `of_` followed by hexadecimal
+characters. Anything else, do not put it in a command; tell the user which recording was
+skipped and why.
+
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline "<id>" 2>/dev/null \
   || plaud transcript "<id>" --block outline

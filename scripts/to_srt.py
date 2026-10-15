@@ -31,6 +31,7 @@ Usage:
 import argparse
 from collections import Counter
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -1028,13 +1029,71 @@ def differing_sample(rec_id: str) -> dict | None:
                    "offer, and asking would present the same line twice.")
 
 
+# --out-dir (#69). The skill used to run `to_srt.py <id> -o "<name>.srt"`, which put a
+# recording's name on a command line. That name is Plaud's text, and Plaud writes some of
+# them from what was said in the recording; inside double quotes a shell still expands
+# `$(...)` and backticks, and a `/` turns it into a path. So the script builds the file name
+# itself, from the name in the cache, and the caller passes only a directory.
+_STEM_MAX_BYTES = 200      # a file name is capped at 255 bytes; ".srt" and a "-99" suffix fit in the rest
+_STEM_UNSAFE = set('/\\:*?"<>|')
+
+
+def output_stem(name, rec_id: str) -> str:
+    """The file name, without its extension, for a recording called `name`.
+
+    Anything that could make it a path, hide it or address a terminal becomes `_`: path
+    separators and the characters Windows refuses, control and format characters. Leading
+    and trailing dots and spaces go, so the result is never `.`, `..` or a hidden file. The
+    length is capped in BYTES, because a CJK name of 200 characters is 600 bytes. A name that
+    leaves nothing is replaced by the recording id, which is a plain token the caller already
+    validated."""
+    text = unicodedata.normalize("NFC", "" if name is None else str(name))
+    chars = ["_" if ch in _STEM_UNSAFE or unicodedata.category(ch)[0] == "C"
+             or unicodedata.category(ch) in ("Zl", "Zp") else ch for ch in text]
+    stem = re.sub(r"\s+", " ", "".join(chars)).strip(" .")
+    while len(stem.encode("utf-8")) > _STEM_MAX_BYTES:
+        stem = stem[:-1]
+    return stem.rstrip(" .") or rec_id
+
+
+def _recording_name(rec_id: str) -> str:
+    """The name the cache recorded for this recording, or "" when there is none."""
+    try:
+        manifest = json.loads((CACHE_DIR / "manifest.json").read_text(encoding="utf-8"))
+        return str(manifest.get("recordings", {}).get(rec_id, {}).get("name", "") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _claim_output(directory: pathlib.Path, stem: str) -> pathlib.Path:
+    """Create `<stem>.srt` in `directory`, or `<stem>-2.srt`, `<stem>-3.srt`, ... and return it.
+
+    Created exclusively (`x`), so an existing file is never overwritten, not even by a second
+    run that raced the first: two recordings can share a name."""
+    for n in range(1, 1000):
+        candidate = directory / (f"{stem}.srt" if n == 1 else f"{stem}-{n}.srt")
+        try:
+            candidate.open("x", encoding="utf-8").close()
+            return candidate
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            sys.exit(f"error: cannot create a file in {str(directory)!r}: {exc.strerror or exc}")
+    sys.exit(f"error: {str(directory)!r} already holds 999 files named like {stem!r}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("id", nargs="?", help="recording id in the cache")
     src.add_argument("--file", help="read a transcript markdown file directly")
-    ap.add_argument("-o", "--output", help="write here instead of stdout")
+    dest = ap.add_mutually_exclusive_group()
+    dest.add_argument("-o", "--output", help="write here instead of stdout")
+    dest.add_argument("--out-dir", dest="out_dir", metavar="DIR",
+                      help="write DIR/<recording name>.srt, the name taken from the cache and "
+                           "made safe here; an existing file is never overwritten (a numeric "
+                           "suffix is added). Needs a recording id, not --file")
     ap.add_argument("--no-speaker", action="store_true",
                     help="omit the speaker prefix from cue text")
     ap.add_argument("--tail-seconds", type=float, default=4.0,
@@ -1046,6 +1105,13 @@ def main() -> None:
                     help="print one line rendered both ways so a caller can ask "
                          "which is wanted; exits 3 when there is nothing to choose")
     args = ap.parse_args()
+
+    if args.out_dir:
+        if args.file:
+            sys.exit("error: --out-dir names the file after the recording, which only a recording "
+                     "id has a name for; use -o with --file")
+        if not pathlib.Path(args.out_dir).is_dir():
+            sys.exit(f"error: --out-dir {args.out_dir!r} is not a directory (create it first)")
 
     cfg = config.load_config()
 
@@ -1447,6 +1513,10 @@ def main() -> None:
         # frequent: thirty of them across the local corpus, ten in that file.
         parts.append(f"{len(trims)} cue end(s) corrected — see stderr")
     note = f" ({', '.join(parts)})" if parts else ""
+    if args.out_dir:
+        # Claimed only now, after the conversion has worked, so a failed run leaves no empty file.
+        args.output = str(_claim_output(pathlib.Path(args.out_dir),
+                                        output_stem(_recording_name(args.id), args.id)))
     if args.output:
         # UTF-8 explicitly. `write_text` with no encoding uses the LOCALE's,
         # while the cache is read as UTF-8 — so on a machine whose locale is
