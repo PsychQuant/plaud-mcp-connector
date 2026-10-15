@@ -129,6 +129,7 @@ transcript:
 | _(none)_ | The transcript — what was actually said | Quote it |
 | `[corrected]` | A proofread copy (`plaud-proofread`) | Quote as corrected text, not as verbatim speech |
 | `[summary]` | An AI-written summary | **Nobody said these words.** Open the transcript for the actual wording |
+| `[corrected, stale]` / `[summary, stale]` | The same, but made from a transcript that was rewritten after it was stored | Do not quote it as current. Say it may not match the transcript, and offer to proofread or fetch the summary again |
 
 The labels exist because the reader cannot tell by looking. A summary reads like
 clean prose precisely because it was written rather than spoken, which makes it

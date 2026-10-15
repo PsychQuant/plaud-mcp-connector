@@ -70,8 +70,12 @@ altered**, and a word is only changed when the context file supports it.
 ### 3. Store beside the original — never over it
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind proofread < <proofread output>
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind proofread < "$proofread_file"
 ```
+
+`$proofread_file` is the corrected file `/bestasr:srt-proofread` wrote in step 2. `put` stores
+it with Unicode in one form and one trailing newline, so it is not a byte copy, and it
+refuses a recording that has no cached transcript.
 
 The raw transcript is what was actually captured; the proofread copy is a derived
 artefact built from a term list that may itself be wrong. Overwriting the original

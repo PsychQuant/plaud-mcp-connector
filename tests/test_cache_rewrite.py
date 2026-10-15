@@ -304,5 +304,201 @@ class TestOlderManifestsStillWork(RewriteCase):
         self.assertNotIn("stale_derived", self.record("rec1"))
 
 
+
+class TestWhatCountsAsARewrite(RewriteCase):
+    """Verify round 1: "the text changed" was a byte comparison, so a rewrite that only
+    changes how the times are written marked every derived file stale, and the mark is
+    sticky. What was SAID is compared, not how it was stamped."""
+
+    RANGED = ("[00:00:01.000 - 00:00:03.000] Speaker 1: the budget is approved\n"
+              "[00:00:05.000 - 00:00:07.500] Speaker 1: next item\n")
+
+    def test_a_point_stamp_rewritten_as_a_range_is_not_a_change(self):
+        self.with_all_derived()
+        self.put("rec1", self.RANGED)
+        self.assertEqual([], self.stale("rec1"))
+
+    def test_line_endings_are_not_a_change(self):
+        self.put("rec1", OLD.replace("\n", "\r\n"))
+        self.put("rec1", "a summary\n", "summary")
+        self.put("rec1", OLD.replace("\n", "\r\n"))
+        self.assertEqual([], self.stale("rec1"))
+
+    def test_the_stored_file_in_the_other_unicode_form_is_not_a_change(self):
+        # Legacy caches hold NFD; the stored side is normalised too. Without that,
+        # the NFC body below would differ from what is on disk.
+        self.put("rec1", "[00:00:01] Speaker 1: caf\u00e9 au lait\n")
+        self.put("rec1", "a summary\n", "summary")
+        path = self.dir / "rec1.md"
+        path.write_text(unicodedata.normalize("NFD", path.read_text()))
+        self.put("rec1", "[00:00:01] Speaker 1: caf\u00e9 au lait\n")
+        self.assertEqual([], self.stale("rec1"))
+
+    def test_other_words_or_another_speaker_still_count(self):
+        self.with_all_derived()
+        self.put("rec1", OLD.replace("Speaker 1: next item", "Speaker 2: next item"))
+        self.assertEqual(["outline", "polish", "summary"], self.stale("rec1"))
+
+    def test_finishing_a_cut_short_fetch_stales_only_the_copy_made_from_the_short_text(self):
+        # What Plaud made for the whole recording (summary, outline, polish) is not older
+        # than the text just because the first fetch stopped early. A proofread copy is
+        # made from the cached text, so it is.
+        part = "[00:00:01] Speaker 1: the budget is approved\n"
+        ns = argparse.Namespace(id="rec1", name="n", created_at="2026-10-01T00:00:00Z",
+                                duration="60000", kind="transcript", complete="false")
+        with mock.patch("sys.stdin", io.StringIO(part)):
+            self.capture(cache.cmd_put, ns)
+        self.put("rec1", "a summary\n", "summary")
+        self.put("rec1", "[00:00:01] outline\n", "outline")
+        self.put("rec1", "[00:00:01] Speaker 1: the budget is approved\n", "proofread")
+        self.put("rec1", OLD)                       # complete, and the old text is its start
+        self.assertEqual(["proofread"], self.stale("rec1"))
+
+
+class TestAFileThatCannotBeReadDoesNotBlockTheRewrite(RewriteCase):
+    def test_a_transcript_that_does_not_decode_can_be_rewritten(self):
+        self.put("rec1", OLD)
+        self.put("rec1", "a summary\n", "summary")
+        with (self.dir / "rec1.md").open("ab") as fh:
+            fh.write(b"\xe4\xb8")                  # a multi-byte sequence cut short
+        self.put("rec1", OLD)                       # must repair, not raise
+        self.assertIn("approved", (self.dir / "rec1.md").read_text())
+        self.assertEqual(["summary"], self.stale("rec1"))
+
+    def test_a_record_that_is_not_a_dict_does_not_stop_a_rewrite(self):
+        self.put("rec1", OLD)
+        self.put("rec1", "a summary\n", "summary")
+        man = json.loads((self.dir / "manifest.json").read_text())
+        man["recordings"]["rec1"] = "hand-edited"
+        (self.dir / "manifest.json").write_text(json.dumps(man))
+        self.put("rec1", NEW)
+        self.assertIn("rejected", (self.dir / "rec1.md").read_text())
+
+
+class TestShowDoesNotNeedAHealthyManifest(RewriteCase):
+    def show(self, rec="rec1", kind="transcript", **extra):
+        ns = argparse.Namespace(id=rec, kind=kind, fresh_only=False, **extra)
+        return self.capture(cache.cmd_show, ns)
+
+    def test_the_transcript_prints_whatever_the_manifest_looks_like(self):
+        self.put("rec1", OLD)
+        for broken in ("{}", "[]", "not json at all"):
+            (self.dir / "manifest.json").write_text(broken)
+            out, err = self.show()
+            self.assertIn("approved", out, broken)
+            # The transcript is never stale, so showing it has no reason to open the
+            # manifest, and a corrupt one must not put a warning beside it
+            self.assertEqual("", err, broken)
+
+    def test_a_derived_file_prints_when_the_manifest_cannot_say_whether_it_is_stale(self):
+        self.with_all_derived()
+        (self.dir / "manifest.json").write_text("[]")
+        out, _err = self.show(kind="outline")
+        self.assertIn("outline of the old text", out)
+
+
+class TestTheRemedyNamesTheRightStep(RewriteCase):
+    def show(self, kind):
+        ns = argparse.Namespace(id="rec1", kind=kind, fresh_only=False)
+        return self.capture(cache.cmd_show, ns)
+
+    def test_a_stale_proofread_copy_is_not_told_to_be_fetched(self):
+        self.put("rec1", OLD)
+        self.put("rec1", "[00:00:01] Speaker 1: the budget is approved\n", "proofread")
+        self.put("rec1", NEW)
+        _out, err = self.show("proofread")
+        self.assertIn("put --kind proofread", err)
+        self.assertNotIn("Fetch it again", err)
+
+    def test_a_stale_outline_is_told_to_be_fetched_again(self):
+        self.with_all_derived()
+        self.put("rec1", NEW)
+        _out, err = self.show("outline")
+        self.assertIn("Fetch it again", err)
+
+
+class TestFreshOnly(RewriteCase):
+    def show(self, kind="outline"):
+        ns = argparse.Namespace(id="rec1", kind=kind, fresh_only=True)
+        return self.capture(cache.cmd_show, ns)
+
+    def test_a_current_file_prints_and_exits_normally(self):
+        self.with_all_derived()
+        out, err = self.show()
+        self.assertIn("outline of the old text", out)
+        self.assertEqual("", err)
+
+    def test_a_stale_file_prints_nothing_and_exits_3(self):
+        self.with_all_derived()
+        self.put("rec1", NEW)
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with self.assertRaises(SystemExit) as ctx:
+                cache.cmd_show(argparse.Namespace(id="rec1", kind="outline", fresh_only=True))
+        self.assertEqual(3, ctx.exception.code)
+        self.assertEqual("", out.getvalue())
+        self.assertIn("earlier version", err.getvalue())
+
+    def test_a_missing_file_still_fails_like_before(self):
+        self.put("rec1", OLD)
+        with self.assertRaises(SystemExit) as ctx:
+            self.show("outline")
+        self.assertNotEqual(0, ctx.exception.code)
+
+
+class TestTheSkillsOwnCommandLine(unittest.TestCase):
+    """The warning is only worth having if the command the skill actually runs reaches it.
+    Verify round 1: it ended in `2>/dev/null`, and `show` exits 0 for a stale file, so the
+    fallback to fetching never ran and the old outline was printed with nothing to say so."""
+
+    def _command(self) -> str:
+        import re
+        text = (REPO_ROOT / "skills" / "plaud-outline" / "SKILL.md").read_text(encoding="utf-8")
+        step = text[text.index("### 2. Read the cached one, or fetch"):]
+        return re.search(r"```bash\n(.*?)```", step, re.S).group(1)
+
+    def _run(self, cache_dir, plaud_dir):
+        import os
+        import subprocess
+        cmd = self._command().replace("${CLAUDE_PLUGIN_ROOT}", str(REPO_ROOT)).replace("<id>", "rec1")
+        env = {**os.environ, "PLAUD_CACHE_DIR": str(cache_dir),
+               "PATH": f"{plaud_dir}:{os.environ['PATH']}"}
+        return subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, env=env)
+
+    def _cli(self, cache_dir, *args, stdin=""):
+        import os
+        import subprocess
+        env = {**os.environ, "PLAUD_CACHE_DIR": str(cache_dir)}
+        return subprocess.run(["python3", str(REPO_ROOT / "scripts" / "cache.py"), *args],
+                              input=stdin, capture_output=True, text=True, env=env)
+
+    def _setup(self):
+        tmp = tempfile.TemporaryDirectory(prefix="plaud-skillcmd-")
+        self.addCleanup(tmp.cleanup)
+        root = pathlib.Path(tmp.name)
+        cache_dir, bin_dir = root / "cache", root / "bin"
+        bin_dir.mkdir()
+        fake = bin_dir / "plaud"
+        fake.write_text("#!/bin/sh\necho FETCHED-FRESH\n")
+        fake.chmod(0o755)
+        for args, body in ((("put", "--id", "rec1", "--name", "n", "--created-at",
+                             "2026-10-01T00:00:00Z", "--duration", "60000"), OLD),
+                           (("put", "--id", "rec1", "--kind", "outline"), "cached outline\n")):
+            self.assertEqual(0, self._cli(cache_dir, *args, stdin=body).returncode)
+        return cache_dir, bin_dir
+
+    def test_a_current_outline_is_read_from_the_cache(self):
+        cache_dir, bin_dir = self._setup()
+        p = self._run(cache_dir, bin_dir)
+        self.assertEqual("cached outline\n", p.stdout)
+
+    def test_a_stale_outline_falls_through_to_fetching(self):
+        cache_dir, bin_dir = self._setup()
+        self.assertEqual(0, self._cli(cache_dir, "put", "--id", "rec1", "--name", "n",
+                                      "--created-at", "2026-10-01T00:00:00Z", "--duration",
+                                      "60000", stdin=NEW).returncode)
+        p = self._run(cache_dir, bin_dir)
+        self.assertEqual("FETCHED-FRESH\n", p.stdout)
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,7 +71,7 @@ Falling back to `plaud search` matches names only, across the newest 500.
 ### 2. Read the cached one, or fetch
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline "<id>" 2>/dev/null \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline --fresh-only "<id>" 2>/dev/null \
   || plaud transcript "<id>" --block outline
 ```
 
@@ -81,12 +81,13 @@ read does not fix it.
 
 Refetch when the user asks for the current version, or when the recording was
 reprocessed. The cache knows one reason by itself: if the transcript was rewritten
-after the outline was cached, `cache.py show --kind outline` prints a warning on
-stderr ("made from an earlier version of the transcript") and `cache.py status`
-counts it as stale. Treat that warning as a reason to refetch. It cannot know that
-Plaud reprocessed a recording on its side; for that, fetching again is the check: at
-2,502 B against a transcript's 53,060 B, it costs less than deciding whether the
-cached copy went stale.
+after the outline was cached, the outline was made from text that is gone.
+`--fresh-only` makes `show` print nothing and exit 3 in that case (it says why on
+stderr, which the command above discards), so the command falls through to fetching.
+Without the flag `show` prints the old outline with a warning on stderr and exits 0,
+and `cache.py status` counts it as stale. It cannot know that Plaud reprocessed a
+recording on its side; for that, fetching again is the check: at 2,502 B against a
+transcript's 53,060 B, it costs less than deciding whether the cached copy went stale.
 
 Either way it is small. Reading it into the conversation is fine — that is the
 point of this skill. A full transcript is not, and `plaud-download` exists so you
