@@ -3,10 +3,12 @@
 What the official CLI and MCP actually do — not what `--help` says they do.
 
 **Measured 2026-08-07 against `@plaud-ai/cli` 0.3.7 (commit `bacaae9`) and
-`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** One later section
-carries its own stamp: [The OAuth callback port,
-8199](#the-oauth-callback-port-8199) was measured 2026-08-17 against MCP 0.3.8.
-Everything else on this page is 0.3.7.
+`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** Some sections carry
+their own stamp, and it overrides this one: [The OAuth callback port,
+8199](#the-oauth-callback-port-8199) was measured 2026-08-17 against MCP 0.3.8;
+[`list_files` with filters](#list_files-with-filters-reports-its-own-scan-measured-2026-10-06)
+on 2026-10-06; [no folder or tag key](#no-folder-or-tag-key-in-the-official-responses-measured-2026-10-15)
+on 2026-10-15 against MCP and CLI 0.3.14. Everything else on this page is 0.3.7.
 
 Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
@@ -362,32 +364,49 @@ eight hours unscanned, and the earlier "on or before `date_from`" test up to thi
 account, against the MCP package version the plugin declares at the time of writing;
 re-measure after an MCP upgrade.
 
-### No folder or tag field, anywhere (measured 2026-10-15)
+### No folder or tag key in the official responses (measured 2026-10-15)
 
-Plaud's web app groups recordings into folders. None of the three official ways of
-reading a recording says which folder, or which tag, a recording is in, and none of
-them can filter by one. Measured read-only on one account, against the MCP package
-`@plaud-ai/mcp` 0.3.14 (resolved from `@latest`) and the CLI `plaud` 0.3.14:
+Plaud's web app groups recordings into folders. Nothing the official MCP returns says
+which folder, or which tag, a recording is in, and no tool takes a parameter that names
+one. Measured read-only on one account against `@plaud-ai/mcp` 0.3.14 (resolved from
+`@latest`), which offers seven tools: `get_current_user`, `get_file`, `get_note`,
+`get_transcript`, `list_files`, `login`, `logout`. For each call the key paths were
+collected over every object returned, walking arrays element by element; values were not
+recorded.
 
-| Call | Keys on a recording |
-|---|---|
-| MCP `list_files` (the ten newest) | `id`, `name`, `created_at`, `serial_number`, `start_at`, `duration` |
-| MCP `get_file` (one recording) | the same six, plus `presigned_url`, `source_list`, `note_list` |
-| CLI `plaud file <id>` | `id`, `name`, `created_at`, `start_at`, `duration`, `serial_number`, plus `audio`, `transcript` and `summary` (values not inspected) |
+| Call | Sample | Key paths |
+|---|---|---|
+| `list_files` | the 150 newest recordings (3 pages of 50) | `id`, `name`, `created_at`, `serial_number`, `start_at`, `duration`, each present in 150 of 150 |
+| `get_file` | 8 recordings | the same six, `presigned_url`, `source_list[]` and `note_list[]` with `data_content`, `data_id`, `data_link`, `data_title`, `data_type` (notes also `data_path`, `data_error_code`, `data_tab_name`) |
+| `get_transcript` | 60 segments from 3 recordings | `start_time`, `end_time`, `content`, `speaker`, `original_speaker`, `segment_uid` |
+| `get_note` | 3 notes | `data_content`, `data_id`, `data_link`, `data_title`, `data_type`, `data_path`, `data_error_code`, `data_tab_name` |
+| `get_current_user` | 1 | six keys, none about folders or tags |
 
-`plaud files` takes `--page` and `--page-size` and nothing else; `list_files` takes
-`query`, `date_from`, `date_to`, `page`, `page_size`. There is no parameter that names
-a folder or a tag.
+No key path in any of them contains `folder`, `tag`, `categor`, `label`, `group` or
+`dir`. Every `list_files` record carried all six keys, so a missing key is not the
+response leaving out fields that are empty, at least for these 150 recordings.
+`list_files` takes `query`, `date_from`, `date_to`, `page` and `page_size`; none names a
+folder or a tag.
 
-So a cache here cannot record a recording's folder or tag, because nothing official
-returns one, and this repo offers no folder or tag filter (#63). The retired sibling
-plugin filtered by tag id, but it did that through the web app's own list endpoint,
-which is not part of the surface documented in this file.
+The CLI is not a second source. `plaud file <id>` prints the same fixed set of lines for
+every recording (the six fields and whether audio, transcript and summary are
+available), so what it shows is what it chooses to print, not what the response
+carries; it says nothing either way. `plaud files` takes `--page` and `--page-size` and
+nothing else.
 
-What this does **not** establish: other accounts, recordings shared into an account,
-or plans other than the one measured; and the MCP package is resolved from `@latest`,
-so a later release can add a field without this repo changing. Re-measure after an
-upgrade.
+So there is nothing in these responses for a cache here to record as a folder or tag,
+and this repo offers no folder or tag filter (#63). Tag ids do exist somewhere:
+the retired sibling plugin's own issue (observed 2026-06-11, recorded on #63) reports
+that the web app's list endpoint `/file/simple/web` returns a `filetag_id_list` for each file.
+That endpoint is not part of the surface measured here and was not tried for this
+change; the sibling plugin itself did not use it, it read the folder name off the web
+page in the browser.
+
+What this does **not** establish: other accounts, recordings shared into an account, or
+plans other than the one measured; later releases (the package is resolved from
+`@latest`, so a field can appear without this repo changing); and whether a recording
+that is in a folder looks any different, because the responses do not say which
+recordings those are, so there was no positive control. Re-measure after an upgrade.
 
 ### `get_transcript`
 
