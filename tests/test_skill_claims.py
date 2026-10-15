@@ -776,23 +776,30 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
         # fragments arrive already joined, which the previous regex had to
         # reconstruct by hand.
         import ast
-        tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
-                          / "scripts" / "to_srt.py").read_text(encoding="utf-8"))
+        # TWO files since #62: the suspected-noise messages are composed in
+        # `asr_flags.py` so the guarded subtitle file changes by a few lines.
+        # Reading only `to_srt.py` made every message the skill quotes about
+        # that check look invented.
         pieces = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                pieces.append(node.value)
-            elif isinstance(node, ast.JoinedStr):
-                pieces.append("".join(
-                    v.value for v in node.values
-                    if isinstance(v, ast.Constant) and isinstance(v.value, str)))
-        # Docstrings are Constants too, so drop the ones that are statements:
-        # a message is never a bare expression at the top of a block.
-        for node in ast.walk(tree):
-            doc = ast.get_docstring(node) if isinstance(
-                node, (ast.Module, ast.FunctionDef, ast.ClassDef)) else None
-            if doc and doc in pieces:
-                pieces.remove(doc)
+        for name in ("to_srt.py", "asr_flags.py"):
+            tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
+                              / "scripts" / name).read_text(encoding="utf-8"))
+            file_pieces = []
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    file_pieces.append(node.value)
+                elif isinstance(node, ast.JoinedStr):
+                    file_pieces.append("".join(
+                        v.value for v in node.values
+                        if isinstance(v, ast.Constant) and isinstance(v.value, str)))
+            # Docstrings are Constants too, so drop the ones that are statements:
+            # a message is never a bare expression at the top of a block.
+            for node in ast.walk(tree):
+                doc = ast.get_docstring(node) if isinstance(
+                    node, (ast.Module, ast.FunctionDef, ast.ClassDef)) else None
+                if doc and doc in file_pieces:
+                    file_pieces.remove(doc)
+            pieces.extend(file_pieces)
         src = re.sub(r"\s+", " ", " ".join(pieces))
         text = self._skill_text()
         step4 = text[text.index("### 4. Report honestly"):
@@ -829,8 +836,8 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
                 with self.subTest(fragment=fragment[:40]):
                     self.assertIn(
                         fragment, src,
-                        f"SKILL.md quotes {fragment!r} and scripts/to_srt.py "
-                        f"never prints it. The operator is a model told to relay "
+                        f"SKILL.md quotes {fragment!r} and neither scripts/to_srt.py "
+                        f"nor scripts/asr_flags.py prints it. The operator is a model told to relay "
                         f"these strings; one that does not exist is one it will "
                         f"never match, and one that has DRIFTED gets relayed "
                         f"wrong")
