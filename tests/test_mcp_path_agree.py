@@ -87,5 +87,31 @@ class TestBothSkillsDescribeTheSameLine(unittest.TestCase):
             "the body example must show a range line; a start-only stamp there is what #67 was")
 
 
+class TestTheParserReadsExactlyWhatTheSkillsInstruct(unittest.TestCase):
+    """The text tells a model to write millisecond range lines; the parser must read them.
+
+    Everything above compares prose with prose. This is the other half: the lines the
+    prose asks for, including the hour and ten-hour stamps and a segment with no end,
+    go through the real parser and come out with the starts and ends that were meant.
+    """
+
+    def test_millisecond_ranges_hours_and_a_start_only_segment(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "to_srt_for_67", SKILLS.parent / "scripts" / "to_srt.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        body = (
+            "[00:00:00.680 - 00:00:02.720] Speaker 1: first\n"
+            "[01:00:00.250 - 01:00:04.000] Speaker 2: second\n"
+            "[10:00:00.000] Speaker 1: third, no end\n"
+        )
+        segs, dropped, _front, lost = mod.parse_transcript(body)
+        self.assertEqual([], dropped)
+        self.assertEqual([], lost)
+        self.assertEqual([(0.68, 2.72), (3600.25, 3604.0), (36000.0, None)],
+                         [(s["start"], s["end"]) for s in segs])
+
+
 if __name__ == "__main__":
     unittest.main()
