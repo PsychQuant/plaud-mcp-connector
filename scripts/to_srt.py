@@ -23,9 +23,17 @@ because there stdout is the subtitle file itself. The shapes go to stderr either
 way. Exit stays 0: the file was written and is usable, so a caller checking only
 the exit status must read the cue line, which says how many were dropped.
 
+Cues that look like a recogniser filling silence or noise (a three-character
+token held across forty seconds, a subtitle credit, a phrase repeated until the
+decoder gives up) are kept and marked, with their words and timing unchanged.
+`--strip-hallucinations` drops them, `--no-flag` turns the check off, and
+`--ghost-phrases FILE` adds phrases to the list. See scripts/asr_flags.py for what
+counts and what does not.
+
 Usage:
     to_srt.py <recording-id> [-o out.srt] [--no-speaker] [--tail-seconds N]
     to_srt.py --file <path.md> [-o out.srt]
+    to_srt.py <recording-id> [--strip-hallucinations | --no-flag] [--ghost-phrases FILE]
 """
 
 import argparse
@@ -45,6 +53,14 @@ _cfg_spec = importlib.util.spec_from_file_location(
 )
 config = importlib.util.module_from_spec(_cfg_spec)
 _cfg_spec.loader.exec_module(config)
+
+# Same reason, same way. The detection is in its own file so this one, which is
+# already large and guarded line by line, changes only where it calls it.
+_flags_spec = importlib.util.spec_from_file_location(
+    "plaud_asr_flags", pathlib.Path(__file__).resolve().parent / "asr_flags.py"
+)
+asr_flags = importlib.util.module_from_spec(_flags_spec)
+_flags_spec.loader.exec_module(asr_flags)
 
 CACHE_DIR = pathlib.Path(
     os.environ.get("PLAUD_CACHE_DIR", pathlib.Path.home() / ".plaud-connector" / "cache")
@@ -668,6 +684,11 @@ def build_cues(segments: list[dict], *, stats: dict | None = None,
         # prefix meant `S: ` was non-empty and every wordless cue survived —
         # the guard was in the right function and one statement too late.
         words_are_empty = not text
+        # Carried on the cue and written by `render_srt` as a line of its own: a marker
+        # is not words, so it must not rescue a cue that has none, and wrapped together
+        # with the words it was cut through the middle of "characters". Only segments
+        # `asr_flags` marked carry the key.
+        marker = seg.get("flag") if not words_are_empty else None
         if show_speaker and seg["speaker"]:
             speaker, gone_s = sanitise(seg["speaker"])
             speaker, collapsed_s = collapse_runs(speaker)
@@ -695,7 +716,7 @@ def build_cues(segments: list[dict], *, stats: dict | None = None,
                 stats["emptied"] = stats.get("emptied", 0) + 1
             continue
         cues.append({"start": seg["start"], "end": end, "text": text,
-                     "stripped": gone})
+                     "stripped": gone, "marker": marker})
     return cues
 
 
@@ -798,10 +819,13 @@ def wrap_cue_text(text: str, limits: dict | None = None) -> str:
 def render_srt(cues: list[dict], limits: dict | None = None) -> str:
     blocks = []
     for n, cue in enumerate(cues, start=1):
+        body = wrap_cue_text(cue["text"], limits)
+        if cue.get("marker"):
+            body = "\n".join((asr_flags.bracket(cue["marker"]), body))
         blocks.append(
             f"{n}\n"
             f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n"
-            f"{wrap_cue_text(cue['text'], limits)}\n"
+            f"{body}\n"
         )
     return "\n".join(blocks)
 
@@ -1045,7 +1069,25 @@ def main() -> None:
     ap.add_argument("--preview-sources", action="store_true",
                     help="print one line rendered both ways so a caller can ask "
                          "which is wanted; exits 3 when there is nothing to choose")
+    ap.add_argument("--strip-hallucinations", action="store_true",
+                    help="drop cues that look like a recogniser filling silence or "
+                         "noise, instead of keeping them with a marker")
+    ap.add_argument("--no-flag", action="store_true",
+                    help="do not look for suspected ASR noise at all")
+    ap.add_argument("--ghost-phrases", metavar="FILE",
+                    help="add the phrases in FILE (one per line, # for comments) to "
+                         "the list of whole-cue phrases that are flagged")
     args = ap.parse_args()
+    if args.preview_sources and (args.no_flag or args.strip_hallucinations or args.ghost_phrases):
+        ap.error("--preview-sources shows how the two transcripts differ and never runs the "
+                 "suspected-noise check, so --no-flag, --strip-hallucinations and "
+                 "--ghost-phrases have nothing to act on there")
+    if args.no_flag and args.strip_hallucinations:
+        ap.error("--no-flag turns the check off and --strip-hallucinations needs it "
+                 "on; use one of them")
+    if args.no_flag and args.ghost_phrases:
+        ap.error("--ghost-phrases adds to a check that --no-flag turns off; use one "
+                 "of them")
 
     cfg = config.load_config()
 
@@ -1099,6 +1141,16 @@ def main() -> None:
                   f"format code points, and repeated whitespace. The words are "
                   f"unchanged.", file=sys.stderr)
         return
+
+    # Before anything is read, so a list that cannot be opened stops the run with
+    # nothing written. Going on without it would quietly turn the phrase signal
+    # into a weaker one than the person asked for.
+    phrases = None
+    if not args.no_flag:
+        try:
+            phrases = asr_flags.load_phrases(args.ghost_phrases)
+        except asr_flags.PhraseListError as exc:
+            sys.exit(str(exc))
 
     if args.file:
         path = pathlib.Path(args.file)
@@ -1360,6 +1412,14 @@ def main() -> None:
     # branch was unreachable and the docstring described an intention. A tool
     # whose subject is "partial loss must not be silent" had a second silent
     # correction in the function it feeds.
+    # Between the parse and the cue build, and only here: the preview pairs
+    # polished and verbatim cues line by line (#58) and never passes through
+    # this call, so a marker on one side cannot turn into a difference.
+    flag_report = None
+    if phrases is not None:
+        segments, flag_report = asr_flags.flag_segments(
+            segments, phrases=phrases, strip=args.strip_hallucinations)
+
     trims: list[str] = []
     cue_stats: dict = {}
     built = build_cues(segments,
@@ -1368,6 +1428,9 @@ def main() -> None:
                        tail_seconds=args.tail_seconds,
                        warnings=trims)
     emptied = cue_stats.get("emptied", 0)
+    if flag_report is not None:
+        for line in asr_flags.summary_lines(flag_report):
+            print(line, file=sys.stderr)
     if emptied:
         print(f"⚠ {emptied} cue(s) held nothing but control or format "
               f"characters and were removed — an SRT block with no text line "
@@ -1440,6 +1503,10 @@ def main() -> None:
         parts.append(f"{stripped_chars} char(s) removed — see stderr")
     if emptied:
         parts.append(f"{emptied} empty cue(s) removed — see stderr")
+    if flag_report is not None:
+        # A removed cue is a line the file no longer holds, so it belongs in the
+        # sum a caller checks; a flagged one costs no line but changes its text
+        parts.extend(asr_flags.ledger_clauses(flag_report))
     if trims:
         # A trim or a clamp REPLACES a time the producer wrote, which is the
         # same kind of loss as a discarded end and was the only one still kept
@@ -1469,7 +1536,8 @@ def main() -> None:
         # stops short of, and the very next change made it concretely false.
         #
         # The arithmetic that closes is now: cues in the file + empty cues
-        # removed + dropped lines + header lines = every non-blank input line.
+        # removed + cues removed as suspected ASR noise (--strip-hallucinations) +
+        # dropped lines + header lines = every non-blank input line.
         print(f"wrote {len(built)} cues{note} → {str(args.output)!r}")
     else:
         # Streaming: stdout IS the subtitle file, so there is no success line to

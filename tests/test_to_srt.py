@@ -2821,7 +2821,7 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("main", "⚠ of content lines in did not parse as segment", "remedy"):          "the advice clause, tested by name",
         ("main", "⚠ of content lines in did not parse as segment", "shape_of(first_bad)"): "a shape",
         ("parse_timestamp", "unrecognised timestamp:", "raw"):       "echoes the rejected stamp into an exception",
-        ("render_srt", "-->", "wrap_cue_text(cue['text'], limits)"): "the wrapped words; wrapping is tested",
+        ("render_srt", "-->", "body"): "the wrapped words, with the suspected-noise marker above them; both are tested",
         ("shape_of", "\u2026", "shape[:_SHAPE_CAP - 1]"):            "the truncated shape, on its way into the line below",
         ("shape_of", "chars, opens with", "shape"):                  "the assembled shape string",
         ("subtitle_source", ".md", "rec_id"):                        "a path fragment",
