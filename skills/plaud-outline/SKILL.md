@@ -80,9 +80,13 @@ every time is what `#28` was filed about, and a cache that is written but never
 read does not fix it.
 
 Refetch when the user asks for the current version, or when the recording was
-reprocessed. There is no staleness check: at 2,502 B against a transcript's
-53,060 B, fetching again costs less than deciding whether the cached copy went
-stale.
+reprocessed. The cache knows one reason by itself: if the transcript was rewritten
+after the outline was cached, `cache.py show --kind outline` prints a warning on
+stderr ("made from an earlier version of the transcript") and `cache.py status`
+counts it as stale. Treat that warning as a reason to refetch. It cannot know that
+Plaud reprocessed a recording on its side; for that, fetching again is the check: at
+2,502 B against a transcript's 53,060 B, it costs less than deciding whether the
+cached copy went stale.
 
 Either way it is small. Reading it into the conversation is fine — that is the
 point of this skill. A full transcript is not, and `plaud-download` exists so you
@@ -133,10 +137,12 @@ spoken here" but "the section starting here is about this". Same syntax,
 different relation. Searching outlines needs that answered first, and it has
 not been — see `#28`.
 
-**Refetch rather than track staleness.** An outline changes when Plaud
-reprocesses a recording; a transcript does not. At 2,502 B against a
+**Refetch rather than track what Plaud does.** An outline changes when Plaud
+reprocesses a recording; the cache cannot see that. At 2,502 B against a
 transcript's 53,060 B, fetching it again costs less than deciding whether the
-cached one went stale.
+cached one went stale. What the cache does track is the local kind: an outline
+made from a transcript that was rewritten afterwards is marked stale (see above),
+and fetching it again with `put --kind outline` clears the mark.
 
 ## Failure modes
 
