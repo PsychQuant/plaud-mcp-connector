@@ -362,6 +362,33 @@ eight hours unscanned, and the earlier "on or before `date_from`" test up to thi
 account, against the MCP package version the plugin declares at the time of writing;
 re-measure after an MCP upgrade.
 
+### No folder or tag field, anywhere (measured 2026-10-15)
+
+Plaud's web app groups recordings into folders. None of the three official ways of
+reading a recording says which folder, or which tag, a recording is in, and none of
+them can filter by one. Measured read-only on one account, against the MCP package
+`@plaud-ai/mcp` 0.3.14 (resolved from `@latest`) and the CLI `plaud` 0.3.14:
+
+| Call | Keys on a recording |
+|---|---|
+| MCP `list_files` (the ten newest) | `id`, `name`, `created_at`, `serial_number`, `start_at`, `duration` |
+| MCP `get_file` (one recording) | the same six, plus `presigned_url`, `source_list`, `note_list` |
+| CLI `plaud file <id>` | `id`, `name`, `created_at`, `start_at`, `duration`, `serial_number`, plus `audio`, `transcript` and `summary` (values not inspected) |
+
+`plaud files` takes `--page` and `--page-size` and nothing else; `list_files` takes
+`query`, `date_from`, `date_to`, `page`, `page_size`. There is no parameter that names
+a folder or a tag.
+
+So a cache here cannot record a recording's folder or tag, because nothing official
+returns one, and this repo offers no folder or tag filter (#63). The retired sibling
+plugin filtered by tag id, but it did that through the web app's own list endpoint,
+which is not part of the surface documented in this file.
+
+What this does **not** establish: other accounts, recordings shared into an account,
+or plans other than the one measured; and the MCP package is resolved from `@latest`,
+so a later release can add a field without this repo changing. Re-measure after an
+upgrade.
+
 ### `get_transcript`
 
 ```jsonc
@@ -507,6 +534,8 @@ four months, and any of them reaches users without a release on this side.
   test, the other mutates a global install.
 - **Whether `plaud audio`'s URL needs auth headers.** It downloaded without any,
   but only the unexpired case was tried.
+- **Folders and tags on other accounts, shared recordings or other plans.** See
+  "No folder or tag field" above: one account, one moment.
 
 ---
 

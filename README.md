@@ -327,6 +327,11 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
   is not searchable, however recent. Every search prints how many recordings it
   searched and the date span they cover; the skill is instructed to quote that
   line, and never to answer a bare "no match".
+- **There is no filter by folder or tag.** Plaud's official MCP and CLI do not say
+  which folder or tag a recording is in, so there is nothing to filter on and nothing
+  the cache could store. Find a recording by name, by date range, or by what was said
+  in a transcript you downloaded. What was measured, and what was not, is in
+  [`docs/official-surface.md`](docs/official-surface.md#no-folder-or-tag-field-anywhere-measured-2026-10-15).
 - **A big range is slow.** Transcripts are paginated, so a long recording takes
   several fetches. Without the CLI installed, every page also passes through the
   model context. Install `@plaud-ai/cli` (above) and name a narrower range.
