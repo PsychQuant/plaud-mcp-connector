@@ -784,21 +784,26 @@ class TestTheSkillSurfacesEveryWarningTheToolCanEmit(unittest.TestCase):
         for name in ("to_srt.py", "asr_flags.py"):
             tree = ast.parse((pathlib.Path(__file__).resolve().parent.parent
                               / "scripts" / name).read_text(encoding="utf-8"))
+            # Docstrings are Constants too, and a message is never a bare expression at the
+            # top of a block. Dropped by IDENTITY: `ast.get_docstring` returns the cleaned
+            # text, which is not equal to the Constant's value, so removing by value left most
+            # docstrings in the oracle (verify round 1 of #62).
+            docstrings = {
+                id(node.body[0].value)
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef))
+                and node.body and isinstance(node.body[0], ast.Expr)
+                and isinstance(node.body[0].value, ast.Constant)
+                and isinstance(node.body[0].value.value, str)}
             file_pieces = []
             for node in ast.walk(tree):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    file_pieces.append(node.value)
+                    if id(node) not in docstrings:
+                        file_pieces.append(node.value)
                 elif isinstance(node, ast.JoinedStr):
                     file_pieces.append("".join(
                         v.value for v in node.values
                         if isinstance(v, ast.Constant) and isinstance(v.value, str)))
-            # Docstrings are Constants too, so drop the ones that are statements:
-            # a message is never a bare expression at the top of a block.
-            for node in ast.walk(tree):
-                doc = ast.get_docstring(node) if isinstance(
-                    node, (ast.Module, ast.FunctionDef, ast.ClassDef)) else None
-                if doc and doc in file_pieces:
-                    file_pieces.remove(doc)
             pieces.extend(file_pieces)
         src = re.sub(r"\s+", " ", " ".join(pieces))
         text = self._skill_text()

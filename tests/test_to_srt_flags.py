@@ -85,8 +85,8 @@ class TestTheDefaultMarksAndKeeps(Cli):
         cues = blocks(p.stdout)
         self.assertEqual(5, len(cues))
         self.assertEqual(
-            "Speaker 2: (疑似雜音/沉默幻覺 [low_cps: 0.07 chars/s over 41s]) 中文。",
-            " ".join(cues[1]["text"].split("\n")))
+            ["(疑似雜音/沉默幻覺 [low_cps: 0.07 chars/s over 41s])", "Speaker 2: 中文。"],
+            cues[1]["text"].split("\n"))
         # Line wrapping may split the marker across lines; compare as one line
         flat = [" ".join(c["text"].split("\n")) for c in cues]
         self.assertIn("[ghost_phrase]", flat[2])
@@ -108,13 +108,20 @@ class TestTheDefaultMarksAndKeeps(Cli):
         for before, after in zip(plain, flagged):
             self.assertEqual(squash(before["text"]), squash(MARKER.sub("", after["text"])))
 
-    def test_the_marker_sits_between_the_speaker_and_the_words(self) -> None:
-        text = " ".join(blocks(self.convert(RANGED).stdout)[2]["text"].split("\n"))
-        self.assertRegex(text, r"^Speaker 1: \(疑似雜音/沉默幻覺 \[ghost_phrase\]\) 謝謝觀看。$")
+    def test_the_marker_is_its_own_first_line(self) -> None:
+        lines = blocks(self.convert(RANGED).stdout)[2]["text"].split("\n")
+        self.assertEqual(["(疑似雜音/沉默幻覺 [ghost_phrase])", "Speaker 1: 謝謝觀看。"], lines)
+
+    def test_a_long_loop_does_not_cut_the_marker_in_pieces(self) -> None:
+        # The marker used to go in front of the words and wrap with them; at twenty
+        # characters a line it was sliced through "characters" and "row" (verify round 1)
+        body = "[00:00:00 - 00:00:30] Speaker 1: " + "他自己" * 18 + "\n"
+        first = blocks(self.convert(body).stdout)[0]["text"].split("\n")[0]
+        self.assertEqual("(疑似雜音/沉默幻覺 [repetition: 3 characters × 18 in a row])", first)
 
     def test_no_speaker_still_shows_the_marker(self) -> None:
         text = " ".join(blocks(self.convert(RANGED, "--no-speaker").stdout)[1]["text"].split("\n"))
-        self.assertEqual("(疑似雜音/沉默幻覺 [low_cps: 0.07 chars/s over 41s]) 中文。", text)
+        self.assertEqual("(疑似雜音/沉默幻覺 [low_cps: 0.07 chars/s over 41s]) 中文。", text)  # marker line, then the words
 
     def test_stderr_counts_what_was_flagged_by_signal(self) -> None:
         err = self.convert(RANGED).stderr
@@ -127,7 +134,8 @@ class TestTheDefaultMarksAndKeeps(Cli):
         out = self.dir / "o.srt"
         p = self.convert(RANGED, "-o", str(out))
         self.assertEqual(0, p.returncode, p.stderr)
-        self.assertRegex(p.stdout, r"wrote 5 cues \(3 cue\(s\) flagged as suspected ASR noise — see stderr\)")
+        # Flagged and kept is not a loss, so the success line is the plain one
+        self.assertRegex(p.stdout, r"^wrote 5 cues → ")
         self.assertEqual(5, len(blocks(out.read_text(encoding="utf-8"))))
 
     def test_a_clean_transcript_is_unchanged_and_quiet(self) -> None:
@@ -245,6 +253,28 @@ class TestExtraPhrases(Cli):
         self.assertEqual(2, p.returncode)
         self.assertIn("--ghost-phrases", p.stderr)
         self.assertNotIn("unrecognized", p.stderr)
+
+
+class TestPreviewRefusesTheOptionsItWouldIgnore(Cli):
+    def test_each_new_option_is_refused_rather_than_silently_dropped(self) -> None:
+        extra = self.write("extra.txt", "合成幻影詞\n")
+        for args in (("--strip-hallucinations",), ("--no-flag",), ("--ghost-phrases", str(extra))):
+            with self.subTest(args=args):
+                p = self.run_cli("rec1", "--preview-sources", *args)
+                self.assertEqual(2, p.returncode, p.stderr)
+                self.assertIn("--preview-sources", p.stderr)
+                self.assertNotIn("unrecognized", p.stderr)
+
+
+class TestStrippingKeepsTheCuesAroundAGhostWhereTheyWere(Cli):
+    def test_a_cue_with_an_end_that_ran_over_the_ghost_is_not_stretched(self) -> None:
+        body = ("[00:00:00 - 00:01:40] Speaker 1: 今天我們來討論一個合成的問題。\n"
+                "[00:00:10 - 00:00:20] Speaker 2: 謝謝觀看。\n"
+                "[00:00:46 - 00:00:50] Speaker 1: 好的，我們繼續往下討論。\n")
+        kept = blocks(self.convert(body).stdout)
+        stripped = blocks(self.convert(body, "--strip-hallucinations").stdout)
+        self.assertEqual(kept[0]["timing"], stripped[0]["timing"])
+        self.assertEqual("00:00:00,000 --> 00:00:10,000", stripped[0]["timing"])
 
 
 class TestPreviewSourcesIsUntouched(Cli):

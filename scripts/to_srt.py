@@ -684,11 +684,11 @@ def build_cues(segments: list[dict], *, stats: dict | None = None,
         # prefix meant `S: ` was non-empty and every wordless cue survived —
         # the guard was in the right function and one statement too late.
         words_are_empty = not text
-        # After that check and before the label: a marker is not words, so it
-        # must not rescue a cue that has none, and it belongs to the words and
-        # not to the speaker. Only segments `asr_flags` marked carry the key.
-        if seg.get("flag") and not words_are_empty:
-            text = asr_flags.mark(text, seg["flag"])
+        # Carried on the cue and written by `render_srt` as a line of its own: a marker
+        # is not words, so it must not rescue a cue that has none, and wrapped together
+        # with the words it was cut through the middle of "characters". Only segments
+        # `asr_flags` marked carry the key.
+        marker = seg.get("flag") if not words_are_empty else None
         if show_speaker and seg["speaker"]:
             speaker, gone_s = sanitise(seg["speaker"])
             speaker, collapsed_s = collapse_runs(speaker)
@@ -716,7 +716,7 @@ def build_cues(segments: list[dict], *, stats: dict | None = None,
                 stats["emptied"] = stats.get("emptied", 0) + 1
             continue
         cues.append({"start": seg["start"], "end": end, "text": text,
-                     "stripped": gone})
+                     "stripped": gone, "marker": marker})
     return cues
 
 
@@ -819,10 +819,13 @@ def wrap_cue_text(text: str, limits: dict | None = None) -> str:
 def render_srt(cues: list[dict], limits: dict | None = None) -> str:
     blocks = []
     for n, cue in enumerate(cues, start=1):
+        body = wrap_cue_text(cue["text"], limits)
+        if cue.get("marker"):
+            body = "\n".join((asr_flags.bracket(cue["marker"]), body))
         blocks.append(
             f"{n}\n"
             f"{format_timestamp(cue['start'])} --> {format_timestamp(cue['end'])}\n"
-            f"{wrap_cue_text(cue['text'], limits)}\n"
+            f"{body}\n"
         )
     return "\n".join(blocks)
 
@@ -1075,6 +1078,10 @@ def main() -> None:
                     help="add the phrases in FILE (one per line, # for comments) to "
                          "the list of whole-cue phrases that are flagged")
     args = ap.parse_args()
+    if args.preview_sources and (args.no_flag or args.strip_hallucinations or args.ghost_phrases):
+        ap.error("--preview-sources shows how the two transcripts differ and never runs the "
+                 "suspected-noise check, so --no-flag, --strip-hallucinations and "
+                 "--ghost-phrases have nothing to act on there")
     if args.no_flag and args.strip_hallucinations:
         ap.error("--no-flag turns the check off and --strip-hallucinations needs it "
                  "on; use one of them")
@@ -1529,7 +1536,8 @@ def main() -> None:
         # stops short of, and the very next change made it concretely false.
         #
         # The arithmetic that closes is now: cues in the file + empty cues
-        # removed + dropped lines + header lines = every non-blank input line.
+        # removed + cues removed as suspected ASR noise (--strip-hallucinations) +
+        # dropped lines + header lines = every non-blank input line.
         print(f"wrote {len(built)} cues{note} → {str(args.output)!r}")
     else:
         # Streaming: stdout IS the subtitle file, so there is no success line to

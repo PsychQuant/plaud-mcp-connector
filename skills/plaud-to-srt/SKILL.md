@@ -254,7 +254,7 @@ Say where the file went and how many cues it has.
 against — relay what is there. *(This is about the conversion in step 3. The
 `⚠ no source comparison to show:` line belongs to `--preview-sources` in step
 2, and that row says when it is worth passing on — the two instructions read
-as a contradiction only because neither used to name which run it meant.)* None of these is visible in the resulting `.srt`, and this
+as a contradiction only because neither used to name which run it meant.)* Apart from the suspected-noise marker below, none of these is visible in the resulting `.srt`, and this
 section has twice been a closed count that went stale the moment the code grew
 another one. What each means:
 
@@ -320,17 +320,18 @@ another one. What each means:
   look either way.
 - **`⚠ N cue(s) flagged as suspected ASR noise`**, followed by how many came from
   each rule (`low_cps`, `ghost_phrase`, `repetition`) — cues that look like the
-  recogniser filling silence or noise were **kept** and marked with
-  `(疑似雜音/沉默幻覺 [...])` before the words. Their words
-  and timing are unchanged, and the marker is in the `.srt` itself, so whoever
-  plays it sees it. **A flag is a reason to listen, not a finding that nobody
+  recogniser filling silence or noise were **kept**, with a line `(疑似雜音/沉默幻覺 [...])`
+  above the words. Their words and timing are unchanged, and the marker is in the
+  `.srt` itself, so whoever plays it sees it. **A flag is a reason to listen, not a finding that nobody
   spoke:** a cue of two or three characters that stays on screen for twenty
   seconds is also what a short real answer looks like when its segment stretches
   over a pause. Say how many were flagged and that they were kept. Do not pass
   `--strip-hallucinations` unasked; offer it if the user wants them gone. With it
   the line reads `N cue(s) removed as suspected ASR noise` instead, and the
-  success line counts them, so cues written plus cues removed still accounts for
-  every non-blank line. `--no-flag` turns the whole check off.
+  success line counts them: the cues written, plus the cues removed, plus the header
+  and dropped-line counts already on that line, account for every non-blank line.
+  A cue that is only flagged costs no line, so the success line does not mention it.
+  `--no-flag` turns the whole check off.
 - **`note: the silence check (low_cps) could not run on N of M segment(s)`** —
   some lines carry no end time, so how long they stay on screen could not be
   measured. A transcript where no line has an end (the start-only form) gets no
@@ -366,12 +367,15 @@ vanish rather than merely sit at the wrong moment.
 - **No translation.** Subtitles come out in whatever language was spoken.
 - **No verdict on who spoke.** The suspected-noise check marks cues and never
   deletes unless asked. Its thresholds and phrase list were calibrated on one set
-  of recordings (tutoring sessions). How much noise it misses, and how often it
-  marks real speech, has not been measured on meetings or lectures; the shipped
-  phrase list is Mandarin only. On one set of thirteen meeting recordings it
-  marked 23 of 3,667 cues, 16 of them by the silence rule and 13 of those 16 only
-  two to four characters long. That is the kind of cue worth listening to before
-  trusting or removing.
+  of recordings (tutoring sessions, Mandarin). How much noise it misses, and how
+  often it marks real speech, has not been measured on meetings, lectures or other
+  languages: for a recording in English or another language, `--no-flag` is the
+  safer default. A repeated phrase counts as a loop only from five copies and with
+  at least three distinct letters in the unit, so laughter and a word said a few
+  times are left alone. On one set of thirteen recordings (3,667 cues) it marked 16
+  cues, all by the silence rule, and 13 of those 16 are two to four characters long:
+  the kind of cue worth listening to before trusting or removing. Whether those 16 are
+  noise was not checked.
 
 ## Preferences
 

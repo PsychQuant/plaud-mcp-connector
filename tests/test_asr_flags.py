@@ -77,6 +77,23 @@ class TestLowCharactersPerSecond(FlagsCase):
         self.assertIsNone(self.detect(six, 20.0))
         self.assertEqual("low_cps", self.detect("一二三四五", 20.0).signal)
 
+    def test_millisecond_timestamps_do_not_move_the_strict_boundaries(self) -> None:
+        # 15.000 s as the difference of two floats is not always 15.0: about one start in
+        # 150 past the first hour computes 15.000000000000455 (verify round 1)
+        start = next(s / 1000 for s in range(4_081_000, 4_100_000)
+                     if (s / 1000 + 15.0) - s / 1000 > 15.0)
+        raw = (start + 15.0) - start
+        self.assertGreater(raw, 15.0)       # the float difference is above the line; the cue is not
+        out, report = self.flags.flag_segments(
+            [seg(start, start + 15.0, "一二三")], phrases=self.phrases)
+        self.assertEqual(0, report.flagged)
+
+    def test_the_label_never_shows_a_rate_that_looks_like_it_is_not_under_the_line(self) -> None:
+        # 5 characters over 16.69 s is 0.2996: shown as 0.29, not rounded up to 0.30
+        flag = self.detect("一二三四五", 16.69)
+        self.assertEqual("low_cps", flag.signal)
+        self.assertTrue(flag.detail.startswith("0.29 chars/s over 16s"), flag.detail)
+
     def test_no_duration_means_the_signal_does_not_run(self) -> None:
         self.assertIsNone(self.detect("一二三", None))
 
@@ -115,10 +132,16 @@ class TestGhostPhrases(FlagsCase):
                      "這個詞在中文字幕裡怎麼翻"):
             self.assertIsNone(self.detect(text, 3.0), text)
 
+    def test_a_signoff_the_prototype_listed_as_a_subtitle_leak_is_flagged(self) -> None:
+        # Not on real material (0 of 3,667 cues), so nothing says people write them as
+        # a whole cue, and the prototype put them with the subtitle credits
+        for text in ("下次見。", "再會。"):
+            self.assertEqual("ghost_phrase", self.detect(text, 2.0).signal, text)
+
     def test_ordinary_replies_are_not_on_the_list(self) -> None:
-        # The first draft of this list carried these. They end real meetings and
-        # real answers, and a cue that is only "OK。" is usually somebody saying it.
-        for text in ("OK。", "嗯。", "謝謝大家。", "下次見。", "再會。"):
+        # Left off because they WERE measured: 21 whole cues in 3,667 on one cache,
+        # nearly all of them somebody answering
+        for text in ("OK。", "嗯。", "謝謝大家。"):
             self.assertIsNone(self.detect(text, 2.0), text)
 
     def test_the_low_rate_signal_wins_when_both_apply(self) -> None:
@@ -139,31 +162,49 @@ class TestRepetition(FlagsCase):
         self.assertEqual("repetition", flag.signal)
         self.assertEqual("3 characters × 5 in a row", flag.detail)
 
-    def test_three_copies_is_the_minimum(self) -> None:
-        self.assertEqual("repetition", self.detect("他自己他自己他自己", 4.0).signal)
-        self.assertIsNone(self.detect("他自己他自己", 4.0))
+    def test_five_copies_is_the_minimum(self) -> None:
+        # The issue says three. On 3,667 real cues every unit it found at three or four
+        # copies was ordinary emphasis, and the prototype's own prose says five; the issue's
+        # example loop is five. A marker in the subtitles is not free.
+        self.assertEqual("repetition", self.detect("他自己" * 5, 4.0).signal)
+        self.assertIsNone(self.detect("他自己" * 4, 4.0))
+
+    def test_emphasis_is_not_a_loop(self) -> None:
+        for text in ("好的，好的，好的，我們繼續。", "No no no no, that's wrong.",
+                     "yeah yeah yeah yeah", "いいえいいえいいえ"):
+            self.assertIsNone(self.detect(text, 4.0), text)
 
     def test_emphasis_scattered_through_a_sentence_is_not_flagged(self) -> None:
         text = "標準誤越小代表估得越準，所以標準誤越大有效性就越小，標準誤也不是越小越好"
         self.assertIsNone(self.detect(text, 9.0))
 
-    def test_laughter_and_interjections_are_not_flagged(self) -> None:
-        # A unit that is one character repeated is not a decoder loop
-        for text in ("哈哈哈哈哈哈哈哈哈哈哈哈", "啊啊啊啊啊啊啊啊啊", "。。。。。。。。。。"):
+    def test_laughter_and_interjections_are_not_flagged_even_with_separators(self) -> None:
+        # A unit whose letters are all the same character is not a loop, however it is spaced
+        for text in ("哈哈哈哈哈哈哈哈哈哈哈哈", "啊啊啊啊啊啊啊啊啊啊", "。。。。。。。。。。",
+                     "哈 哈 哈 哈 哈 哈 哈 哈 哈", "哈…哈…哈…哈…哈…哈…哈…",
+                     "ha ha ha ha ha ha ha ha", "he he he he he he he he"):
             self.assertIsNone(self.detect(text, 4.0), text)
 
     def test_a_unit_of_punctuation_alone_is_not_flagged(self) -> None:
-        self.assertIsNone(self.detect("，。，。，。，。，。", 4.0))
+        # Long enough that the detector reaches it: a 4-character unit needs 20 characters
+        text = "，。，。" * 5
+        self.assertEqual(20, len(text))
+        self.assertIsNone(self.detect(text, 4.0))
 
     def test_the_unit_length_bounds(self) -> None:
-        self.assertIsNone(self.detect("好的好的好的好的", 4.0))              # 2 characters
+        self.assertIsNone(self.detect("好的好的好的好的好的", 4.0))              # 2 characters
         twelve = "一二三四五六七八九十甲乙"
         thirteen = twelve + "丙"
-        self.assertEqual("repetition", self.detect(twelve * 3, 4.0).signal)
-        self.assertIsNone(self.detect(thirteen * 3, 4.0))
+        self.assertEqual("repetition", self.detect(twelve * 5, 4.0).signal)
+        self.assertIsNone(self.detect(thirteen * 5, 4.0))
+
+    def test_a_unit_with_fewer_than_three_distinct_letters_is_never_a_loop(self) -> None:
+        # And so a two-character word repeated is not reported as a four-character unit
+        for text in ("好的" * 10, "ha ha ha ha ha ha ha ha", "no no no no no no no", "ok ok ok ok ok ok ok"):
+            self.assertIsNone(self.detect(text, 4.0), text)
 
     def test_the_repetition_can_sit_inside_a_longer_cue(self) -> None:
-        text = "然後我們看下一頁" + "他自己" * 4 + "接著是結論"
+        text = "然後我們看下一頁" + "他自己" * 6 + "接著是結論"
         self.assertEqual("repetition", self.detect(text, 9.0).signal)
 
 
@@ -182,8 +223,8 @@ class TestAdversarialInput(FlagsCase):
         self.assertIsNone(flag)
         self.assertLess(took, 3.0)
 
-    def test_a_hundred_thousand_characters_of_a_two_character_loop(self) -> None:
-        flag, took = self.timed("ab" * 50_000)
+    def test_a_hundred_thousand_characters_of_a_three_character_loop(self) -> None:
+        flag, took = self.timed("abc" * 33_000)
         self.assertEqual("repetition", flag.signal)
         self.assertLess(took, 3.0)
 
@@ -196,6 +237,17 @@ class TestAdversarialInput(FlagsCase):
         text = "".join(chr(0x4E00 + i) for i in range(20_000)) * 5
         flag, took = self.timed(text)
         self.assertLess(took, 3.0)
+
+    def test_a_cue_of_a_character_that_normalises_to_eighteen(self) -> None:
+        # U+FDFA becomes 18 characters under NFKC. A 6 MB file of it as one cue took 7.5 s and
+        # 2.6 GB (verify round 1): folding the whole cue to compare it with a phrase of a few
+        # characters. A cue far longer than any phrase cannot be one.
+        flag, took = self.timed("\ufdfa" * 2_000_000)
+        self.assertLess(took, 2.0)
+
+    def test_a_phrase_still_matches_up_to_the_length_that_is_folded(self) -> None:
+        cap = self.flags.PHRASE_TEXT_CAP
+        self.assertEqual("ghost_phrase", self.detect("謝謝觀看" + "。" * (cap - 8), 3.0).signal)
 
     def test_a_repetition_beyond_the_scanned_window_is_not_looked_for(self) -> None:
         # Stated limit, pinned so that changing it is a decision and not an accident.
@@ -288,9 +340,9 @@ class TestTheStage(FlagsCase):
         self.assertEqual("疑似雜音/沉默幻覺 [repetition: 3 characters × 5 in a row]",
                          label(F("repetition", "3 characters × 5 in a row")))
 
-    def test_mark_puts_the_label_before_the_words(self) -> None:
-        self.assertEqual("(疑似雜音/沉默幻覺 [ghost_phrase]) 謝謝觀看。",
-                         self.flags.mark("謝謝觀看。", "疑似雜音/沉默幻覺 [ghost_phrase]"))
+    def test_the_marker_is_the_label_in_brackets(self) -> None:
+        self.assertEqual("(疑似雜音/沉默幻覺 [ghost_phrase])",
+                         self.flags.bracket("疑似雜音/沉默幻覺 [ghost_phrase]"))
 
     def test_the_duration_is_what_the_viewer_sees_not_the_declared_end(self) -> None:
         # Declared to run 100 s, but the next cue starts at 10 s: players see 10 s
@@ -360,6 +412,22 @@ class TestTheStage(FlagsCase):
         out, _ = self.run_stage(segs, strip=True)
         self.assertEqual(4.0, out[0]["end"])
 
+    def test_stripping_pins_an_explicit_end_that_ran_past_the_removed_cue(self) -> None:
+        # Kept, a declared end past the next cue's start is pulled back to it by build_cues.
+        # With that next cue removed, nothing pulls it back, so the survivor would take over
+        # the removed cue's time (verify round 1, found twice)
+        segs = [seg(0, 100, "今天我們討論一個問題。"), seg(10, 20, "謝謝觀看。"),
+                seg(46, 50, "好的，我們繼續。")]
+        out, _ = self.run_stage(segs, strip=True)
+        self.assertEqual(10.0, out[0]["end"])
+        self.assertEqual(46.0, out[1]["start"])
+
+    def test_an_end_that_stops_before_the_removed_cue_is_left_alone(self) -> None:
+        segs = [seg(0, 4, "今天我們討論一個問題。"), seg(10, 20, "謝謝觀看。"),
+                seg(46, 50, "好的，我們繼續。")]
+        out, _ = self.run_stage(segs, strip=True)
+        self.assertEqual(4.0, out[0]["end"])
+
     def test_a_run_of_removed_segments_ends_the_cue_before_at_the_first(self) -> None:
         segs = [seg(0, None, "今天我們討論一個問題。"), seg(5, None, "謝謝觀看。"),
                 seg(9, None, "中文。"), seg(46, None, "好的，我們繼續。")]
@@ -399,8 +467,9 @@ class TestWhatTheRunSays(FlagsCase):
             self.assertIn(part, line)
         self.assertIn("kept", line)
         self.assertIn("--strip-hallucinations", line)
-        self.assertEqual(["4 cue(s) flagged as suspected ASR noise — see stderr"],
-                         self.flags.ledger_clauses(r))
+        # Nothing was lost, so the success line, which a batch caller reads as "what was lost
+        # or corrected" (#50), says nothing; the marker is in the file and stderr counts them
+        self.assertEqual([], self.flags.ledger_clauses(r))
 
     def test_a_zero_signal_is_not_listed(self) -> None:
         r = self.report(flagged=1, by_signal={"low_cps": 1, "ghost_phrase": 0, "repetition": 0})
