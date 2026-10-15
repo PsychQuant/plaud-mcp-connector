@@ -112,9 +112,11 @@ the summary, best effort. Its exit code says what to do next:
 | 1 | an unexpected error | say what the message says |
 
 Add `--force` only when the user says the recording has changed or asks for it to
-be redone. A refresh through the CLI rewrites every timestamp to whole seconds, so
-a copy that earlier came in through the MCP path with millisecond timing gets less
-precise.
+be redone, or when its cached copy has no end times (see "How the timing works"). A
+refresh through the CLI rewrites every timestamp to whole seconds, so a copy that
+earlier came in through the MCP path with millisecond timing gets less precise. With
+no CLI, `--force` exits 3 like any other run, and the MCP path below replaces the
+copy in milliseconds.
 
 The CLI's timestamps are whole seconds, rounded down (measured against the MCP's
 milliseconds), so a subtitle from this path can appear up to a second early and a
@@ -135,10 +137,14 @@ Write each segment as a range line and keep the end the MCP returns for it:
 [HH:MM:SS.fff - HH:MM:SS.fff] Speaker N: <content>
 ```
 
-built from the segment's `start_time` and `end_time`, which are milliseconds.
-Start-only lines (`[HH:MM:SS] Speaker N: …`) are accepted as well, but then every
-subtitle runs on until the next one starts, so a pause is shown as if the last
-words were still being spoken, and the final subtitle's length is a guess.
+built from the segment's `start_time` and `end_time`, which are milliseconds: `680` is
+`00:00:00.680`, `3600250` is `01:00:00.250`. `Speaker N` is the segment's `speaker` as
+returned. A segment is one physical line: replace any line break inside `speaker` or
+the content with a space. A segment whose `end_time` is absent, null, or not later than
+its `start_time` is written start-only, `[HH:MM:SS.fff] Speaker N: <content>`.
+Start-only lines are accepted as well, but then every subtitle runs on until the next
+one starts, so a pause is shown as if the last words were still being spoken, and the
+final subtitle's length is a guess.
 
 Write in this order, so that stopping partway never leaves the new transcript
 beside an old polished one (`to_srt` prefers a polish file whenever one exists):
@@ -321,11 +327,22 @@ another one. What each means:
 
 ## How the timing works, and where it is a guess
 
-Each cue ends when the next one starts. That is the only timing the transcript
-actually carries, so it is what gets used.
+A cue ends where its line says it ends. Both download paths write the end of each
+segment beside its start, `[start - end]`, and `to_srt` uses it as given: to the whole
+second from the CLI, to the millisecond from the MCP path. A declared end that runs
+past the next cue is pulled back to it.
 
-**The last cue is a guess** — nothing follows it, so it gets `--tail-seconds`
-(4 by default). If the recording ends on a long sentence, raise it.
+Where a line has no end, a cue ends when the next one starts. That is every line of a
+copy the MCP path of `plaud-download` wrote before #67, and any segment Plaud returned
+without an `end_time`. For such a copy a pause is shown as if the last words were still
+being spoken, and nothing in the run says so. If the user is unhappy with the timing
+of an older download, look at the first lines of the cached copy (`cache.py show
+<id>`): one with no ` - ` inside the brackets is start-only, and fetching it again with
+`--force` replaces it.
+
+**The last cue of a start-only copy is a guess** — nothing follows it, so it gets
+`--tail-seconds` (4 by default). If the recording ends on a long sentence, raise it. A
+cue that has its own end ignores `--tail-seconds`.
 
 Out-of-order or duplicate timestamps get a half-second minimum instead of a
 zero- or negative-length cue. Players reject those outright, so the line would
