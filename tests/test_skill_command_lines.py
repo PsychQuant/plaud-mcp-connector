@@ -119,8 +119,38 @@ class TestTheMcpPathsKeepTheirInstructions(unittest.TestCase):
         self.assertLess(a, b)
         self.assertLess(b, c)
 
+    def test_the_commands_that_keep_the_cache_whole_are_pinned_not_only_their_headings(self):
+        """Verify round 1: the heading order passed while `rm -f` could become `true` and the
+        polish `put` could lose `--kind polish` (which would overwrite the raw transcript)."""
+        sec = " ".join(section("plaud-to-srt", *self.SECTIONS["plaud-to-srt"]).split())
+        self.assertRegex(sec, r'rm -f "[^"]*/polish/<id>\.md"')
+        self.assertRegex(sec, r"cache\.py\" put --json [^\n]*?--kind polish|--kind polish[^\n]*?--json")
+        self.assertIn("--kind polish", sec)
+
     def test_plaud_download_writes_the_cache_once_after_the_loop(self):
         self.assertIn("Write the cache **once**", section("plaud-download", *self.SECTIONS["plaud-download"]))
+
+
+class TestWordsTheUserTypedCannotBecomeOptions(unittest.TestCase):
+    """`cache.py find '-rf'` is an argparse error ("name is required"), not a search."""
+
+    def test_every_find_command_in_the_skills_has_the_double_dash(self):
+        for path in sorted((REPO / "skills").glob("*/SKILL.md")):
+            for start, body in shell_blocks(path.read_text(encoding="utf-8")):
+                for line in body.splitlines():
+                    if 'cache.py" find' in line:
+                        with self.subTest(skill=path.parent.name, line=line.strip()[:60]):
+                            self.assertIn('find -- ', line)
+
+
+class TestPlaudProofreadsTempFileCanBeFound(unittest.TestCase):
+    def test_step_two_prints_the_path_it_made(self):
+        text = (REPO / "skills" / "plaud-proofread" / "SKILL.md").read_text(encoding="utf-8")
+        step = text[text.index("### 2. Proofread"):text.index("### 3. Store")]
+        self.assertIn('echo "$tmp"', step)
+        self.assertNotIn("$tmp`", step.replace('"$tmp"', ""),
+                         "a shell variable does not last until the next command; the "
+                         "skill must point at the printed path")
 
 
 class TestTheAudioClaimsFromIssue84(unittest.TestCase):

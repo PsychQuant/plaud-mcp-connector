@@ -18,13 +18,13 @@ longer than 99 minutes were silently truncated before v0.10.1 (#50). The full
 contract lives in scripts/cache.py.
 
 If some lines cannot be parsed the rest are still written and the count is
-reported beside the cue count — on stdout with `-o`, and on stderr without it,
-because there stdout is the subtitle file itself. The shapes go to stderr either
+reported beside the cue count — on stdout with `-o` or `--out-dir`, and on stderr
+without either, because there stdout is the subtitle file itself. The shapes go to stderr either
 way. Exit stays 0: the file was written and is usable, so a caller checking only
 the exit status must read the cue line, which says how many were dropped.
 
 Usage:
-    to_srt.py <recording-id> [-o out.srt] [--no-speaker] [--tail-seconds N]
+    to_srt.py <recording-id> [--out-dir DIR | -o out.srt] [--no-speaker] [--tail-seconds N]
     to_srt.py --file <path.md> [-o out.srt]
 """
 
@@ -1035,25 +1035,55 @@ def differing_sample(rec_id: str) -> dict | None:
 # `$(...)` and backticks, and a `/` turns it into a path. So the script builds the file name
 # itself, from the name in the cache, and the caller passes only a directory.
 _STEM_MAX_BYTES = 200      # a file name is capped at 255 bytes; ".srt" and a "-99" suffix fit in the rest
-_STEM_UNSAFE = set('/\\:*?"<>|')
+_STEM_PLAIN = frozenset(" -_.()")
+_WINDOWS_DEVICES = frozenset(
+    "CON PRN AUX NUL COM1 COM2 COM3 COM4 COM5 COM6 COM7 COM8 COM9 "
+    "LPT1 LPT2 LPT3 LPT4 LPT5 LPT6 LPT7 LPT8 LPT9".split())
+
+
+def _clean_stem(text: str) -> str:
+    """`text` reduced to what is safe to put in a file name AND to read back in a command.
+
+    A WHITELIST: letters, numbers and combining marks of any script, a space, and `- _ . ( )`.
+    Everything else becomes `_`. It used to be a blacklist of the characters Windows refuses,
+    which left `$`, backticks, `;`, `'`, `&` and `!` in the name, and the success line prints
+    the whole path back to a model that may put it in a command, so the recording's name
+    reached a shell by the road this option was written to close (verify round 1 of #69).
+    A leading `-` would be read as an option, so it gets an underscore in front; the names
+    Windows reserves (`CON`, `NUL`, `COM1`, ... with or without an extension) likewise.
+    Leading and trailing dots and spaces go, so the result is never `.`, `..` or hidden. The
+    length is cut in BYTES, in one pass: a CJK name of 200 characters is 600 bytes."""
+    chars = []
+    for ch in unicodedata.normalize("NFC", text):
+        if ch.isspace():
+            chars.append(" ")
+        elif ch in _STEM_PLAIN or unicodedata.category(ch)[0] in "LMN":
+            chars.append(ch)
+        else:
+            chars.append("_")
+    stem = re.sub(r" +", " ", "".join(chars)).strip(" .")
+    kept, size = [], 0
+    for ch in stem:
+        size += len(ch.encode("utf-8"))
+        if size > _STEM_MAX_BYTES:
+            break
+        kept.append(ch)
+    stem = "".join(kept).rstrip(" .")
+    if stem.startswith("-"):
+        stem = "".join(("_", stem))
+    if stem.split(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICES:
+        stem = "".join(("_", stem))
+    return stem
 
 
 def output_stem(name, rec_id: str) -> str:
     """The file name, without its extension, for a recording called `name`.
 
-    Anything that could make it a path, hide it or address a terminal becomes `_`: path
-    separators and the characters Windows refuses, control and format characters. Leading
-    and trailing dots and spaces go, so the result is never `.`, `..` or a hidden file. The
-    length is capped in BYTES, because a CJK name of 200 characters is 600 bytes. A name that
-    leaves nothing is replaced by the recording id, which is a plain token the caller already
-    validated."""
-    text = unicodedata.normalize("NFC", "" if name is None else str(name))
-    chars = ["_" if ch in _STEM_UNSAFE or unicodedata.category(ch)[0] == "C"
-             or unicodedata.category(ch) in ("Zl", "Zp") else ch for ch in text]
-    stem = re.sub(r"\s+", " ", "".join(chars)).strip(" .")
-    while len(stem.encode("utf-8")) > _STEM_MAX_BYTES:
-        stem = stem[:-1]
-    return stem.rstrip(" .") or rec_id
+    A name that leaves nothing is replaced by the recording id, cleaned the same way (an id
+    is `[A-Za-z0-9._-]{1,128}`, so `..`, `-x` and `CON` are all valid ids), and an id that
+    leaves nothing is replaced by `recording`."""
+    return (_clean_stem("" if name is None else str(name))
+            or _clean_stem(rec_id) or "recording")
 
 
 def _recording_name(rec_id: str) -> str:
@@ -1065,21 +1095,35 @@ def _recording_name(rec_id: str) -> str:
         return ""
 
 
-def _claim_output(directory: pathlib.Path, stem: str) -> pathlib.Path:
-    """Create `<stem>.srt` in `directory`, or `<stem>-2.srt`, `<stem>-3.srt`, ... and return it.
+def _claim_output(directory: pathlib.Path, stem: str):
+    """Create `<stem>.srt` in `directory`, or `<stem>-2.srt`, `<stem>-3.srt`, ... and return
+    `(path, open handle)`.
 
     Created exclusively (`x`), so an existing file is never overwritten, not even by a second
-    run that raced the first: two recordings can share a name."""
+    run that raced the first: two recordings can share a name, and so can one recording
+    converted twice. The handle is the one the exclusive create returned and is the one to
+    write through: closing it and writing by path let a swap in between (a symlink put where
+    the empty file was) send the write somewhere else."""
     for n in range(1, 1000):
         candidate = directory / (f"{stem}.srt" if n == 1 else f"{stem}-{n}.srt")
         try:
-            candidate.open("x", encoding="utf-8").close()
-            return candidate
+            return candidate, candidate.open("x", encoding="utf-8")
         except FileExistsError:
             continue
         except OSError as exc:
             sys.exit(f"error: cannot create a file in {str(directory)!r}: {exc.strerror or exc}")
     sys.exit(f"error: {str(directory)!r} already holds 999 files named like {stem!r}")
+
+
+def _write_claimed(path: pathlib.Path, handle, text: str) -> None:
+    """Write `text` through the handle `_claim_output` returned. If that fails the empty file
+    this run created is removed, so a later conversion takes the plain name and not `-2`."""
+    try:
+        with handle:
+            handle.write(text)
+    except OSError as exc:
+        path.unlink(missing_ok=True)
+        sys.exit(f"error: could not write {str(path)!r}: {exc.strerror or exc}")
 
 
 def main() -> None:
@@ -1106,7 +1150,12 @@ def main() -> None:
                          "which is wanted; exits 3 when there is nothing to choose")
     args = ap.parse_args()
 
-    if args.out_dir:
+    # `is not None`, not truthiness: "" is the likeliest slip for "no preference", and read
+    # as no option it wrote the whole transcript to stdout with exit 0.
+    for flag, value in (("--out-dir", args.out_dir), ("-o", args.output)):
+        if value is not None and not value.strip():
+            sys.exit(f"error: {flag} was given an empty value; name a place or leave the option out")
+    if args.out_dir is not None:
         if args.file:
             sys.exit("error: --out-dir names the file after the recording, which only a recording "
                      "id has a name for; use -o with --file")
@@ -1513,16 +1562,21 @@ def main() -> None:
         # frequent: thirty of them across the local corpus, ten in that file.
         parts.append(f"{len(trims)} cue end(s) corrected — see stderr")
     note = f" ({', '.join(parts)})" if parts else ""
-    if args.out_dir:
+    claimed = None
+    if args.out_dir is not None:
         # Claimed only now, after the conversion has worked, so a failed run leaves no empty file.
-        args.output = str(_claim_output(pathlib.Path(args.out_dir),
-                                        output_stem(_recording_name(args.id), args.id)))
+        claimed = _claim_output(pathlib.Path(args.out_dir),
+                                output_stem(_recording_name(args.id), args.id))
+        args.output = str(claimed[0])
     if args.output:
         # UTF-8 explicitly. `write_text` with no encoding uses the LOCALE's,
         # while the cache is read as UTF-8 — so on a machine whose locale is
         # not UTF-8 the subtitles were written as mojibake, or the write
         # raised, for a file the tool then reported as `wrote N cues`.
-        pathlib.Path(args.output).write_text(srt, encoding="utf-8")
+        if claimed is not None:
+            _write_claimed(claimed[0], claimed[1], srt)
+        else:
+            pathlib.Path(args.output).write_text(srt, encoding="utf-8")
         # The drop count rides along with the cue count, on the same stream, in
         # the same sentence. #50 opens with a script reporting "6 succeeded /
         # 0 failed" over files that were four-fifths empty: the number was

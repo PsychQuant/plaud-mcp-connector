@@ -47,7 +47,7 @@ class TestOutputStem(unittest.TestCase):
         self.assertEqual("Weekly sync", self.stem("Weekly sync"))
 
     def test_cjk_is_kept(self):
-        self.assertEqual("10-14 課程講座", self.stem("10-14 課程講座"))
+        self.assertEqual("測試錄音 甲乙丙", self.stem("測試錄音 甲乙丙"))
 
     def test_separators_never_survive(self):
         for name in ("a/b", "a\\b", "../../etc/passwd", "/abs/path", "a:b"):
@@ -72,11 +72,46 @@ class TestOutputStem(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual("of_abc", self.stem(name))
 
-    def test_a_shell_substitution_is_just_characters_here(self):
-        # The name never reaches a shell any more; it must also be harmless as a file name.
-        out = self.stem("$(touch pwned)`id`")
-        self.assertNotIn("/", out)
+    def test_nothing_a_shell_would_act_on_survives(self):
+        # The file name is printed back on the success line, and the model that reads it
+        # may put it in a command. Verify round 1: `$`, backticks, `;` and `'` used to
+        # survive, which put the recording's name back on a command line by another road.
+        out = self.stem("$(touch pwned)`id`;rm -rf ~ & echo 'x' !# \"y\" | z > w")
+        self.assertFalse(set(out) & set("$`;'&!#~|<>*?\"\\"), out)
         self.assertTrue(out)
+
+    def test_only_letters_numbers_marks_and_a_few_plain_marks_are_kept(self):
+        import unicodedata
+        for name in ("Weekly sync (draft)_v2-final.1", "會議 紀錄 2026", "Ünïcödé", "ภาษาไทย", "العربية"):
+            with self.subTest(name=name):
+                out = self.stem(name)
+                self.assertEqual(unicodedata.normalize("NFC", name), out)
+
+    def test_a_leading_dash_is_not_left_to_be_read_as_an_option(self):
+        for name in ("-rf", "--help", "-"):
+            with self.subTest(name=name):
+                self.assertFalse(self.stem(name).startswith("-"), self.stem(name))
+
+    def test_names_windows_reserves_get_a_prefix(self):
+        for name in ("CON", "nul", "COM1", "lpt9", "AUX.notes", "prn.txt"):
+            with self.subTest(name=name):
+                self.assertTrue(self.stem(name).startswith("_"), self.stem(name))
+        self.assertEqual("console", self.stem("console"))
+        self.assertEqual("COM10", self.stem("COM10"))
+
+    def test_the_id_fallback_is_cleaned_the_same_way(self):
+        # An id is `[A-Za-z0-9._-]{1,128}`: `..`, `-x` and `CON` are all valid ids
+        self.assertEqual("recording", to_srt.output_stem("", ".."))
+        self.assertEqual("recording", to_srt.output_stem(None, "."))
+        self.assertFalse(to_srt.output_stem("", "-x").startswith("-"))
+        self.assertTrue(to_srt.output_stem("", "CON").startswith("_"))
+
+    def test_a_very_long_name_is_cut_in_linear_time(self):
+        import time
+        t0 = time.perf_counter()
+        out = self.stem("測" * 1_000_000)
+        self.assertLess(time.perf_counter() - t0, 3.0)
+        self.assertLessEqual(len(out.encode("utf-8")), 200)
 
     def test_length_is_capped_in_bytes_not_characters(self):
         out = self.stem("測" * 200)
@@ -140,10 +175,19 @@ class TestOutDir(OutDirCase):
         self.assertEqual("DO NOT TOUCH", (self.out / "Same name.srt").read_text())
         self.assertEqual(["Same name-2.srt", "Same name-3.srt", "Same name.srt"], self.files())
 
-    def test_an_option_like_name_is_just_a_file_name(self):
+    def test_an_option_like_name_does_not_become_an_option_in_the_printed_path(self):
         self.put("of_eee", "-rf")
-        self.assertEqual(0, self.run_srt("of_eee", "--out-dir", str(self.out)).returncode)
-        self.assertEqual(["-rf.srt"], self.files())
+        done = self.run_srt("of_eee", "--out-dir", str(self.out))
+        self.assertEqual(0, done.returncode, done.stderr)
+        (name,) = self.files()
+        self.assertFalse(name.startswith("-"), name)
+
+    def test_the_path_on_the_success_line_carries_nothing_for_a_shell(self):
+        self.put("of_sss", "$(touch pwned)`id`;x")
+        done = self.run_srt("of_sss", "--out-dir", str(self.out))
+        self.assertEqual(0, done.returncode, done.stderr)
+        printed = done.stdout.split("→", 1)[1]
+        self.assertFalse(set(printed) & set("$`;"), printed)
 
     def test_a_recording_with_no_usable_name_is_named_by_its_id(self):
         self.put("of_fff", "...")
@@ -164,6 +208,16 @@ class TestOutDir(OutDirCase):
         self.assertNotEqual(0, done.returncode)
         self.assertFalse(missing.exists())
 
+    def test_an_empty_directory_is_refused_not_read_as_no_option(self):
+        # Empty is the likeliest slip for "no preference", and it used to write the whole
+        # transcript to stdout with exit 0
+        self.put("of_ttt", "x")
+        for args in (("--out-dir", ""), ("--out-dir", "  "), ("-o", "")):
+            with self.subTest(args=args):
+                done = self.run_srt("of_ttt", *args)
+                self.assertNotEqual(0, done.returncode)
+                self.assertEqual("", done.stdout)
+
     def test_out_dir_and_output_cannot_be_combined(self):
         self.put("of_iii", "x")
         done = self.run_srt("of_iii", "--out-dir", str(self.out), "-o", str(self.out / "y.srt"))
@@ -182,6 +236,60 @@ class TestOutDir(OutDirCase):
         target = self.out / "chosen.srt"
         self.assertEqual(0, self.run_srt("of_jjj", "-o", str(target)).returncode)
         self.assertTrue(target.is_file())
+
+
+class TestTheClaimedFileIsWrittenThroughTheHandleThatCreatedIt(unittest.TestCase):
+    """Verify round 1: the file was created exclusively, closed, and reopened by path to
+    write, so a swap in between sent the write wherever the swap pointed. The handle
+    from the exclusive create is the one written through."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="plaud-claim-test-")
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = pathlib.Path(self._tmp.name)
+
+    def test_main_writes_through_the_claim_and_not_by_path(self):
+        # The tests above call the helper; this pins that the command line uses it. A change
+        # that closed the handle and wrote by path again would pass every one of them.
+        import ast
+        tree = ast.parse((SCRIPTS / "to_srt.py").read_text(encoding="utf-8"))
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        called = {c.func.id for c in ast.walk(main)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        self.assertIn("_write_claimed", called)
+
+    def test_claiming_returns_the_path_and_an_open_handle(self):
+        path, handle = to_srt._claim_output(self.dir, "name")
+        with handle:
+            handle.write("hello")
+        self.assertEqual(self.dir / "name.srt", path)
+        self.assertEqual("hello", path.read_text())
+
+    def test_a_swap_after_the_claim_does_not_redirect_the_write(self):
+        target = self.dir / "precious"
+        target.write_text("KEEP")
+        path, handle = to_srt._claim_output(self.dir, "name")
+        path.unlink()
+        path.symlink_to(target)
+        to_srt._write_claimed(path, handle, "overwritten?")
+        self.assertEqual("KEEP", target.read_text())
+
+    def test_a_failed_write_removes_the_file_this_run_created(self):
+        import io
+
+        class Full(io.StringIO):
+            def write(self, s):
+                raise OSError(28, "No space left on device")
+
+        path, real = to_srt._claim_output(self.dir, "name")
+        real.close()
+        with self.assertRaises(SystemExit):
+            to_srt._write_claimed(path, Full(), "x")
+        self.assertFalse(path.exists())
+        # so the next run takes the plain name, not `-2`
+        again, handle = to_srt._claim_output(self.dir, "name")
+        handle.close()
+        self.assertEqual("name.srt", again.name)
 
 
 if __name__ == "__main__":

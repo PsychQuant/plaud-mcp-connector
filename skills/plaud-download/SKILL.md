@@ -69,7 +69,7 @@ Ask for one if none was given. Do not pick a range for the user, and do not trea
 A name is resolved before an id is assumed. First check what is already cached:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find '<part of the name>'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find -- '<part of the name>'
 ```
 
 The words are the user's own: single quotes, and if they contain a single quote, leave

@@ -64,14 +64,16 @@ characters. Anything else, do not put it in a command; tell the user which recor
 skipped and why.
 
 ```bash
-tmp=$(mktemp)
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > "$tmp"
+tmp=$(mktemp) && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > "$tmp" && echo "$tmp"
 ```
 
 `mktemp` and not a fixed `/tmp` path: a name that contains the id is predictable, and
-another process could be waiting at it.
+another process could be waiting at it. The command prints the path it made. A shell
+variable does not last from one command to the next, so use that printed path wherever
+this skill says `<transcript file>`, and delete the file when step 3 is done: it holds a
+whole third-party transcript.
 
-Then run `/bestasr:srt-proofread` on `$tmp` with the `context.json` from step 1.
+Then run `/bestasr:srt-proofread` on `<transcript file>` with the `context.json` from step 1.
 Its discipline matters here and should not be relaxed: **timestamps are never
 altered**, and a word is only changed when the context file supports it.
 

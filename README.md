@@ -265,8 +265,8 @@ editing, or for running a different ASR over it.
 
 The official CLI returns the link in one call; the MCP's `get_file` carries the
 same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link is
-short-lived (Plaud's tools say 24 hours, the signed URL itself says one hour, and the
-URL's value is the one that is enforced), so this downloads rather than handing you a
+short-lived (Plaud's tools say 24 hours, the signed URL itself says one hour, and a link
+kept for 4 h 37 min was refused), so this downloads rather than handing you a
 URL to keep. The file is saved with the extension the URL gives it: most recordings are
 Ogg, some are MP3.
 
@@ -357,10 +357,10 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
   contract gap rather than a bad file: the shape probably needs adding to
   `scripts/cache.py`.
 
-  Where the count reports depends on how you invoke it. With `-o` it rides on
-  the success line (`wrote N cues (K content line(s) dropped — see stderr)`);
-  without `-o` stdout *is* the subtitle file, so the same sentence goes to
-  stderr instead. Exit stays 0 either way — the file was written and is usable —
+  Where the count reports depends on how you invoke it. With `-o` or `--out-dir`
+  it rides on the success line (`wrote N cues (K content line(s) dropped — see
+  stderr)`); with neither, stdout *is* the subtitle file, so the same sentence
+  goes to stderr instead. Exit stays 0 either way — the file was written and is usable —
   so a caller checking only the exit status has to read the cue line.
 
 - **Which lines count as the file's header is decided by the file's kind, not by

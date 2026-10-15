@@ -12,7 +12,7 @@ description: |
   official CLI can produce timed subtitles — they return transcript text only.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Untertitel erstellen", "crear subtítulos", "créer des sous-titres", "字幕を作成", "creare sottotitoli", "ondertitels maken", "criar legendas", "tạo phụ đề", "สร้างคำบรรยาย", "buat sari kata", "إنشاء ترجمة".
-argument-hint: "<recording name or id> [-o out.srt]"
+argument-hint: "<recording name or id> [--out-dir <folder>]"
 ---
 
 # Plaud to SRT
@@ -38,11 +38,13 @@ The user will normally give a name, not an id.
 **1a. Look in the cache, by name.**
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find '<words from the name>'
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find -- '<words from the name>'
 ```
 
 The words are the user's own. Put them in single quotes; if they contain a single
-quote, leave that word out and search on the rest.
+quote, leave that word out and search on the rest. The `--` makes words that start
+with a dash words and not options. If no words are left, ask the user for another part
+of the name.
 
 `find` matches recording **names** and nothing else; it exits 3 when none matches.
 Do not use `cache.py search` for this. It is a full-text search, so a recording
@@ -71,7 +73,7 @@ recordings (measured 2026-10-02 on a library longer than that: `scanned: 500`,
 `complete: false`, `scanned_back_to: 2026-04-13`). Cost therefore does not grow
 with the library, and recordings older than the window cannot be found by name.
 
-The CLI's `plaud search "<words>"` has the same 500-recording window but reports it
+The CLI's `plaud search '<words>'` has the same 500-recording window but reports it
 differently, and reports neither field above. It prints `No recordings matched "X"
 in N scanned.` and, when it ran out of window, `(Scanned first 500; …)`; it also
 lists at most 50 matches (`--max`). On that path, `N` of 500 or that second line
@@ -235,11 +237,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" "<id>" --out-dir "<folder>"
 ```
 
 `<folder>` is where the user wants the file (the working directory if they have no
-preference); it must exist. The script names the file after the recording, from the name
-in the cache, and makes the name safe itself: you never type the recording's name, which
-is text from Plaud and must not go on a command line. It does not overwrite: a second
-recording with the same name becomes `name-2.srt`. The line it prints says which path it
-chose.
+preference); it must exist, and an empty value is refused. The script names the file
+after the recording, from the name in the cache, and makes the name safe itself: letters,
+numbers, spaces and `- _ . ( )` are kept, everything else becomes `_`. You never type the
+recording's name, which is text from Plaud and must not go on a command line. It does not
+overwrite: a second recording with the same name, or the same recording converted again,
+becomes `name-2.srt`, `name-3.srt`, and the earlier files are left as they were. The line
+it prints says which path it chose; use that one, and only inside double quotes.
 
 Useful flags:
 
@@ -278,9 +282,10 @@ another one. What each means:
   whole sentence on rather than just the number. The three numbers are a ledger:
   cues plus dropped plus header accounts for every non-blank line in the file,
   so a header far larger than a handful of `key: value` lines is worth a second
-  look even when nothing else is reported. Without `-o` there is no success
-  line — stdout is the subtitle file itself — so the same sentence arrives on
-  stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
+  look even when nothing else is reported. With `--out-dir` or `-o` the sentence is
+  the success line on stdout. With neither there is no success line — stdout is the
+  subtitle file itself — so it arrives on stderr as `wrote N cues to stdout (K content
+  line(s) dropped — see stderr)`.
 - **`is marked incomplete — these subtitles cover only the part that was
   fetched` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
