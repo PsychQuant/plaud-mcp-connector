@@ -64,8 +64,9 @@ that bug again, not a small omission.
 
 **Closed on purpose**, and closed against measurement: both forms are ones a
 shipped producer emits, measured 2026-08-09 (then the MCP path wrote the point
-form and the CLI the ranged one; since #67 both write the ranged form, and the
-point form is what copies cached before that still hold). A third goes here only once something real emits it, never
+form and the CLI the ranged one; since #67 both write the ranged form, except for a
+segment that comes back with no `end_time`, and the point form is also what copies
+cached before that still hold). A third goes here only once something real emits it, never
 because it seems reasonable (#40). Shapes the parser accepts but nothing has
 been measured emitting are pinned separately, in `BOUND_PINS` in the contract
 test.

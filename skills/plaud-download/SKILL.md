@@ -219,8 +219,10 @@ Write each segment as a range line and keep the end the MCP returns for it:
 
 built from the segment's `start_time` and `end_time`, which are milliseconds: `680` is
 `00:00:00.680`, `3600250` is `01:00:00.250`. `Speaker N` is the segment's `speaker` as
-returned. A segment that comes back with no `end_time` is written start-only,
-`[HH:MM:SS.fff] Speaker N: <content>`. Start-only lines are accepted as well, but then
+returned. A segment is one physical line: replace any line break inside `speaker` or
+the content with a space. A segment whose `end_time` is absent, null, or not later than
+its `start_time` is written start-only, `[HH:MM:SS.fff] Speaker N: <content>`.
+Start-only lines are accepted as well, but then
 every subtitle runs on until the next one starts, so a pause is shown as if the last
 words were still being spoken, and the final subtitle's length is a guess.
 

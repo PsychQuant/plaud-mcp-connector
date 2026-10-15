@@ -93,10 +93,11 @@ CACHE_DIR = pathlib.Path(
 # never say so.
 _STAMP = r"(?:\d{1,2}:[0-5]\d:[0-5]\d|\d{1,4}:[0-5]\d)(?:[.,]\d{1,3})?"
 
-# Two bracket forms, because two producers write into this cache and they do
-# not agree (#40): Plaud's MCP path emits `[start]`, its CLI emits
-# `[start - end]`. The end group is optional so the point form parses exactly
-# as it always did — `end` simply comes back None.
+# Two bracket forms, because the cache holds both (#40): the CLI path has always
+# written `[start - end]`, the MCP path wrote `[start]` until #67 and now writes the
+# range too, except for a segment Plaud returns without an `end_time`. The point form
+# is therefore still what older copies hold. The end group is optional so it parses
+# exactly as it always did — `end` simply comes back None.
 #
 # The end is matched loosely (`[^\]]*`) rather than as another timestamp, so a
 # malformed end costs the timing and not the line. Requiring a well-formed end

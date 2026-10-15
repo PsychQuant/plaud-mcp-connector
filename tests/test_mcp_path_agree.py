@@ -27,8 +27,22 @@ SKILLS = pathlib.Path(__file__).resolve().parent.parent / "skills"
 RANGE_TEMPLATE = "[HH:MM:SS.fff - HH:MM:SS.fff] Speaker N:"
 
 
+# The rules the two sections must both carry, not just the template. #67 showed the
+# model diverges exactly where the text is silent: the millisecond conversion, what
+# counts as "no end", and a line break inside a speaker or the content.
+SHARED_RULES = {
+    "the millisecond conversion": "`680` is\n`00:00:00.680`",
+    "the line is one physical line": "A segment is one physical line",
+    "what counts as no end": "absent, null, or not later than",
+}
+
+
 def _section(skill: str, start: str, end: str) -> str:
     text = (SKILLS / skill / "SKILL.md").read_text(encoding="utf-8")
+    # A heading rename (#76 renamed three skills) must read as a failed
+    # assertion that says which heading, not as a bare ValueError
+    for marker in (start, end):
+        assert marker in text, f"{skill}/SKILL.md no longer contains {marker!r}"
     a, b = text.index(start), text.index(end)
     assert a < b, f"{skill}: {start!r} must come before {end!r}"
     return text[a:b]
@@ -48,6 +62,21 @@ class TestBothSkillsDescribeTheSameLine(unittest.TestCase):
 
     def test_plaud_to_srt_names_the_range_template(self):
         self.assertIn(RANGE_TEMPLATE, to_srt_mcp_section())
+
+    def test_both_sections_carry_the_same_rules_not_only_the_same_template(self):
+        for skill, section in (("plaud-download", download_mcp_section()),
+                               ("plaud-to-srt", to_srt_mcp_section())):
+            # Line wrapping differs between the two files, so compare on words
+            flat = " ".join(section.split())
+            for what, needle in SHARED_RULES.items():
+                with self.subTest(skill=skill, rule=what):
+                    self.assertIn(" ".join(needle.split()), flat,
+                                  f"{skill} no longer states {what}; the other skill does")
+
+    def test_a_segment_with_no_end_is_written_start_only_in_both(self):
+        for section in (download_mcp_section(), to_srt_mcp_section()):
+            flat = " ".join(section.split())
+            self.assertIn("is written start-only, `[HH:MM:SS.fff] Speaker N: <content>`", flat)
 
     def test_the_plaud_download_json_example_shows_a_range_not_a_start_only_stamp(self):
         sec = download_mcp_section()

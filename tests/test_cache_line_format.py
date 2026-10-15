@@ -9,8 +9,9 @@ the shape was never written down anywhere and drifted without anyone noticing:
     plaud-download, CLI path   →  [01:01 - 01:55] Speaker 1: … range
 
 (That is what was measured on 2026-08-09. Since #67 the MCP path writes the ranged
-form as well, in milliseconds; the point form is what copies cached before then still
-hold, and `to_srt` still reads it.)
+form as well, in milliseconds, except for a segment that comes back with no `end_time`;
+the point form is also what copies cached before then still hold, and `to_srt` still
+reads it.)
 
 `to_srt` accepted only the first. So every recording indexed through the CLI —
 the path the README calls "strongly recommended for large libraries" — silently
