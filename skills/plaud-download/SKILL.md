@@ -69,10 +69,11 @@ Ask for one if none was given. Do not pick a range for the user, and do not trea
 A name is resolved before an id is assumed. First check what is already cached:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find "<part of the name>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find -- '<part of the name>'
 ```
 
-It exits 3 when nothing matches. Then ask Plaud: `list_files` with `query` set to
+The words are the user's own: single quotes, and if they contain a single quote, leave
+that word out. It exits 3 when nothing matches. Then ask Plaud: `list_files` with `query` set to
 the same words. More than one match is the user's to choose between — list name,
 date and length, do not guess.
 

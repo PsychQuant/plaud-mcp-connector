@@ -2783,6 +2783,20 @@ class TestNoValueReachesAStreamUnchecked(unittest.TestCase):
         ("<module>", "\\A(?:)\\Z", "_STAMP"):                     "regex assembly, not output",
         ("<module>", "^\\[\\s*(?P<ts>)\\s*(?:-(?P<end>[^\\]]*))?\\]\\s*(?:", "_STAMP"): "regex assembly",
 
+        # --out-dir (#69). These are refusals printed to stderr; each echoes a path the caller
+        # typed or a name that went through output_stem(), always as a repr, and an OS message.
+        ("_claim_output", ".srt", "stem"):                                           "a path fragment",
+        ("_claim_output", "-.srt", "stem"):                                          "a path fragment",
+        ("_claim_output", "-.srt", "n"):                                             "a path fragment, the numeric suffix",
+        ("_claim_output", "error: cannot create a file in :", "str(directory)"):      "the directory the caller named, repr'd",
+        ("_claim_output", "error: cannot create a file in :", "exc.strerror or exc"):  "an OS message",
+        ("_write_claimed", "error: could not write :", "str(path)"):                  "the file this run created, repr'd",
+        ("_write_claimed", "error: could not write :", "exc.strerror or exc"):        "an OS message",
+        ("main", "error: was given an empty value; name a place ", "flag"):           "the option's own name, a constant",
+        ("_claim_output", "error: already holds 999 files named like", "str(directory)"): "the directory the caller named, repr'd",
+        ("_claim_output", "error: already holds 999 files named like", "stem"):        "the sanitised name, repr'd",
+        ("main", "error: --out-dir is not a directory (create it", "args.out_dir"):    "echoes the rejected path, repr'd",
+
         ("build_cues", ":", "speaker"):                            "the speaker label itself",
         ("build_cues", ":", "text"):                               "the cue words themselves",
         ("build_cues", "cue at to —", "what"):                     "which correction, tested by name",
