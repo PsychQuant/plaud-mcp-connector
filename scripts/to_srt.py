@@ -31,6 +31,7 @@ Usage:
 import argparse
 from collections import Counter
 import importlib.util
+import json
 import os
 import pathlib
 import re
@@ -834,6 +835,23 @@ def subtitle_source(rec_id: str, prefer: str = "polished") -> pathlib.Path:
     return CACHE_DIR / f"{rec_id}.md"
 
 
+def polish_is_stale(rec_id: str) -> bool:
+    """True when the manifest says the polished transcript was made from a transcript that
+    has been rewritten since (#70). `subtitle_source` chooses a polish whenever the file
+    exists, so without this the subtitles carried the old words and nothing said so.
+
+    A manifest that cannot be read, or says nothing, is "no": this is a courtesy beside
+    the conversion and must not be able to stop it.
+    """
+    try:
+        rec = json.loads((CACHE_DIR / "manifest.json").read_text(encoding="utf-8"))[
+            "recordings"][rec_id]
+        marked = rec["stale_derived"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    return isinstance(marked, list) and "polish" in marked
+
+
 def _cue_lines(path: pathlib.Path
                ) -> tuple[list[tuple[float, str, int]], int, int]:
     """A file's cues, how many lines it lost, and how odd its header is.
@@ -1132,6 +1150,14 @@ def main() -> None:
     # `cache.py` writes frontmatter only for `--kind transcript`, so on a polish
     # file a leading BOM lands on the FIRST CUE rather than harmlessly on `---`.
     raw = path.read_text(encoding="utf-8-sig")
+
+    if not args.file and path.parent == CACHE_DIR / "polish" and polish_is_stale(args.id):
+        # Said, not acted on: which transcript to subtitle from is the person's choice
+        # (#22), and the polish is usually what they want. They should know it is old.
+        print("⚠ the polished transcript was made from an earlier version of this "
+              "recording's transcript, and these subtitles use it. `--source verbatim` "
+              "subtitles the current transcript instead; fetch_one.py --force builds the "
+              "polished one again.", file=sys.stderr)
 
     # ONE pass. `parse_transcript` visits every line once and hands back both
     # what became a cue and what did not, so there is no second derivation to

@@ -318,7 +318,8 @@ audio.
 python3 scripts/cache.py status
 python3 scripts/cache.py search -- '預算|budget'
 python3 scripts/cache.py show <recording-id>
-python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish
+python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish / proofread
+python3 scripts/cache.py show --kind outline --fresh-only <recording-id> || ...   # exit 3 if stale
 ```
 
 ## Limits — stated plainly

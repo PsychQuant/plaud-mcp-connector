@@ -70,14 +70,23 @@ altered**, and a word is only changed when the context file supports it.
 ### 3. Store beside the original — never over it
 
 ```bash
-mkdir -p "${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/proofread"
-cp <proofread output> "${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/proofread/<id>.md"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind proofread < "$proofread_file"
 ```
+
+`$proofread_file` is the corrected file `/bestasr:srt-proofread` wrote in step 2. `put` stores
+it with Unicode in one form and one trailing newline, so it is not a byte copy, and it
+refuses a recording that has no cached transcript.
 
 The raw transcript is what was actually captured; the proofread copy is a derived
 artefact built from a term list that may itself be wrong. Overwriting the original
 throws away the only record of what the ASR really produced, and there is no way
 back. Both are searched — `plaud-search` recurses into `proofread/`.
+
+The proofread copy is made from the transcript as it is cached when you proofread. If
+that transcript is rewritten later (a recording downloaded again), the cache marks the
+copy stale: `cache.py status` counts it and a search hit from it is tagged
+`[corrected, stale]`. The copy is kept, because it is the one file here that took work
+to make; proofreading again and storing it with the command above clears the mark.
 
 ### 4. Confirm the correction landed
 
