@@ -148,6 +148,20 @@ the same request goes through the MCP path, which writes the ranges in milliseco
 The CLI is still the cheaper way to download, because the text never passes through
 the conversation.
 
+Cues that look like the recogniser filling silence or noise are marked, not removed.
+A speech recogniser given a long silence tends to write something anyway: a
+three-character token held for forty seconds, a subtitle credit it learned from its
+training data, a phrase repeated until it gives up. `to_srt` keeps such a cue with
+its words and timing as they were and puts a line `(疑似雜音/沉默幻覺 [low_cps: 0.07
+chars/s over 41s])` above the words, then says on stderr how many it marked.
+`--strip-hallucinations` drops them, `--no-flag` turns the check off, and
+`--ghost-phrases FILE` adds phrases for one run. A flag means "listen to this", not
+"nobody spoke": the thresholds and the Mandarin phrase list come from tutoring
+sessions, and how well they hold on meetings, lectures or other languages has not been
+measured (use `--no-flag` for those). The silence rule needs an end time, so a recording
+downloaded as start-only lines gets only the phrase and repetition checks, and nothing
+says so.
+
 **Recordings longer than 99 minutes work as of v0.10.1.** Before that they were
 silently truncated at the 100-minute mark and the `.srt` gave no sign of it —
 valid syntax, continuous timecodes, and four-fifths of a 7.4-hour transcript

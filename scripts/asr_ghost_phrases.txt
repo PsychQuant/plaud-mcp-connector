@@ -1,0 +1,28 @@
+# Phrases a speech recogniser produces from silence or noise: subtitle credits
+# learned from its training data, and bare language tokens.
+#
+# One per line, UTF-8; a line starting with "#" is a comment. A cue is flagged
+# only when the WHOLE cue is one of these, with case, width, spaces and
+# punctuation ignored. The same phrase inside a longer sentence never matches.
+#
+# Deliberately NOT here, because people say them: OK, 嗯, 謝謝大家. On one cache these
+# were 21 whole cues in 3,667, almost all of them somebody answering. A cue that is only
+# "OK。" is usually somebody saying OK.
+#
+# This list is Mandarin only. To add phrases for one run, pass --ghost-phrases
+# with a file in this format; those entries are added to these.
+
+謝謝觀看
+謝謝收看
+下次見
+再會
+感謝您觀看
+感謝您的觀看
+感謝您收看
+感謝您收看時局新聞，再會
+感謝您收睇時局新聞，再會
+中文字幕由 Amara.org 社群提供
+繁體中文字幕由 Amara.org 社群提供
+中文
+繁體中文
+字幕
