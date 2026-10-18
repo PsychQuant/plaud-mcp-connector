@@ -321,6 +321,11 @@ another one. What each means:
   recording is in a script where invisible characters carry meaning, or when a
   private-use font is in play; a large count on a short recording is worth a
   look either way.
+- **`⚠ the polished transcript was made from an earlier version of this recording's transcript`**
+  — the transcript was rewritten after the polished one was cached, and the subtitles
+  were still made from the polished one. The words in them are from the old text. Say
+  so, and offer the two ways out the message names: `--source verbatim` (the current
+  transcript) or `fetch_one.py --force` (builds the polished one again).
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.

@@ -9,7 +9,8 @@ Subcommands
     status            what is already cached (so a download can skip whole recordings)
     put               write one recording's transcript (body on stdin)
     search <pattern>  full-text search across cached transcripts
-    show <id>         print one cached transcript
+    show <id>         print one cached transcript, or one derived file with --kind
+                      (--fresh-only: exit 3 instead if it is out of date)
     find              resolve a recording by NAME (not full text) -> id, date, state
 
 Cache lives in $PLAUD_CACHE_DIR, default ~/.plaud-connector/cache.
@@ -234,6 +235,13 @@ def cmd_status(args) -> None:
         polished = sum(1 for r in recs.values() if r.get("has_polish"))
         if polished:
             print(f"polished  : {polished} of {len(recs)} recordings (subtitles only)")
+        stale: dict = {}
+        for r in recs.values():
+            for kind in _stale_set(r):
+                stale[kind] = stale.get(kind, 0) + 1
+        if stale:
+            detail = ", ".join(f"{kind} {n}" for kind, n in sorted(stale.items()))
+            print(f"stale     : {detail} — made from a transcript that has been rewritten since")
 
 
 # What a `put --json` file may hold, and the type each field must have. The point of the
@@ -309,6 +317,83 @@ def cmd_put(args) -> None:
         print(f"warning: could not remove {json_path}: {exc}", file=sys.stderr)
 
 
+# Files written FOR a transcript, describing it: kind -> (folder, manifest flag). Rewriting
+# the transcript leaves them on disk, so the manifest has to keep describing them and say
+# when the text they were made from is gone (#70).
+#
+# `proofread` is the one that took model work to produce. It used to be written by a plain
+# copy (plaud-proofread), outside `put`, so nothing could clear a stale mark on it; it goes
+# through `put --kind proofread` now, and a copy written the old way is still recognised
+# because the disk decides (below).
+DERIVED = {
+    "summary": ("summaries", "has_summary"),
+    "polish": ("polish", "has_polish"),
+    "outline": ("outline", "has_outline"),
+    "proofread": ("proofread", "has_proofread"),
+}
+
+
+def _derived_on_disk(rec_id: str) -> list:
+    """Which derived kinds have a file for this recording. The disk decides, not the
+    manifest: `fetch_one` removes an old polish before it rewrites the transcript, and a
+    flag carried over for a file that is gone would make the manifest say what is not so."""
+    return [k for k, (folder, _flag) in DERIVED.items()
+            if (CACHE_DIR / folder / f"{rec_id}.md").is_file()]
+
+
+def _stored_body(rec_id: str):
+    """The transcript text on disk without its front matter, or None when there is no
+    usable file. A file that does not decode is "no usable file": it is exactly the one a
+    refresh has to be able to repair, and `put` used to overwrite it without looking."""
+    try:
+        text = (CACHE_DIR / f"{rec_id}.md").read_text()
+    except (OSError, ValueError):
+        return None
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end != -1:
+            text = text[end + 5:]
+    return text.rstrip("\n")
+
+
+_LEADING_STAMP = re.compile(r"^\s*\[[^\]]*\]\s*")
+
+
+def _speech(text: str) -> list:
+    """The transcript reduced to what was said: line by line, without the leading bracket
+    stamp, whitespace collapsed (a CR counts as whitespace), Unicode in one form. A rewrite that only changes how the
+    times are written (a point stamp became a range, seconds became milliseconds, CRLF
+    became LF) did not change what was said, and marking every derived file stale for it
+    cries wolf on a mark that then stays on (verify round 1 of #70)."""
+    out = []
+    for line in unicodedata.normalize("NFC", text).split("\n"):
+        line = " ".join(_LEADING_STAMP.sub("", line).split())
+        if line:
+            out.append(line)
+    return out
+
+
+def _affected_kinds(previous, body: str, was_complete) -> set:
+    """Which derived kinds a rewrite from `previous` to `body` leaves out of date."""
+    if previous is None:
+        return set(DERIVED)
+    before, after = _speech(previous), _speech(body)
+    if before == after:
+        return set()
+    if was_complete is False and after[:len(before)] == before:
+        # A fetch that stopped early has been completed. What Plaud made for the whole
+        # recording (summary, outline, polish) is not older than the text for that; a
+        # copy proofread from the short text is.
+        return {"proofread"}
+    return set(DERIVED)
+
+
+def _stale_set(rec: dict) -> set:
+    """The derived kinds a record says are out of date. Tolerant of a hand-edited manifest."""
+    raw = rec.get("stale_derived") if isinstance(rec, dict) else None
+    return {k for k in raw if isinstance(k, str)} if isinstance(raw, list) else set()
+
+
 def _put_record(args, raw_body: str) -> None:
     rec_id = _safe_id(args.id)
     # Converge new writes on one normal form so the cache stops accumulating
@@ -331,22 +416,25 @@ def _put_record(args, raw_body: str) -> None:
     # `complete` — those describe the transcript and would start meaning nothing
     # if a summary could change them.
     kind = str(getattr(args, "kind", "transcript") or "transcript")
-    if kind in ("summary", "polish", "outline"):
+    if kind in DERIVED:
         man = _load_manifest()
         if rec_id not in man["recordings"]:
             sys.exit(f"error: {rec_id} has no cached transcript — refusing to write an "
                      f"orphan {kind} the manifest would never mention. Download it first.")
-        subdir, flag = {
-            "summary": ("summaries", "has_summary"),
-            "polish": ("polish", "has_polish"),
-            "outline": ("outline", "has_outline"),
-        }[kind]
+        subdir, flag = DERIVED[kind]
         d = CACHE_DIR / subdir
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"{rec_id}.md"
         path.write_text(body.rstrip("\n") + "\n")
-        man["recordings"][rec_id][flag] = True
-        man["recordings"][rec_id][f"{kind}_indexed_at"] = _now()
+        rec = man["recordings"][rec_id]
+        rec[flag] = True
+        rec[f"{kind}_indexed_at"] = _now()
+        # Written again, so it is made from the transcript that is cached now.
+        still_stale = _stale_set(rec) - {kind}
+        if still_stale:
+            rec["stale_derived"] = sorted(still_stale)
+        else:
+            rec.pop("stale_derived", None)
         _save_manifest(man)
         print(f"cached {kind} for {rec_id} ({len(body):,} chars) → {path}")
         return
@@ -385,10 +473,16 @@ def _put_record(args, raw_body: str) -> None:
         "",
     ]
     path = CACHE_DIR / f"{rec_id}.md"
+    # Read BEFORE the file is overwritten: whether the text changed decides what is stale.
+    # No file on disk means there is nothing to compare with, which is treated as changed.
+    previous = _stored_body(rec_id)
     path.write_text("\n".join(front) + body.rstrip("\n") + "\n")
 
     man = _load_manifest()
-    man["recordings"][rec_id] = {
+    old = man["recordings"].get(rec_id)
+    old = old if isinstance(old, dict) else {}
+    affected = _affected_kinds(previous, body, old.get("complete"))
+    record = {
         "name": name,
         "created_at": created_at,
         "duration_ms": duration,
@@ -401,6 +495,18 @@ def _put_record(args, raw_body: str) -> None:
         "last_cursor": None if complete else last_cursor,
         "indexed_at": _now(),
     }
+    # Derived files stay on disk when a transcript is rewritten (#70), so the record keeps
+    # describing the ones that exist, and says which were made from text that is now gone.
+    present = _derived_on_disk(rec_id)
+    for kind, (_folder, flag) in DERIVED.items():
+        if kind in present:
+            record[flag] = True
+            if old.get(f"{kind}_indexed_at"):
+                record[f"{kind}_indexed_at"] = old[f"{kind}_indexed_at"]
+    stale = (_stale_set(old) & set(present)) | (set(present) & affected)
+    if stale:
+        record["stale_derived"] = sorted(stale)
+    man["recordings"][rec_id] = record
     _save_manifest(man)
     state = "complete" if complete else "INCOMPLETE"
     print(f"cached {rec_id} ({len(body):,} chars, {pages} page(s), {state}) → {path}{warning}")
@@ -413,6 +519,8 @@ def _have_rg() -> bool:
 # Directory name → what a hit found there actually is. Anything else is the
 # transcript itself, which needs no label.
 HIT_SOURCES = {"proofread": "corrected", "summaries": "summary"}
+# The derived kind behind each of those labels, for the staleness mark (#70).
+HIT_KIND = {"corrected": "proofread", "summary": "summary"}
 
 # Subdirectories held back from search. `polish/` is the same speech said more
 # tidily — including it would return every line twice, once raw and once
@@ -551,7 +659,10 @@ def cmd_search(args) -> None:
         # exclusive, and two booleans would admit a state ("corrected AND
         # summary") that no file can be in.
         source = _hit_source(path)
-        hits.setdefault(rec_id, []).append((parts[2].strip(), source))
+        # A derived file made from a transcript that was later rewritten says so on the
+        # hit line, because the hit would otherwise read as current (#70).
+        stale = bool(source) and HIT_KIND[source] in _stale_set(man.get(rec_id, {}))
+        hits.setdefault(rec_id, []).append((parts[2].strip(), source, stale))
 
     if not hits:
         print(f"no match for {args.pattern!r} across {len(_searched(man))} cached recordings")
@@ -574,12 +685,15 @@ def cmd_search(args) -> None:
         # labelling it "partially indexed" would point at the wrong cause.
         if rec_id in man and man[rec_id].get("complete") is False:
             print("   ⚠ partially indexed — more transcript may exist; download this recording again")
-        for ln, source in lines[: args.max_lines]:
-            tag = f" [{source}]" if source else ""
+        for ln, source, stale in lines[: args.max_lines]:
+            tag = f" [{source}{', stale' if stale else ''}]" if source else ""
             print(f"   │ {_clean(ln[:200])}{tag}")
         if len(lines) > args.max_lines:
             print(f"   │ … {len(lines) - args.max_lines} more")
-        present = {src for _, src in lines if src}
+        present = {src for _, src, _stale in lines if src}
+        if any(stale for _, _src, stale in lines):
+            print("   ℹ [stale] marks text made from an earlier version of this transcript — "
+                  "it may not match what is cached now")
         if "corrected" in present:
             print("   ℹ [corrected] lines come from a proofread copy — quote them as "
                   "corrected text, not as what was said verbatim")
@@ -626,13 +740,42 @@ def cmd_find(args) -> None:
               f"{_human_duration(rec.get('duration_ms'))}  ·  {state}")
 
 
+# What to do about a derived file made from a transcript that has been rewritten. Not the
+# same for every kind: a proofread copy is made locally and cleared by storing a new one,
+# so telling a reader to "fetch it again" would send them to re-download the transcript,
+# which rewrites it once more and never reaches the proofreading.
+STALE_REMEDY = {
+    "proofread": "Proofread it again and store the result with put --kind proofread.",
+}
+STALE_REMEDY_DEFAULT = "Fetch it again before relying on it."
+
+
+def _stale_kinds(rec_id: str) -> set:
+    """The stale derived kinds recorded for a recording. A read-only caller must not be
+    stopped by a manifest it cannot make sense of (`show` never touched the manifest
+    before #70): it reports nothing stale, which is what it said before."""
+    try:
+        return _stale_set(_load_manifest()["recordings"].get(rec_id, {}))
+    except (KeyError, TypeError, AttributeError):
+        return set()
+
+
 def cmd_show(args) -> None:
     rec_id = _safe_id(args.id)
     kind = str(getattr(args, "kind", "transcript") or "transcript")
-    subdir = {"summary": "summaries", "polish": "polish", "outline": "outline"}.get(kind)
+    subdir = DERIVED[kind][0] if kind in DERIVED else None
     path = (CACHE_DIR / subdir / f"{rec_id}.md") if subdir else (CACHE_DIR / f"{rec_id}.md")
     if not path.exists():
         sys.exit(f"error: {args.id} has no cached {kind} — run the plaud-download skill")
+    # The transcript is never stale: nothing it was made from can be rewritten under it.
+    if kind in DERIVED and kind in _stale_kinds(rec_id):
+        remedy = STALE_REMEDY.get(kind, STALE_REMEDY_DEFAULT)
+        print(f"warning: this {kind} was made from an earlier version of the transcript "
+              f"(the transcript has been rewritten since). {remedy}", file=sys.stderr)
+        if getattr(args, "fresh_only", False):
+            # Printing nothing and exiting 3 is what lets `show ... || <fetch>` do the
+            # right thing; a warning on stderr beside a normal exit cannot.
+            sys.exit(3)
     sys.stdout.write(path.read_text())
 
 
@@ -653,13 +796,14 @@ def main() -> None:
                    help="did the fetch loop run to the end of the transcript?")
     p.add_argument("--pages", type=int, default=1,
                    help="how many get_transcript pages were concatenated")
-    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline"],
+    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline", "proofread"],
                    default="transcript",
-                   help="summary writes to summaries/ (searchable, labelled); polish and "
-                        "outline write to polish/ and outline/ (NOT searchable — a polish is "
-                        "the same speech reworded, an outline is AI-written structure whose "
-                        "timestamps are section starts, not citations); all three leave the "
-                        "transcript, chars, and completeness untouched")
+                   help="summary writes to summaries/ and proofread to proofread/ (both "
+                        "searchable, labelled); polish and outline write to polish/ and "
+                        "outline/ (NOT searchable — a polish is the same speech reworded, an "
+                        "outline is AI-written structure whose timestamps are section starts, "
+                        "not citations); all four leave the transcript, chars, and "
+                        "completeness untouched, and clear their own 'stale' mark")
     p.add_argument("--json", default=None, metavar="FILE",
                    help="take name, created_at, duration, complete, pages, last_cursor and body "
                         "from this JSON file instead of the flags and stdin, then delete it; "
@@ -679,12 +823,16 @@ def main() -> None:
     p.add_argument("name", help="a case-insensitive substring of the recording's name")
     p.set_defaults(func=cmd_find)
 
-    p = sub.add_parser("show", help="print one cached transcript, summary, polish or outline")
+    p = sub.add_parser("show", help="print one cached transcript, summary, polish, outline "
+                                   "or proofread copy")
     p.add_argument("id")
-    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline"],
+    p.add_argument("--kind", choices=["transcript", "summary", "polish", "outline", "proofread"],
                    default="transcript",
                    help="which cached view to print; a cache written but never read "
                         "saves nothing, which is what #28 was about")
+    p.add_argument("--fresh-only", action="store_true", dest="fresh_only",
+                   help="print nothing and exit 3 when the file was made from a transcript "
+                        "that has been rewritten since, so `show ... || <fetch it>` fetches")
     p.set_defaults(func=cmd_show)
 
     args = ap.parse_args()
