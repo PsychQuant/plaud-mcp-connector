@@ -59,25 +59,44 @@ proofreading will be weak and let them decide whether to continue.
 
 ### 2. Proofread against that term list
 
+Check the id before it goes into a command: an id is `of_` followed by hexadecimal
+characters. Anything else, do not put it in a command; tell the user which recording was
+skipped and why.
+
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > /tmp/plaud-<id>.txt
+tmp=$(mktemp) && python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>" > "$tmp" && echo "$tmp"
 ```
 
-Then run `/bestasr:srt-proofread` on it with the `context.json` from step 1.
+`mktemp` and not a fixed `/tmp` path: a name that contains the id is predictable, and
+another process could be waiting at it. The command prints the path it made. A shell
+variable does not last from one command to the next, so use that printed path wherever
+this skill says `<transcript file>`, and delete the file when step 3 is done: it holds a
+whole third-party transcript.
+
+Then run `/bestasr:srt-proofread` on `<transcript file>` with the `context.json` from step 1.
 Its discipline matters here and should not be relaxed: **timestamps are never
 altered**, and a word is only changed when the context file supports it.
 
 ### 3. Store beside the original — never over it
 
 ```bash
-mkdir -p "${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/proofread"
-cp <proofread output> "${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/proofread/<id>.md"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" put --id "<id>" --kind proofread < "$proofread_file"
 ```
+
+`$proofread_file` is the corrected file `/bestasr:srt-proofread` wrote in step 2. `put` stores
+it with Unicode in one form and one trailing newline, so it is not a byte copy, and it
+refuses a recording that has no cached transcript.
 
 The raw transcript is what was actually captured; the proofread copy is a derived
 artefact built from a term list that may itself be wrong. Overwriting the original
 throws away the only record of what the ASR really produced, and there is no way
 back. Both are searched — `plaud-search` recurses into `proofread/`.
+
+The proofread copy is made from the transcript as it is cached when you proofread. If
+that transcript is rewritten later (a recording downloaded again), the cache marks the
+copy stale: `cache.py status` counts it and a search hit from it is tagged
+`[corrected, stale]`. The copy is kept, because it is the one file here that took work
+to make; proofreading again and storing it with the command above clears the mark.
 
 ### 4. Confirm the correction landed
 

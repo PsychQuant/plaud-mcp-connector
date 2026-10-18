@@ -60,7 +60,9 @@ connected, and nothing in between was searched. The `--` makes a pattern that st
 ### 2. Read the surrounding context
 
 A grep hit is a pointer, not an answer. To see what was actually being discussed,
-print the cached transcript and read around the hit:
+print the cached transcript and read around the hit. Check the id before it goes into
+a command: an id is `of_` followed by hexadecimal characters. Anything else, do not put
+it in a command; tell the user which recording was skipped and why.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>"
@@ -129,6 +131,7 @@ transcript:
 | _(none)_ | The transcript — what was actually said | Quote it |
 | `[corrected]` | A proofread copy (`plaud-proofread`) | Quote as corrected text, not as verbatim speech |
 | `[summary]` | An AI-written summary | **Nobody said these words.** Open the transcript for the actual wording |
+| `[corrected, stale]` / `[summary, stale]` | The same, but made from a transcript that was rewritten after it was stored | Do not quote it as current. Say it may not match the transcript, and offer to proofread or fetch the summary again |
 
 The labels exist because the reader cannot tell by looking. A summary reads like
 clean prose precisely because it was written rather than spoken, which makes it

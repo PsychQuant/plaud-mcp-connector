@@ -139,9 +139,12 @@ landed on a single second, which `to_srt` lengthens to half a second and reports
 So a subtitle from the CLI path can appear up to a second early.
 
 Where the cache keeps the ends they are used as given. The CLI path does, at that
-one-second resolution. `plaud-to-srt`'s MCP path does, in milliseconds.
-`plaud-download`'s MCP path writes start-only lines, so for a recording downloaded that
-way a cue runs until the next one begins and the final cue gets a four-second guess.
+one-second resolution. The MCP path of `plaud-to-srt` and of `plaud-download` does, in
+milliseconds. A recording downloaded through the `plaud-download` MCP path before that
+was fixed (#67) holds start-only lines, so a cue runs until the next one begins and the
+final cue gets a four-second guess. Fetching such a recording again replaces them:
+`--force` on the CLI path does, at that path's whole-second resolution, and with no CLI
+the same request goes through the MCP path, which writes the ranges in milliseconds.
 The CLI is still the cheaper way to download, because the text never passes through
 the conversation.
 
@@ -278,8 +281,11 @@ Downloads the audio file itself, not its transcript. Useful for archiving, for
 editing, or for running a different ASR over it.
 
 The official CLI returns the link in one call; the MCP's `get_file` carries the
-same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link
-**expires in 24 hours**, so this downloads rather than handing you a URL to keep.
+same `presigned_url` but returns ~141 KB to do it, so this uses the CLI. The link is
+short-lived (Plaud's tools say 24 hours, the signed URL itself says one hour, and a link
+kept for 4 h 37 min was refused), so this downloads rather than handing you a
+URL to keep. The file is saved with the extension the URL gives it: most recordings are
+Ogg, some are MP3.
 
 ```
 把那次會議的音檔抓下來
@@ -332,7 +338,8 @@ audio.
 python3 scripts/cache.py status
 python3 scripts/cache.py search -- '預算|budget'
 python3 scripts/cache.py show <recording-id>
-python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish
+python3 scripts/cache.py show --kind outline <recording-id>   # or summary / polish / proofread
+python3 scripts/cache.py show --kind outline --fresh-only <recording-id> || ...   # exit 3 if stale
 ```
 
 ## Limits — stated plainly
@@ -341,6 +348,14 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
   is not searchable, however recent. Every search prints how many recordings it
   searched and the date span they cover; the skill is instructed to quote that
   line, and never to answer a bare "no match".
+- **There is no filter by folder or tag.** On one account, against the official MCP 0.3.14
+  (2026-10-15), no field in any response has a name that suggests a folder or a tag, so
+  this plugin has nothing to filter on and nothing the cache could store. Find a
+  recording by name, by date range, or by what was said in a transcript you downloaded.
+  Plaud's own web page does know the folders; this plugin does not read them. What was
+  measured, and what was not (other accounts, shared recordings, the contents of string
+  values, later releases), is in
+  [`docs/official-surface.md`](docs/official-surface.md#no-folder-or-tag-key-in-the-official-responses-measured-2026-10-15).
 - **A big range is slow.** Transcripts are paginated, so a long recording takes
   several fetches. Without the CLI installed, every page also passes through the
   model context. Install `@plaud-ai/cli` (above) and name a narrower range.
@@ -368,10 +383,10 @@ python3 scripts/cache.py show --kind outline <recording-id>   # or summary / pol
   contract gap rather than a bad file: the shape probably needs adding to
   `scripts/cache.py`.
 
-  Where the count reports depends on how you invoke it. With `-o` it rides on
-  the success line (`wrote N cues (K content line(s) dropped — see stderr)`);
-  without `-o` stdout *is* the subtitle file, so the same sentence goes to
-  stderr instead. Exit stays 0 either way — the file was written and is usable —
+  Where the count reports depends on how you invoke it. With `-o` or `--out-dir`
+  it rides on the success line (`wrote N cues (K content line(s) dropped — see
+  stderr)`); with neither, stdout *is* the subtitle file, so the same sentence
+  goes to stderr instead. Exit stays 0 either way — the file was written and is usable —
   so a caller checking only the exit status has to read the cue line.
 
 - **Which lines count as the file's header is decided by the file's kind, not by

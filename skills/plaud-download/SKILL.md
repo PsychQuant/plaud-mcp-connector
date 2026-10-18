@@ -69,10 +69,11 @@ Ask for one if none was given. Do not pick a range for the user, and do not trea
 A name is resolved before an id is assumed. First check what is already cached:
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find "<part of the name>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find -- '<part of the name>'
 ```
 
-It exits 3 when nothing matches. Then ask Plaud: `list_files` with `query` set to
+The words are the user's own: single quotes, and if they contain a single quote, leave
+that word out. It exits 3 when nothing matches. Then ask Plaud: `list_files` with `query` set to
 the same words. More than one match is the user's to choose between — list name,
 date and length, do not guess.
 
@@ -211,6 +212,21 @@ reaching the 50th page without completing is INCOMPLETE too
 - Write the cache **once**, after the loop. `cache.py put` overwrites, so a call per
   page leaves only the last page on disk.
 
+Write each segment as a range line and keep the end the MCP returns for it:
+
+```
+[HH:MM:SS.fff - HH:MM:SS.fff] Speaker N: <content>
+```
+
+built from the segment's `start_time` and `end_time`, which are milliseconds: `680` is
+`00:00:00.680`, `3600250` is `01:00:00.250`. `Speaker N` is the segment's `speaker` as
+returned. A segment is one physical line: replace any line break inside `speaker` or
+the content with a space. A segment whose `end_time` is absent, null, or not later than
+its `start_time` is written start-only, `[HH:MM:SS.fff] Speaker N: <content>`.
+Start-only lines are accepted as well, but then
+every subtitle runs on until the next one starts, so a pause is shown as if the last
+words were still being spoken, and the final subtitle's length is a guess.
+
 **No text from Plaud goes on a command line.** Names, cursors and transcript lines can
 contain quotes, `$(...)` and backticks, and every rule about quoting them has so far
 left one place open. Write a JSON file with the Write tool instead, at the absolute
@@ -224,7 +240,7 @@ text on a command line.
 ```json
 {"name": "<name>", "created_at": "<created_at>", "duration": "<duration>",
  "complete": true, "pages": 3, "last_cursor": "<last next_cursor, verbatim>",
- "body": "<one segment per line, e.g. [00:12:03] Speaker 1: ...>"}
+ "body": "<one segment per line, e.g. [00:12:03.450 - 00:12:07.980] Speaker 1: ...>"}
 ```
 
 `last_cursor` is `null` if no cursor ever came back. Then the command line carries a

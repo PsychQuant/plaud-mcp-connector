@@ -70,8 +70,12 @@ Falling back to `plaud search` matches names only, across the newest 500.
 
 ### 2. Read the cached one, or fetch
 
+Check the id before it goes into a command: an id is `of_` followed by hexadecimal
+characters. Anything else, do not put it in a command; tell the user which recording was
+skipped and why.
+
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline "<id>" 2>/dev/null \
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show --kind outline --fresh-only "<id>" 2>/dev/null \
   || plaud transcript "<id>" --block outline
 ```
 
@@ -80,9 +84,14 @@ every time is what `#28` was filed about, and a cache that is written but never
 read does not fix it.
 
 Refetch when the user asks for the current version, or when the recording was
-reprocessed. There is no staleness check: at 2,502 B against a transcript's
-53,060 B, fetching again costs less than deciding whether the cached copy went
-stale.
+reprocessed. The cache knows one reason by itself: if the transcript was rewritten
+after the outline was cached, the outline was made from text that is gone.
+`--fresh-only` makes `show` print nothing and exit 3 in that case (it says why on
+stderr, which the command above discards), so the command falls through to fetching.
+Without the flag `show` prints the old outline with a warning on stderr and exits 0,
+and `cache.py status` counts it as stale. It cannot know that Plaud reprocessed a
+recording on its side; for that, fetching again is the check: at 2,502 B against a
+transcript's 53,060 B, it costs less than deciding whether the cached copy went stale.
 
 Either way it is small. Reading it into the conversation is fine — that is the
 point of this skill. A full transcript is not, and `plaud-download` exists so you
@@ -133,10 +142,12 @@ spoken here" but "the section starting here is about this". Same syntax,
 different relation. Searching outlines needs that answered first, and it has
 not been — see `#28`.
 
-**Refetch rather than track staleness.** An outline changes when Plaud
-reprocesses a recording; a transcript does not. At 2,502 B against a
+**Refetch rather than track what Plaud does.** An outline changes when Plaud
+reprocesses a recording; the cache cannot see that. At 2,502 B against a
 transcript's 53,060 B, fetching it again costs less than deciding whether the
-cached one went stale.
+cached one went stale. What the cache does track is the local kind: an outline
+made from a transcript that was rewritten afterwards is marked stale (see above),
+and fetching it again with `put --kind outline` clears the mark.
 
 ## Failure modes
 

@@ -3,10 +3,17 @@
 What the official CLI and MCP actually do — not what `--help` says they do.
 
 **Measured 2026-08-07 against `@plaud-ai/cli` 0.3.7 (commit `bacaae9`) and
-`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** One later section
-carries its own stamp: [The OAuth callback port,
-8199](#the-oauth-callback-port-8199) was measured 2026-08-17 against MCP 0.3.8.
-Everything else on this page is 0.3.7.
+`@plaud-ai/mcp` 0.3.7, on an authenticated personal account.** Four sections carry
+their own stamp, and it overrides this one: [The OAuth callback port,
+8199](#the-oauth-callback-port-8199) and [`Not authenticated` does not mean refresh was
+skipped](#not-authenticated-does-not-mean-refresh-was-skipped) were measured 2026-08-17
+against MCP 0.3.8; [`list_files` with
+filters](#list_files-with-filters-reports-its-own-scan-measured-2026-10-06) on 2026-10-06
+against the release `@latest` pointed at that day (0.3.13), and it no longer describes a
+date-only call on 0.3.14 (see the version note in that section); [no folder or tag
+key](#no-folder-or-tag-key-in-the-official-responses-measured-2026-10-15) on 2026-10-15
+against MCP 0.3.14. Everything else on this page is 0.3.7 and has not been re-measured on a
+later release.
 
 Everything here was run. Where something was inferred rather than executed, it
 says so. These are observations of one release, not a contract Plaud has
@@ -65,7 +72,7 @@ The CLI and the MCP hold **separate tokens** — `~/.plaud/tokens.json` and
 | `me` | Current user | `workspace_id`, `member_id` |
 | `files` | List recordings | `-p/--page`, `-s/--page-size` (default 20). Prints "Files on this page: N" — **no total is available** |
 | `file <id>` | One recording's details | **See below — this one matters** |
-| `audio <id>` | Audio download URL | **Presigned S3 URL, expires in 24 hours** |
+| `audio <id>` | Audio download URL | **Presigned S3 URL.** The CLI prints "expires in 24 hours"; the URL carries `X-Amz-Expires=3600` (one hour), on all of the ten newest recordings measured 2026-10-15 (CLI 0.3.14). The object is Ogg for most recordings and MP3 for some (8 and 2 of those ten) |
 | `transcript <id>` | Transcript | `-o/--output`, `--block`, `--polished`. **No pagination flag, and none is needed** — see below |
 | `summary <id>` | AI summary | `-o/--output`. Returns title / datetime / location / key points |
 | `search <keyword>` | Name search | `--from`, `--to`, `--max` (default 50). Reports "Matched N of M scanned" |
@@ -362,6 +369,85 @@ eight hours unscanned, and the earlier "on or before `date_from`" test up to thi
 account, against the MCP package version the plugin declares at the time of writing;
 re-measure after an MCP upgrade.
 
+**Version note (2026-10-15, [#88](https://github.com/PsychQuant/plaud-mcp-connector/issues/88)).**
+This section describes releases up to 0.3.13. On 0.3.14 a call with only `date_from` /
+`date_to` is answered with `data`, `page`, `page_size` and `type` and none of the scan
+fields, and the tool description says the dates are applied server-side and exact. The
+scan accounting is still in the 0.3.14 code, presumably for `query`; that path was not
+re-run. Text elsewhere in this repository that tells the model to read `scanned_back_to`
+was written against the older behaviour.
+
+### No folder or tag key in the official responses (measured 2026-10-15)
+
+No field in the official MCP's responses has a name that suggests a folder or a tag, and
+no tool takes a parameter that names one. That is the whole claim: it is about key names,
+in a sample, on one account. The web app does group recordings into folders (observed
+2026-06-11 and recorded on #63 from the retired sibling plugin's issue; not re-checked
+here), and the same source says the web app implements a folder as a filter on tag ids, so
+folder and tag are probably one mechanism. This section treats them together.
+
+Measured read-only on one account against `@plaud-ai/mcp` 0.3.14 (resolved from
+`@latest`), which offers seven tools: `get_current_user`, `get_file`, `get_note`,
+`get_transcript`, `list_files`, `login`, `logout`. For each call the key paths were
+collected over every object returned, walking arrays element by element. String values
+were neither recorded nor opened, so a folder name or tag id sitting inside a string (the
+JSON text in `data_content`, a path in `data_path` or `data_link`) would not have been
+seen.
+
+| Call | Sample | Key paths |
+|---|---|---|
+| `list_files` | the 150 newest recordings (3 pages of 50) | `id`, `name`, `created_at`, `serial_number`, `start_at`, `duration`, each present in 150 of 150 |
+| `get_file` | 8 recordings | the same six, `presigned_url`, `source_list[]` and `note_list[]` with `data_content`, `data_id`, `data_link`, `data_title`, `data_type` (notes also `data_path`, `data_error_code`, `data_tab_name`) |
+| `get_transcript` | 60 segments from 3 recordings; `block` not given, and the response says `transaction` | `start_time`, `end_time`, `content`, `speaker`, `original_speaker`, `segment_uid` (the `get_transcript` section below, measured on 0.3.7, lists no `segment_uid`) |
+| `get_note` | 3 notes | `data_content`, `data_id`, `data_link`, `data_title`, `data_type`, `data_path`, `data_error_code`, `data_tab_name` |
+| `get_current_user` | 1 | `id`, `email`, `nickname`, `avatar`, `workspace_id`, `member_id` |
+
+`get_note` and `get_transcript` are views of the `get_file` record, not a second source:
+the 0.3.14 code calls `getFile` in both and reads `note_list` or `source_list` from the
+result. Only the default block of `get_transcript` was sampled. `outline` segments carry
+`start_time`, `end_time` and `topic` (one call); `transaction_polish` and `mark_memo` were
+not sampled.
+
+No key path in any of them contains `folder`, `tag`, `categor`, `label`, `group` or
+`dir`. `serial_number` was null on every one of the first 50 records on a re-run, and the
+key was still there, so for those records the response writes an empty field as null
+rather than leaving it out. That says nothing about a key that exists only on recordings
+that have it set. `list_files` takes `query`, `date_from`, `date_to`, `page` and
+`page_size`; none names a folder or a tag.
+
+A second check does not depend on the sample: the package's own code (0.3.13 and 0.3.14,
+13 files each) contains none of `folder`, `filetag`, `tag_id` or `categor`, so the MCP has
+no code that reads or filters on them.
+
+The CLI is not a second source. `plaud file <id>` prints the same fixed set of lines for
+every recording (the six fields and whether audio, transcript and summary are
+available), so what it shows is what it chooses to print, not what the response
+carries; it says nothing either way. In CLI 0.3.14, the version this was run with,
+`plaud files` takes `--page` and `--page-size` and nothing else; 0.3.15, the current
+release, adds `--date-from` and `--date-to` (read in the package, not run).
+
+So no response looked at here gives a cache anything to record as a folder or tag, and
+this repo offers no folder or tag filter (#63). Tag ids do exist somewhere:
+the retired sibling plugin's own issue (observed 2026-06-11, recorded on #63) reports
+that the web app's list endpoint `/file/simple/web` returns a `filetag_id_list` for each file.
+That endpoint is not part of the surface measured here and was not tried for this
+change; the sibling plugin itself did not use it, it read the folder name off the web
+page in the browser.
+
+What this does **not** establish:
+
+- other accounts, recordings shared into an account, or plans other than the one measured;
+- later releases: the package is resolved from `@latest`, so a field can appear without
+  this repo changing;
+- what the string values contain (see above);
+- the `transaction_polish` and `mark_memo` blocks of `get_transcript`;
+- whether a recording that is in a folder looks any different. No positive control was
+  run. The one day the sibling issue gives (2026-06-11) has a single recording on this
+  account, so the two meetings it describes cannot be found here, and the MCP does not
+  say which recordings are filed.
+
+Re-measure after an upgrade.
+
 ### `get_transcript`
 
 ```jsonc
@@ -481,7 +567,8 @@ plugin does not get those skills by default.
 
 | | `@plaud-ai/cli` | `@plaud-ai/mcp` |
 |---|---|---|
-| Latest measured | 0.3.7 (2026-08-05) | 0.3.7 (2026-07-30) |
+| Baseline measured | 0.3.7 (2026-08-05) | 0.3.7 (2026-07-30) |
+| Latest on npm, 2026-10-15 | 0.3.15 | 0.3.14 |
 | First published | 0.1.0 (2026-04-10) | 0.1.0 (2026-04-02) |
 | `license` field | **absent** | **absent** |
 | `repository` field | absent | absent |
@@ -507,6 +594,9 @@ four months, and any of them reaches users without a release on this side.
   test, the other mutates a global install.
 - **Whether `plaud audio`'s URL needs auth headers.** It downloaded without any,
   but only the unexpired case was tried.
+- **Folders and tags on other accounts, shared recordings or other plans.** See
+  [the measurement](#no-folder-or-tag-key-in-the-official-responses-measured-2026-10-15):
+  one account, one moment, key names only.
 
 ---
 

@@ -12,7 +12,7 @@ description: |
   official CLI can produce timed subtitles — they return transcript text only.
   Also triggers in the languages Plaud localises for (its own hreflang list):
   "Untertitel erstellen", "crear subtítulos", "créer des sous-titres", "字幕を作成", "creare sottotitoli", "ondertitels maken", "criar legendas", "tạo phụ đề", "สร้างคำบรรยาย", "buat sari kata", "إنشاء ترجمة".
-argument-hint: "<recording name or id> [-o out.srt]"
+argument-hint: "<recording name or id> [--out-dir <folder>]"
 ---
 
 # Plaud to SRT
@@ -38,8 +38,13 @@ The user will normally give a name, not an id.
 **1a. Look in the cache, by name.**
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find "<words from the recording's name>"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" find -- '<words from the name>'
 ```
+
+The words are the user's own. Put them in single quotes; if they contain a single
+quote, leave that word out and search on the rest. The `--` makes words that start
+with a dash words and not options. If no words are left, ask the user for another part
+of the name.
 
 `find` matches recording **names** and nothing else; it exits 3 when none matches.
 Do not use `cache.py search` for this. It is a full-text search, so a recording
@@ -68,7 +73,7 @@ recordings (measured 2026-10-02 on a library longer than that: `scanned: 500`,
 `complete: false`, `scanned_back_to: 2026-04-13`). Cost therefore does not grow
 with the library, and recordings older than the window cannot be found by name.
 
-The CLI's `plaud search "<words>"` has the same 500-recording window but reports it
+The CLI's `plaud search '<words>'` has the same 500-recording window but reports it
 differently, and reports neither field above. It prints `No recordings matched "X"
 in N scanned.` and, when it ran out of window, `(Scanned first 500; …)`; it also
 lists at most 50 matches (`--max`). On that path, `N` of 500 or that second line
@@ -83,17 +88,18 @@ date is given.
 | none, `complete: false` | **do not say it does not exist.** Say how far back the search reached (`scanned_back_to`) and offer to look further back. That means paging `list_files` without filters (`page`, `page_size`) and matching names yourself, and it costs more the further back the recording is — ask before doing it. `date_from` / `date_to` do not help: they filter inside the same 500-recording window |
 
 **1c. Fetch it if it needs fetching.** Once you have the recording's id, from the
-cache or from Plaud, run this. It does nothing when a complete copy is already
-cached, and fetches when none is, when the cached copy is incomplete, or when the
-cache entry has lost its file:
+cache or from Plaud, check it before it goes into a command: an id is `of_` followed
+by hexadecimal characters. Anything else, do not put it in a command; tell the user
+which recording was skipped and why. Then run this. It does nothing when a complete
+copy is already cached, and fetches when none is, when the cached copy is incomplete,
+or when the cache entry has lost its file:
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fetch_one.py" --id "<id>"
 ```
 
 Run it with a tool timeout of at least five minutes: the script allows each CLI call
-300 seconds, longer than a default shell timeout. Check the id first: it is `of_` followed by hexadecimal characters. Anything else,
-do not put in a command. **Pass only the id.** The script reads the name, date and
+300 seconds, longer than a default shell timeout. **Pass only the id.** The script reads the name, date and
 length from Plaud itself. A recording's name is text from Plaud and can contain
 quotes, `$(...)` or backticks, so it must never be pasted into a command line.
 
@@ -112,9 +118,11 @@ the summary, best effort. Its exit code says what to do next:
 | 1 | an unexpected error | say what the message says |
 
 Add `--force` only when the user says the recording has changed or asks for it to
-be redone. A refresh through the CLI rewrites every timestamp to whole seconds, so
-a copy that earlier came in through the MCP path with millisecond timing gets less
-precise.
+be redone, or when its cached copy has no end times (see "How the timing works"). A
+refresh through the CLI rewrites every timestamp to whole seconds, so a copy that
+earlier came in through the MCP path with millisecond timing gets less precise. With
+no CLI, `--force` exits 3 like any other run, and the MCP path below replaces the
+copy in milliseconds.
 
 The CLI's timestamps are whole seconds, rounded down (measured against the MCP's
 milliseconds), so a subtitle from this path can appear up to a second early and a
@@ -135,10 +143,14 @@ Write each segment as a range line and keep the end the MCP returns for it:
 [HH:MM:SS.fff - HH:MM:SS.fff] Speaker N: <content>
 ```
 
-built from the segment's `start_time` and `end_time`, which are milliseconds.
-Start-only lines (`[HH:MM:SS] Speaker N: …`) are accepted as well, but then every
-subtitle runs on until the next one starts, so a pause is shown as if the last
-words were still being spoken, and the final subtitle's length is a guess.
+built from the segment's `start_time` and `end_time`, which are milliseconds: `680` is
+`00:00:00.680`, `3600250` is `01:00:00.250`. `Speaker N` is the segment's `speaker` as
+returned. A segment is one physical line: replace any line break inside `speaker` or
+the content with a space. A segment whose `end_time` is absent, null, or not later than
+its `start_time` is written start-only, `[HH:MM:SS.fff] Speaker N: <content>`.
+Start-only lines are accepted as well, but then every subtitle runs on until the next
+one starts, so a pause is shown as if the last words were still being spoken, and the
+final subtitle's length is a guess.
 
 Write in this order, so that stopping partway never leaves the new transcript
 beside an old polished one (`to_srt` prefers a polish file whenever one exists):
@@ -227,13 +239,23 @@ normalises simplified characters to traditional. Say so if it matters to them.
 ### 3. Convert
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" <id> -o "<name>.srt"
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/to_srt.py" "<id>" --out-dir "<folder>"
 ```
+
+`<folder>` is where the user wants the file (the working directory if they have no
+preference); it must exist, and an empty value is refused. The script names the file
+after the recording, from the name in the cache, and makes the name safe itself: letters,
+numbers, spaces and `- _ . ( )` are kept, everything else becomes `_`. You never type the
+recording's name, which is text from Plaud and must not go on a command line. It does not
+overwrite: a second recording with the same name, or the same recording converted again,
+becomes `name-2.srt`, `name-3.srt`, and the earlier files are left as they were. The line
+it prints says which path it chose; use that one, and only inside double quotes.
 
 Useful flags:
 
 | Flag | Effect |
 |---|---|
+| `-o <path>` | write to exactly this path instead of `--out-dir`; only a path you chose, never one built from the recording's name |
 | `--no-speaker` | drop the `Speaker 1: ` prefix from every cue |
 | `--tail-seconds N` | duration for the final cue (default 4) |
 | `--file <path>` | convert a transcript file directly, bypassing the cache |
@@ -243,8 +265,8 @@ Useful flags:
 | `--no-flag` | turn that check off |
 | `--ghost-phrases <file>` | add whole-cue phrases (one per line, `#` for comments) to the shipped list, this run only |
 
-Without `-o` it writes to stdout, which is handy for piping but **do not paste a
-long transcript into the conversation** — write the file and report the path.
+Without `--out-dir` or `-o` it writes to stdout, which is handy for piping but **do not
+paste a long transcript into the conversation** — write the file and report the path.
 
 ### 4. Report honestly
 
@@ -269,9 +291,10 @@ another one. What each means:
   whole sentence on rather than just the number. The three numbers are a ledger:
   cues plus dropped plus header accounts for every non-blank line in the file,
   so a header far larger than a handful of `key: value` lines is worth a second
-  look even when nothing else is reported. Without `-o` there is no success
-  line — stdout is the subtitle file itself — so the same sentence arrives on
-  stderr as `wrote N cues to stdout (K content line(s) dropped — see stderr)`.
+  look even when nothing else is reported. With `--out-dir` or `-o` the sentence is
+  the success line on stdout. With neither there is no success line — stdout is the
+  subtitle file itself — so it arrives on stderr as `wrote N cues to stdout (K content
+  line(s) dropped — see stderr)`.
 - **`is marked incomplete — these subtitles cover only the part that was
   fetched` on stderr** — the cache holds only part of this
   recording, so the subtitles simply stop partway with nothing to explain why.
@@ -338,17 +361,33 @@ another one. What each means:
   such line and no silence check either; only the phrase and repetition checks
   ran. Do not read an empty result for such a file as a promise that every cue
   was checked for silence.
+- **`⚠ the polished transcript was made from an earlier version of this recording's transcript`**
+  — the transcript was rewritten after the polished one was cached, and the subtitles
+  were still made from the polished one. The words in them are from the old text. Say
+  so, and offer the two ways out the message names: `--source verbatim` (the current
+  transcript) or `fetch_one.py --force` (builds the polished one again).
 - **`⚠ … trimmed` / `⚠ … clamped`** — a declared end ran past the next cue's
   start, or a cue would have had no length. Corrections, not losses — mention
   them only if the user is checking timing closely.
 
 ## How the timing works, and where it is a guess
 
-Each cue ends when the next one starts. That is the only timing the transcript
-actually carries, so it is what gets used.
+A cue ends where its line says it ends. Both download paths write the end of each
+segment beside its start, `[start - end]`, and `to_srt` uses it as given: to the whole
+second from the CLI, to the millisecond from the MCP path. A declared end that runs
+past the next cue is pulled back to it.
 
-**The last cue is a guess** — nothing follows it, so it gets `--tail-seconds`
-(4 by default). If the recording ends on a long sentence, raise it.
+Where a line has no end, a cue ends when the next one starts. That is every line of a
+copy the MCP path of `plaud-download` wrote before #67, and any segment Plaud returned
+without an `end_time`. For such a copy a pause is shown as if the last words were still
+being spoken, and nothing in the run says so. If the user is unhappy with the timing
+of an older download, look at the first lines of the cached copy (`cache.py show
+<id>`): one with no ` - ` inside the brackets is start-only, and fetching it again with
+`--force` replaces it.
+
+**The last cue of a start-only copy is a guess** — nothing follows it, so it gets
+`--tail-seconds` (4 by default). If the recording ends on a long sentence, raise it. A
+cue that has its own end ignores `--tail-seconds`.
 
 Out-of-order or duplicate timestamps get a half-second minimum instead of a
 zero- or negative-length cue. Players reject those outright, so the line would
