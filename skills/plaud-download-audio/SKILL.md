@@ -40,17 +40,21 @@ intend to keep the audio or just click once.
 
 ## The one thing that will bite you
 
-`plaud audio` does not return a file. It returns a **presigned S3 URL that
-expires 24 hours after it is issued** (measured 2026-08-07, CLI 0.3.7):
+`plaud audio` does not return a file. It returns a **presigned S3 URL**. Plaud's own
+tools say it expires in 24 hours (the CLI prints "This URL expires in 24 hours."), but
+the URL carries its own lifetime, `X-Amz-Expires=3600`: one hour. Measured 2026-10-15,
+CLI 0.3.14, on the ten newest recordings: all ten say 3600, and a link kept for 4 h 37 min
+was refused with HTTP 403 (when it stopped working between those two was not measured).
+Treat the link as good for about an hour.
 
 ```
 Audio Download URL:
-https://apse1-prod-plaud-bucket.s3-accelerate.amazonaws.com/audiofiles/<id>…
+https://<bucket>.s3-accelerate.amazonaws.com/<path>.<ogg or mp3>?X-Amz-…&X-Amz-Expires=3600&…
 Note: This URL expires in 24 hours.
 ```
 
 **Never store that URL.** Not in the cache, not in a note, not in a manifest.
-A stored URL works when you test it and fails silently a day later, which is the
+A stored URL works when you test it and fails silently an hour or so later, which is the
 worst failure shape there is — the link looks fine and the download 403s.
 
 Download immediately, or fetch a fresh URL each time. Those are the only two
@@ -81,13 +85,23 @@ newest 500.
 
 ## Fetching
 
+Check the id before it goes into a command: an id is `of_` followed by hexadecimal
+characters. Anything else, do not put it in a command; tell the user which recording was
+skipped and why.
+
 ```bash
 URL=$(plaud audio "<file_id>" 2>/dev/null | grep -oE 'https://[^ ]+')
-[ -n "$URL" ] || { echo "no audio URL returned for <file_id>"; exit 1; }
+[ -n "$URL" ] || { echo "no audio URL returned"; exit 1; }
+
+# The audio is Ogg for most recordings and MP3 for some (8 and 2 of the ten newest, 2026-10-15):
+# take the extension from the URL instead of assuming one.
+EXT=$(printf '%s' "${URL%%\?*}" | sed -E 's/.*\.([A-Za-z0-9]{1,5})$/\1/')
+EXT=$(printf '%s' "$EXT" | tr 'A-Z' 'a-z')
+case "$EXT" in ogg|mp3|m4a|wav|opus|aac|flac) ;; *) EXT=audio ;; esac
 
 DEST="${PLAUD_CACHE_DIR:-$HOME/.plaud-connector/cache}/audio"
 mkdir -p "$DEST"
-curl -fsSL "$URL" -o "$DEST/<file_id>.mp3"   # download NOW — the URL dies in 24h
+curl -fsSL "$URL" -o "$DEST/<file_id>.$EXT"   # download NOW — the link is good for about an hour
 ```
 
 Report the path and the size. Do **not** echo the URL back to the user as
@@ -98,8 +112,8 @@ invites exactly the stale-link failure above.
 
 Audio goes in the cache directory, never in the repository. Original recordings
 are third-party content — other people's voices — and this repo's rule is that
-raw recordings stay local. `.gitignore` already blocks the audio extensions; do
-not `git add -f` around it.
+raw recordings stay local. `.gitignore` lists the audio extensions this skill can
+write (and `.audio`, the fallback above); do not `git add -f` around it.
 
 If the user asks for the file somewhere specific (Desktop, a project folder),
 put it there instead. That is their filesystem and their call.

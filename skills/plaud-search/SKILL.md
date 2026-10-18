@@ -60,7 +60,9 @@ connected, and nothing in between was searched. The `--` makes a pattern that st
 ### 2. Read the surrounding context
 
 A grep hit is a pointer, not an answer. To see what was actually being discussed,
-print the cached transcript and read around the hit:
+print the cached transcript and read around the hit. Check the id before it goes into
+a command: an id is `of_` followed by hexadecimal characters. Anything else, do not put
+it in a command; tell the user which recording was skipped and why.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/cache.py" show "<id>"

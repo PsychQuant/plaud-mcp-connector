@@ -61,6 +61,16 @@ class TestIddScratchIsNotCommittable(unittest.TestCase):
                 self.assertTrue(is_ignored(rel), f"{rel} is committable — {why}")
 
 
+class TestOriginalRecordingsAreNotCommittable(unittest.TestCase):
+    """plaud-download-audio says `.gitignore` lists the extensions it can write. Verify
+    round 1 of #69 found it did not; the sentence is now true and this keeps it so."""
+
+    def test_the_audio_extensions_the_skill_can_write_are_ignored(self):
+        for ext in ("ogg", "mp3", "m4a", "wav", "opus", "aac", "flac", "audio"):
+            with self.subTest(ext=ext):
+                self.assertTrue(is_ignored(f"of_abc.{ext}"), f"of_abc.{ext} is committable")
+
+
 class TestWhatMustStayCommittable(unittest.TestCase):
     """A carve-out that swallows the wrong thing fails silently.
 

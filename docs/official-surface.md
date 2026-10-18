@@ -72,7 +72,7 @@ The CLI and the MCP hold **separate tokens** — `~/.plaud/tokens.json` and
 | `me` | Current user | `workspace_id`, `member_id` |
 | `files` | List recordings | `-p/--page`, `-s/--page-size` (default 20). Prints "Files on this page: N" — **no total is available** |
 | `file <id>` | One recording's details | **See below — this one matters** |
-| `audio <id>` | Audio download URL | **Presigned S3 URL, expires in 24 hours** |
+| `audio <id>` | Audio download URL | **Presigned S3 URL.** The CLI prints "expires in 24 hours"; the URL carries `X-Amz-Expires=3600` (one hour), on all of the ten newest recordings measured 2026-10-15 (CLI 0.3.14). The object is Ogg for most recordings and MP3 for some (8 and 2 of those ten) |
 | `transcript <id>` | Transcript | `-o/--output`, `--block`, `--polished`. **No pagination flag, and none is needed** — see below |
 | `summary <id>` | AI summary | `-o/--output`. Returns title / datetime / location / key points |
 | `search <keyword>` | Name search | `--from`, `--to`, `--max` (default 50). Reports "Matched N of M scanned" |

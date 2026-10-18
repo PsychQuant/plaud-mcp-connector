@@ -8,6 +8,18 @@ communication/
 *.srt
 *_notes.md
 
+# Original recordings are other people's voices. The plaud-download-audio skill writes
+# outside the repository, and this is what makes a slip inside it an ignored file
+# (the extensions it can write, and `.audio`, its fallback name).
+*.ogg
+*.mp3
+*.m4a
+*.wav
+*.opus
+*.aac
+*.flac
+*.audio
+
 # Credentials — always via Keychain / ~/.plaud, never in the repo
 .env
 .env.*
