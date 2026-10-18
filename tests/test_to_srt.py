@@ -294,7 +294,7 @@ class TestEveryBracketLineBecomesACue(unittest.TestCase):
             f"no error, no warning, and continuous timecodes.")
 
     def test_the_point_form_counts_too(self) -> None:
-        """The MCP producer writes `[start]` with no end (#40). Same rule."""
+        """The MCP producer wrote `[start]` with no end until #67, and still does for a segment with no `end_time`; older copies hold it too (#40). Same rule."""
         body = self._fixture(
             "[00:30] Speaker 1: point form, two-digit",
             "[132:07] Speaker 1: point form, three-digit",

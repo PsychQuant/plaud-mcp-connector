@@ -139,9 +139,12 @@ landed on a single second, which `to_srt` lengthens to half a second and reports
 So a subtitle from the CLI path can appear up to a second early.
 
 Where the cache keeps the ends they are used as given. The CLI path does, at that
-one-second resolution. `plaud-to-srt`'s MCP path does, in milliseconds.
-`plaud-download`'s MCP path writes start-only lines, so for a recording downloaded that
-way a cue runs until the next one begins and the final cue gets a four-second guess.
+one-second resolution. The MCP path of `plaud-to-srt` and of `plaud-download` does, in
+milliseconds. A recording downloaded through the `plaud-download` MCP path before that
+was fixed (#67) holds start-only lines, so a cue runs until the next one begins and the
+final cue gets a four-second guess. Fetching such a recording again replaces them:
+`--force` on the CLI path does, at that path's whole-second resolution, and with no CLI
+the same request goes through the MCP path, which writes the ranges in milliseconds.
 The CLI is still the cheaper way to download, because the text never passes through
 the conversation.
 
